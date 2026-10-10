@@ -2,17 +2,17 @@ name: Close unsolicited PRs
 
 # The public repo is a release mirror, not a development source of truth.
 # Contributor PRs here can't flow back into real releases. This workflow
-# auto-closes any PR not coming from one of our release/* snapshot
-# branches, with a comment pointing the author at the issue channels.
+# auto-closes any PR whose branch lives outside this repository, with a
+# comment pointing the author at the issue and discussion channels. A branch
+# inside it takes write access to push, so release PRs and maintainers' PRs
+# stay open.
 #
 # The `pull_request_target` trigger (vs `pull_request`) is required to
 # get write permissions for PRs from forks — that's where unsolicited
 # PRs typically come from.
 #
-# Exception path: a maintainer with repo-write access who legitimately
-# needs to open a PR on this mirror (e.g. an emergency fix to one of the
-# public-side workflows) can add the `ci-skip-pr-close` label before
-# opening. The label can be pre-applied via `gh pr create --label
+# Exception path: a PR from a fork that should stay open can carry the
+# `ci-skip-pr-close` label, pre-applied via `gh pr create --label
 # ci-skip-pr-close ...`; if you forget, add the label and reopen the PR.
 
 on:
@@ -27,8 +27,7 @@ jobs:
   close:
     if: >
       !contains(github.event.pull_request.labels.*.name, 'ci-skip-pr-close') &&
-      (github.event.pull_request.head.repo.fork == true ||
-       !startsWith(github.event.pull_request.head.ref, 'release/'))
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Comment and close
@@ -50,11 +49,12 @@ jobs:
 
           - 🐛 Bug, feature, or verification concern → [open an issue](https://github.com/input-output-hk/lace-sdk/issues/new/choose)
             and attach your patch (inline diff, gist, or fork link).
+          - 💬 Question or idea → [start a discussion](https://github.com/input-output-hk/lace-sdk/discussions).
           - 🤝 Larger or ongoing contribution → [open a contribution proposal](https://github.com/input-output-hk/lace-sdk/issues/new?template=contribution_proposal.yml).
             We'll reach out to coordinate scope and access.
 
-          The issue forms are the right place to continue the
-          conversation and coordinate any contribution.
+          The issue forms and discussions are the right places to
+          continue the conversation and coordinate any contribution.
           EOF
           )"
 
