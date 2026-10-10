@@ -1,0 +1,89 @@
+name: Deploy site
+
+# Deploys the developer site (apps/lace-sdk-site) as of a release tag to this
+# repository's GitHub Pages. publish-release-on-merge.yml starts it after each
+# release; run it by hand to redeploy a release's site.
+# It runs on main, the only branch the github-pages environment deploys from.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release whose site to deploy (e.g. lace-sdk@0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # The site's install runs dependency code, so its build holds no write or
+  # OIDC permission; deploy runs only the Pages deploy.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: read
+    defaults:
+      run:
+        working-directory: apps/lace-sdk-site
+    steps:
+      - name: Check the release tag
+        env:
+          TAG: ${{ inputs.release_tag }}
+        working-directory: .
+        run: |
+          if [[ ! "$TAG" =~ ^lace-sdk@[0-9]+\.[0-9]+\.[0-9]+(-canary\.[0-9]+)?$ ]]; then
+            echo "::error::release_tag must be lace-sdk@X.Y.Z[-canary.N], not $TAG"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/lace-sdk-site/package-lock.json
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      # The site owns its install, outside the npm workspace.
+      - run: npm ci
+
+      # base_path is the repository's path on GitHub Pages; base_url is the
+      # absolute URL used in llms.txt, the sitemap and canonicals.
+      - run: npm run build
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}/
+          VITE_SITE_URL: ${{ steps.pages.outputs.base_url }}
+          # The release this deploy documents (stable or canary), for the
+          # site's version and release-notes link.
+          VITE_SDK_RELEASE_TAG: ${{ inputs.release_tag }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/lace-sdk-site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
