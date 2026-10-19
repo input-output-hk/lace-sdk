@@ -1,0 +1,25 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": false,
+    "noEmit": false,
+    "outDir": "dist",
+    "removeComments": false,
+    "rootDir": "src",
+    "sourceMap": false
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "src/midnight-proof-servers.ts",
+    "src/proof-server-transport.ts",
+    "src/midnight-connector-transaction.ts",
+    "src/midnight-sign-data.ts",
+    "src/midnight-facade-reservations.ts",
+    "src/attested-proving-service.ts",
+    "src/temenos-attested-prover.ts",
+    "src/temenos-trust-roots.ts"
+  ]
+}

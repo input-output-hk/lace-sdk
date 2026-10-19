@@ -1,0 +1,8 @@
+{
+  "name": "@types/chacha",
+  "version": "2.1.0",
+  "private": true,
+  "description": "Types for chacha, which ships none: the ChaCha20-Poly1305 surface @lace-lib/cardano-key-management uses.",
+  "license": "Apache-2.0",
+  "types": "index.d.ts"
+}

@@ -1,0 +1,264 @@
+import * as ecc from '@bitcoinerlab/secp256k1';
+import {
+  BitcoinNetwork,
+  bitcoinAccountDerivationPath,
+  hdKeyFromExtendedKey,
+} from '@lace-contract/bitcoin-context';
+import { HDKey } from '@scure/bip32';
+import * as bitcoin from 'bitcoinjs-lib';
+import { pbkdf2Sync } from 'pbkdf2';
+
+import { AddressType } from './address';
+
+import type { ExtendedAccountPublicKeys } from './info';
+
+bitcoin.initEccLib(ecc);
+
+/**
+ * Mapping from AddressType enum values to keys used in ExtendedAccountPublicKeys.
+ *
+ * This mapping handles differences in capitalization between the enum values and the keys in the structure.
+ */
+const ADDRESS_TYPE_TO_KEY: Record<
+  AddressType,
+  keyof ExtendedAccountPublicKeys
+> = {
+  [AddressType.Legacy]: 'legacy',
+  [AddressType.SegWit]: 'segWit',
+  [AddressType.NativeSegWit]: 'nativeSegWit',
+  [AddressType.Taproot]: 'taproot',
+};
+
+/**
+ * Enum representing the type of address chain in hierarchical deterministic wallets.
+ *
+ * HD wallets (BIP-32/44/49/84) organize keys into two types of chains:
+ * - **External**: Used for receiving addresses (visible to others).
+ * - **Internal**: Used for change addresses (to send transaction change back to the wallet).
+ */
+export enum ChainType {
+  /**
+   * External chain (receiving addresses).
+   * Derivation Path: m / purpose' / coin_type' / account' / 0 / index
+   */
+  External = 'external',
+
+  /**
+   * Internal chain (change addresses).
+   * Derivation Path: m / purpose' / coin_type' / account' / 1 / index
+   */
+  Internal = 'internal',
+}
+
+/**
+ * Derives a BIP-39-compatible seed from the given mnemonic and optional passphrase.
+ *
+ * @param mnemonic - The BIP-39 mnemonic phrase (12, 15, 18, 21, or 24 words).
+ * @param passphrase - An optional passphrase for seed derivation (default is an empty string).
+ * @returns The derived 64-byte BIP-39-compatible seed.
+ */
+export const deriveBip39Seed = (
+  mnemonic: string,
+  passphrase: string = '',
+): Buffer => {
+  const salt = `mnemonic${passphrase}`;
+  return pbkdf2Sync(mnemonic, salt, 2048, 64, 'sha512');
+};
+
+/**
+ * Represents a derived key pair consisting of a public key and a private key.
+ */
+export type KeyPair = {
+  publicKey: Buffer;
+  privateKey: Buffer;
+};
+
+/**
+ * Derives the account-level (root) key pair from the given master seed.
+ *
+ * This function derives the account-level using the derivation path:
+ *
+ *    m / purpose' / coin_type' / account'
+ *
+ * where:
+ * - `purpose` is determined by the address type (e.g., 84 for NativeSegWit, 49 for SegWit, 44 for Legacy, etc.)
+ * - `coin_type` comes from the network object (0 for mainnet and 1 for testnet).
+ * - `account` is the account index.
+ *
+ * For example, for a Native SegWit wallet on Bitcoin mainnet with account 0, the derivation path would be:
+ *    m/84'/0'/0'
+ *
+ * @param props - The properties required to derive the account-level key pair.
+ * @returns An object containing the derived account-level key pair and the derivation path.
+ * @throws `Error` If the account-level private or public key cannot be derived.
+ */
+export const deriveAccountRootKeyPair = (props: {
+  seed: Buffer;
+  addressType: AddressType;
+  network: BitcoinNetwork;
+  account: number;
+}): { pair: { publicKey: string; privateKey: string }; path: string } => {
+  const { seed, addressType, network, account } = props;
+  const root = HDKey.fromMasterSeed(seed);
+  const accountPath = bitcoinAccountDerivationPath({
+    addressType,
+    network,
+    account,
+  });
+  const accountNode = root.derive(accountPath);
+
+  if (!accountNode.privateExtendedKey) {
+    throw new Error('Failed to derive account-level private key');
+  }
+
+  if (!accountNode.publicExtendedKey) {
+    throw new Error('Failed to derive account-level public key');
+  }
+
+  return {
+    pair: {
+      publicKey: accountNode.publicExtendedKey,
+      privateKey: accountNode.privateExtendedKey,
+    },
+    path: accountPath,
+  };
+};
+
+/**
+ * Derives a child key pair from the account-level HD key.
+ *
+ * This function derives a child key for a specific chain (external for receiving or internal for change)
+ * and index, based on the account-level extended key. The chain is determined by using '0' for external addresses and
+ * '1' for internal addresses.
+ *
+ * @param accountKey - The account-level extended key (HDKey).
+ * @param chain - The chain type (external for receiving, internal for change).
+ * @param index - The index of the child key to derive.
+ * @returns An object containing the derived child key pair and its derivation path.
+ * @throws `Error` If the child private key cannot be derived.
+ */
+export const deriveChildKeyPair = (
+  accountKey: string,
+  chain: ChainType,
+  index: number,
+): { pair: { publicKey: string; privateKey: string }; path: string } => {
+  const hdAccountKey = hdKeyFromExtendedKey(accountKey);
+  const chainPath = chain === ChainType.External ? '0' : '1';
+  const fullPath = `m/${chainPath}/${index}`;
+  const childNode = hdAccountKey.derive(fullPath);
+  if (!childNode.privateKey) {
+    throw new Error('Failed to derive child private key');
+  }
+
+  if (!childNode.publicKey) {
+    throw new Error('Failed to derive child public key');
+  }
+
+  return {
+    pair: {
+      publicKey: Buffer.from(childNode.publicKey).toString('hex'),
+      privateKey: Buffer.from(childNode.privateKey).toString('hex'),
+    },
+    path: fullPath,
+  };
+};
+
+/**
+ * Derives a child public key from a given extended public key using non-hardened derivation.
+ *
+ * This function allows deriving a child public key without requiring the private key.
+ * It accepts an extended public key (as a Buffer) and a relative derivation path (e.g. "0/0")
+ * for non-hardened derivation. If derivation is successful, it returns the child public key.
+ *
+ * @param extendedPublicKey - The extended public key as a Buffer.
+ * @param chain - The chain type (external for receiving, internal for change).
+ * @param index - The index of the child key to derive.
+ * @returns The derived child public key.
+ * @throws `Error` If the child public key cannot be derived.
+ */
+export const deriveChildPublicKey = (
+  extendedPublicKey: string,
+  chain: ChainType,
+  index: number,
+): Buffer => {
+  const hdKey = hdKeyFromExtendedKey(extendedPublicKey);
+  const chainPath = chain === ChainType.External ? '0' : '1';
+  const relativePath = `m/${chainPath}/${index}`;
+  const childNode = hdKey.derive(relativePath);
+
+  if (!childNode.publicKey) {
+    throw new Error('Failed to derive child public key');
+  }
+
+  return Buffer.from(childNode.publicKey);
+};
+
+/**
+ * Derives the extended account public keys for all supported address types and networks.
+ *
+ * Given a master seed and an account index, this function derives the account-level extended public key
+ * (xpub) for each address type (Legacy, SegWit, NativeSegWit, Taproot) on both Mainnet and Testnet.
+ * The returned structure maps each network to its corresponding extended keys.
+ *
+ * @param seed - The master seed derived from the mnemonic.
+ * @param account - The account index.
+ * @returns An object containing the extended account public keys for mainnet and testnet.
+ */
+export const getExtendedPubKeys = (
+  seed: Buffer,
+  account: number,
+): {
+  mainnet: ExtendedAccountPublicKeys;
+  testnet4: ExtendedAccountPublicKeys;
+} => {
+  const addressTypes: AddressType[] = [
+    AddressType.NativeSegWit,
+    AddressType.Legacy,
+    AddressType.Taproot,
+    AddressType.SegWit,
+  ];
+  const networks: BitcoinNetwork[] = [
+    BitcoinNetwork.Mainnet,
+    BitcoinNetwork.Testnet,
+  ];
+
+  const extendedAccountPublicKeys: {
+    mainnet: ExtendedAccountPublicKeys;
+    testnet4: ExtendedAccountPublicKeys;
+  } = {
+    mainnet: {
+      legacy: '',
+      segWit: '',
+      nativeSegWit: '',
+      taproot: '',
+    },
+    testnet4: {
+      legacy: '',
+      segWit: '',
+      nativeSegWit: '',
+      taproot: '',
+    },
+  };
+
+  for (const network of networks) {
+    for (const addressType of addressTypes) {
+      const keyPair = deriveAccountRootKeyPair({
+        seed,
+        addressType,
+        network,
+        account,
+      });
+      const extendedKeyString = keyPair.pair.publicKey;
+
+      if (network === BitcoinNetwork.Mainnet) {
+        extendedAccountPublicKeys.mainnet[ADDRESS_TYPE_TO_KEY[addressType]] =
+          extendedKeyString;
+      } else {
+        extendedAccountPublicKeys.testnet4[ADDRESS_TYPE_TO_KEY[addressType]] =
+          extendedKeyString;
+      }
+    }
+  }
+
+  return extendedAccountPublicKeys;
+};

@@ -1,0 +1,8 @@
+{
+  "name": "@types/get-random-values",
+  "version": "2.1.0",
+  "private": true,
+  "description": "Types for get-random-values, which ships none: crypto.getRandomValues for Node and browsers.",
+  "license": "Apache-2.0",
+  "types": "index.d.ts"
+}

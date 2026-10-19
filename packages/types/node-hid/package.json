@@ -1,0 +1,8 @@
+{
+  "name": "@types/node-hid",
+  "version": "2.2.0",
+  "private": true,
+  "description": "Types for node-hid 2.2.0, which ships none: the HID device surface @lace-lib/cardano-hardware-ledger uses.",
+  "license": "Apache-2.0",
+  "types": "index.d.ts"
+}

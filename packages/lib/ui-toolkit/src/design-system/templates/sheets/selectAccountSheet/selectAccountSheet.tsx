@@ -1,0 +1,76 @@
+import React from 'react';
+import { StyleSheet } from 'react-native';
+
+import { spacing } from '../../../../design-tokens';
+import { Text, Toggle, Row } from '../../../atoms';
+import { RadioGroup, type RadioGroupOption } from '../../../molecules';
+import { Sheet } from '../../../organisms';
+
+export interface SelectAccountSheetParams {
+  title: string;
+  radioOptions: RadioGroupOption[];
+  initialAccountId?: string;
+  rememberChoiceLabel: string;
+  confirmButtonLabel: string;
+  testID?: string;
+}
+
+export interface SelectAccountSheetProps {
+  title: string;
+  radioOptions: RadioGroupOption[];
+  selectedAccountId: string;
+  onAccountChange: (accountId: string) => void;
+  rememberChoice: boolean;
+  onRememberChoiceChange: (value: boolean) => void;
+  rememberChoiceLabel: string;
+  confirmButtonLabel: string;
+  onConfirm: () => void;
+  isConfirmDisabled?: boolean;
+  testID?: string;
+}
+
+export const SelectAccountSheet = ({
+  radioOptions,
+  selectedAccountId,
+  onAccountChange,
+  rememberChoice,
+  onRememberChoiceChange,
+  rememberChoiceLabel,
+  testID = 'select-account-sheet',
+}: SelectAccountSheetProps) => {
+  return (
+    <Sheet.Scroll testID={testID} contentContainerStyle={sheetStyles.container}>
+      <RadioGroup
+        options={radioOptions}
+        value={selectedAccountId}
+        onChange={onAccountChange}
+        direction="column"
+        style={sheetStyles.radioGroup}
+        testID={`${testID}-radio-group`}
+      />
+
+      <Row style={sheetStyles.toggleRow} justifyContent="space-between">
+        <Text.S numberOfLines={1}>{rememberChoiceLabel}</Text.S>
+        <Toggle
+          value={rememberChoice}
+          onValueChange={onRememberChoiceChange}
+          testID={`${testID}-remember-toggle`}
+        />
+      </Row>
+    </Sheet.Scroll>
+  );
+};
+
+const sheetStyles = StyleSheet.create({
+  container: {
+    paddingHorizontal: spacing.L,
+  },
+  radioGroup: {
+    marginVertical: spacing.M,
+    gap: spacing.M,
+    width: '100%',
+  },
+  toggleRow: {
+    marginTop: spacing.M,
+  },
+});

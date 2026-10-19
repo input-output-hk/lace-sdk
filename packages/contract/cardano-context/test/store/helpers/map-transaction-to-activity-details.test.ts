@@ -1,0 +1,780 @@
+import { Cardano } from '@cardano-sdk/core';
+import * as Crypto from '@cardano-sdk/crypto';
+import { ActivityType } from '@lace-contract/activities';
+import { AccountId } from '@lace-contract/wallet-repo';
+import {
+  ACCOUNT_VALIDATOR_HASH,
+  custodyGrantAssetId,
+} from '@lace-lib/cardano-custody';
+import { Timestamp } from '@lace-lib/util';
+import { firstValueFrom, of, throwError } from 'rxjs';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { inputOutputTransformer } from '../../../src/store/helpers/input-output-transform';
+import {
+  cardanoMetadatumToObject,
+  transactionMetadataTransformer,
+  type MapActivityToActivityDetailsParams,
+  mapTransactionToActivityDetails,
+} from '../../../src/store/helpers/map-transaction-to-activity-details';
+import {
+  createTransactionInspector,
+  fetchAssetsMetadata,
+} from '../../../src/store/helpers/transaction-inspectors';
+import { CardanoRewardAccount } from '../../../src/types';
+import {
+  custodyAddress,
+  custodyRewardAccount,
+  custodyStakeScriptHash as stakeScriptHash,
+  custodyStateNftId,
+} from '../../custody-mocks';
+
+import type { BuildCardanoTransactionParams } from '../../../src/store/helpers/map-transaction-to-activity-details';
+import type {
+  CardanoTokenMetadata,
+  ExtendedTxDetails,
+  RequiredProtocolParameters,
+  TxOutputInput,
+} from '../../../src/types';
+import type {
+  AssetInfoWithAmount,
+  MetadataInspection,
+  TransactionSummaryInspection,
+} from '@cardano-sdk/core';
+import type { Activity } from '@lace-contract/activities';
+import type { TokenMetadata } from '@lace-contract/tokens';
+
+vi.mock(import('../../../src/store/helpers/transaction-inspectors'));
+vi.mock(import('../../../src/store/helpers/input-output-transform'));
+
+describe('cardanoMetadatumToObject', () => {
+  it('should return string as-is', () => {
+    const result = cardanoMetadatumToObject('test string');
+    expect(result).toBe('test string');
+  });
+
+  it('should convert bigint to string', () => {
+    const result = cardanoMetadatumToObject(123456789n);
+    expect(result).toBe('123456789');
+  });
+
+  it('should convert Map to array of objects', () => {
+    const map = new Map<string, Cardano.Metadatum>([
+      ['key1', 'value1'],
+      ['key2', 42n],
+    ]);
+    const result = cardanoMetadatumToObject(map);
+    expect(result).toEqual([{ key1: 'value1' }, { key2: '42' }]);
+  });
+
+  it('should convert array recursively', () => {
+    const array = ['string', 123n, new Map([['nested', 'value']])];
+    const result = cardanoMetadatumToObject(array);
+    expect(result).toEqual(['string', '123', [{ nested: 'value' }]]);
+  });
+
+  it('should convert Buffer to decoded string', () => {
+    const buffer = Buffer.from('hello world', 'utf8');
+    const result = cardanoMetadatumToObject(buffer);
+    expect(result).toBe('hello world');
+  });
+
+  it('should handle invalid UTF-8 byte sequences gracefully', () => {
+    // Create a buffer with invalid UTF-8 sequence (0xFF 0xFE is not valid UTF-8)
+    const invalidUtf8Buffer = Buffer.from([0xff, 0xfe, 0x00, 0x01]);
+    const result = cardanoMetadatumToObject(invalidUtf8Buffer);
+    expect(result).toBe('[Invalid UTF-8: 4 bytes]');
+  });
+
+  it('should handle empty buffer with invalid UTF-8', () => {
+    const emptyBuffer = Buffer.from([]);
+    const result = cardanoMetadatumToObject(emptyBuffer);
+    expect(result).toBe(''); // Empty buffer should decode to empty string
+  });
+
+  it('should handle partial UTF-8 sequence', () => {
+    // Create a buffer with incomplete UTF-8 sequence (0xC2 without following byte)
+    const partialUtf8Buffer = Buffer.from([0xc2]);
+    const result = cardanoMetadatumToObject(partialUtf8Buffer);
+    expect(result).toBe('[Invalid UTF-8: 1 bytes]');
+  });
+
+  it('should handle nested Map with object keys', () => {
+    const nestedMap = new Map([[new Map([['inner', 'key']]), 'value']]);
+    const result = cardanoMetadatumToObject(nestedMap);
+    expect(result).toEqual([{ '[Map]': 'value' }]);
+  });
+});
+
+describe('transactionMetadataTransformer', () => {
+  it('should transform metadata Map to array of key-value objects', () => {
+    const metadata = new Map<bigint, Cardano.Metadatum>([
+      [1n, 'string value'],
+      [2n, 123n],
+      [3n, new Map([['nested', 'value']])],
+    ]);
+    const result = transactionMetadataTransformer(metadata);
+    expect(result).toEqual([
+      { key: '1', value: 'string value' },
+      { key: '2', value: '123' },
+      { key: '3', value: [{ nested: 'value' }] },
+    ]);
+  });
+
+  it('should handle empty metadata Map', () => {
+    const metadata = new Map<bigint, Cardano.Metadatum>();
+    const result = transactionMetadataTransformer(metadata);
+    expect(result).toEqual([]);
+  });
+});
+
+describe('mapTransactionToActivityDetails', () => {
+  let mapParams: MapActivityToActivityDetailsParams;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mapParams = {} as MapActivityToActivityDetailsParams;
+  });
+
+  it('Returns error result if fetchAssetsMetadata throws', async () => {
+    mapParams = {
+      rewardAccount: CardanoRewardAccount(custodyRewardAccount),
+    } as MapActivityToActivityDetailsParams;
+    vi.mocked(createTransactionInspector).mockReturnValue(async () =>
+      Promise.resolve({
+        summary: { assets: new Map() } as TransactionSummaryInspection,
+        metadata: {} as MetadataInspection,
+        tokenTransfer: { fromAddress: new Map(), toAddress: new Map() },
+      }),
+    );
+
+    vi.mocked(fetchAssetsMetadata).mockReturnValue(
+      throwError(() => new Error('test error')),
+    );
+
+    const result = await firstValueFrom(
+      mapTransactionToActivityDetails(mapParams),
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.message).toBe('test error');
+    }
+  });
+
+  describe('when mapping transaction to activity details', () => {
+    let mockTxDetailsProviderResponse: BuildCardanoTransactionParams['txDetails'];
+    let mockTxDetailsProviderResponseWithCertificates: BuildCardanoTransactionParams['txDetails'];
+    let mockActivity: Activity;
+    let mockTransformedInputOutput: TxOutputInput;
+    let mockSummaryInspection: TransactionSummaryInspection;
+
+    const mockRewardAccount = CardanoRewardAccount(
+      'stake_test1uqrw9tjymlm8wrwq7jk68n6v7fs9qz8z0tkdkve26dylmfc2ux2hj',
+    );
+    const mockProtocolParameters = {
+      poolDeposit: 500_000_000,
+      stakeKeyDeposit: 2_000_000,
+    } as RequiredProtocolParameters;
+
+    /**
+     * The net change is recomputed from the body, so a summary reporting a gain
+     * needs an own output that accounts for it.
+     */
+    const withOwnOutput = (address: Cardano.PaymentAddress, coins: bigint) =>
+      ({
+        ...mockTxDetailsProviderResponse,
+        body: {
+          ...mockTxDetailsProviderResponse.body,
+          outputs: [{ address, value: { coins } }] as Cardano.TxOut[],
+        },
+      } as ExtendedTxDetails);
+
+    beforeEach(() => {
+      // Tx details fetched by the provider that will be mapped directly to the result
+      mockTxDetailsProviderResponse = {
+        auxiliaryData: {
+          blob: new Map<bigint, Cardano.Metadatum>([
+            [1n, 'string value'],
+            [2n, 123n],
+            [3n, new Map([['nested', 'value']])],
+          ]),
+        },
+        body: {
+          inputs: [],
+          fee: 1000000n,
+          outputs: ['test-output'] as unknown as Cardano.TxOut[],
+          certificates: [
+            'test-certificate',
+          ] as unknown as Cardano.HydratedCertificate[],
+          proposalProcedures: [
+            'test-proposal-procedure',
+          ] as unknown as Cardano.ProposalProcedure[],
+          votingProcedures: [
+            'test-voting-procedure',
+          ] as unknown as Cardano.VotingProcedures,
+        },
+      };
+
+      mockTxDetailsProviderResponseWithCertificates = {
+        ...mockTxDetailsProviderResponse,
+        body: {
+          ...mockTxDetailsProviderResponse.body,
+          certificates: [
+            {
+              __typename: Cardano.CertificateType.StakeDeregistration,
+              stakeCredential: {
+                hash: Crypto.Hash28ByteBase16(
+                  '55c7aee5fda2f45de0d4148d4ade76cb53fc711d56b36983c4f70b79',
+                ),
+                type: 0,
+              },
+            },
+          ],
+        },
+      };
+
+      mapParams = {
+        ...mapParams,
+        rewardAccount: mockRewardAccount,
+        protocolParameters: mockProtocolParameters,
+      } as MapActivityToActivityDetailsParams;
+
+      // Summary activity used to fetch the details
+      mockActivity = {
+        accountId: AccountId('account1'),
+        activityId: 'test-activity-id',
+        timestamp: Timestamp(1719859200000),
+        tokenBalanceChanges: [],
+        type: ActivityType.Send,
+      };
+
+      // Mocked return value for inputOutputTransformer
+      mockTransformedInputOutput = {
+        addr: 'test-address',
+        amount: 1000000n,
+        assetList: [],
+      };
+
+      // Mocked return value for summary inspector
+      mockSummaryInspection = {
+        assets: new Map<Cardano.AssetId, AssetInfoWithAmount>(),
+        coins: 0n,
+        fee: 1000000n,
+        deposit: 1000000n,
+        returnedDeposit: 2000000n,
+        collateral: 0n,
+        // resolvedInputs only needs a value so that the mocked inputOutputTransformer is called
+        resolvedInputs: [
+          'test-input',
+        ] as unknown as TransactionSummaryInspection['resolvedInputs'],
+        unresolved: {
+          inputs: [] satisfies Cardano.TxIn[],
+          value: { coins: 0n },
+        },
+      };
+
+      // inputOutputTransformer is called by buildCardanoTransaction
+      // mocking it so I can only check that the returned value is part of the mapped result
+      vi.mocked(inputOutputTransformer).mockReturnValue(
+        mockTransformedInputOutput,
+      );
+
+      vi.mocked(createTransactionInspector).mockReturnValue(async () =>
+        Promise.resolve({
+          summary: mockSummaryInspection,
+          metadata: '',
+          tokenTransfer: { fromAddress: new Map(), toAddress: new Map() },
+        }),
+      );
+
+      // fetchAssetMetadata returns assetInfo for the inputs and outputs.
+      // The discovered assetInfos are used by inputOutputTransformer.
+      // Since the inputOutputTransformer is mocked entirely, this can be mocked to any valid value because it will be ignored
+      vi.mocked(fetchAssetsMetadata).mockReturnValue(
+        of(new Map<Cardano.AssetId, TokenMetadata<CardanoTokenMetadata>>()),
+      );
+    });
+
+    it('returns input activity hydrated with inspector results and fetched metadata', async () => {
+      mapParams = {
+        ...mapParams,
+        activity: mockActivity,
+        txDetails: mockTxDetailsProviderResponse as ExtendedTxDetails,
+      };
+
+      const result = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParams),
+      );
+
+      expect(result.isOk()).toBe(true);
+
+      if (result.isOk()) {
+        // All activity properties are part of the mapped result
+        const {
+          accountId,
+          activityId,
+          timestamp,
+          tokenBalanceChanges,
+          type,
+          fee,
+        } = result.value;
+        expect({
+          accountId,
+          activityId,
+          timestamp,
+          tokenBalanceChanges,
+          type,
+          fee,
+        }).toEqual({
+          ...mockActivity,
+          fee: mockSummaryInspection.fee.toString(),
+        });
+
+        // Has all cardano properties
+        expect(result.value.blockchainSpecific).toEqual({
+          // Tx details fetched by the provider that are part of the result
+          votingProcedures: mockTxDetailsProviderResponse.body.votingProcedures,
+          proposalProcedures:
+            mockTxDetailsProviderResponse.body.proposalProcedures,
+          certificates: mockTxDetailsProviderResponse.body.certificates,
+          addrOutputs: [mockTransformedInputOutput],
+          // Summary inspection properties that are mapped to the result
+          addrInputs: [mockTransformedInputOutput],
+          deposit: mockSummaryInspection.deposit,
+          returnedDeposit: mockSummaryInspection.returnedDeposit,
+          collateral: mockSummaryInspection.collateral,
+          metadata: [
+            {
+              key: '1',
+              value: 'string value',
+            },
+            {
+              key: '2',
+              value: '123',
+            },
+            {
+              key: '3',
+              value: [
+                {
+                  nested: 'value',
+                },
+              ],
+            },
+          ],
+          txSummary: undefined,
+        });
+      }
+    });
+
+    it('maps a non-zero treasury donation from the transaction body', async () => {
+      mapParams = {
+        ...mapParams,
+        activity: mockActivity,
+        txDetails: {
+          ...mockTxDetailsProviderResponse,
+          body: {
+            ...mockTxDetailsProviderResponse.body,
+            donation: 5000000n,
+          },
+        } as ExtendedTxDetails,
+      };
+
+      const result = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParams),
+      );
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value.blockchainSpecific?.donation).toBe(5000000n);
+      }
+    });
+
+    it('leaves donation undefined when the transaction body has none', async () => {
+      mapParams = {
+        ...mapParams,
+        activity: mockActivity,
+        txDetails: mockTxDetailsProviderResponse as ExtendedTxDetails,
+      };
+
+      const result = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParams),
+      );
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value.blockchainSpecific?.donation).toBeUndefined();
+      }
+    });
+
+    it('derives address from first foreign recipient for outgoing transaction', async () => {
+      const ownAddr = Cardano.PaymentAddress(
+        'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+      );
+      const foreignAddr = Cardano.PaymentAddress(
+        'addr_test1qrr7pflnkppvp49sl2hjs9v255ydycp8zxuxzfjw03vev9ns6cdlwymh7v9kr8cd8cy5vx8l7h6v9da84ml2cjd90fusnjsh8d',
+      );
+      const sdkValue = (coins: bigint) => ({
+        coins,
+        assets: new Map<Cardano.AssetId, AssetInfoWithAmount>(),
+      });
+
+      vi.mocked(createTransactionInspector).mockReturnValue(async () =>
+        Promise.resolve({
+          summary: { ...mockSummaryInspection, coins: -1_000_000n },
+          metadata: '',
+          tokenTransfer: {
+            fromAddress: new Map([[ownAddr, sdkValue(-5_000_000n)]]),
+            toAddress: new Map([
+              [foreignAddr, sdkValue(3_000_000n)],
+              [ownAddr, sdkValue(1_000_000n)],
+            ]),
+          },
+        }),
+      );
+
+      mapParams = {
+        ...mapParams,
+        activity: mockActivity,
+        txDetails: mockTxDetailsProviderResponse as ExtendedTxDetails,
+        accountAddresses: [ownAddr],
+      };
+
+      const result = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParams),
+      );
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value.address).toBe(foreignAddr);
+      }
+    });
+
+    it('derives address from first foreign sender for incoming transaction', async () => {
+      const ownAddr = Cardano.PaymentAddress(
+        'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+      );
+      const foreignAddr = Cardano.PaymentAddress(
+        'addr_test1qrr7pflnkppvp49sl2hjs9v255ydycp8zxuxzfjw03vev9ns6cdlwymh7v9kr8cd8cy5vx8l7h6v9da84ml2cjd90fusnjsh8d',
+      );
+      const sdkValue = (coins: bigint) => ({
+        coins,
+        assets: new Map<Cardano.AssetId, AssetInfoWithAmount>(),
+      });
+
+      vi.mocked(createTransactionInspector).mockReturnValue(async () =>
+        Promise.resolve({
+          summary: { ...mockSummaryInspection, coins: 5_000_000n },
+          metadata: '',
+          tokenTransfer: {
+            fromAddress: new Map([[foreignAddr, sdkValue(-10_000_000n)]]),
+            toAddress: new Map([[ownAddr, sdkValue(5_000_000n)]]),
+          },
+        }),
+      );
+
+      mapParams = {
+        ...mapParams,
+        activity: mockActivity,
+        txDetails: withOwnOutput(ownAddr, 5_000_000n),
+        accountAddresses: [ownAddr],
+      };
+
+      const result = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParams),
+      );
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value.address).toBe(foreignAddr);
+        expect(result.value.blockchainSpecific?.txSummary).toHaveLength(1);
+        expect(result.value.blockchainSpecific?.txSummary?.[0]?.addr).toEqual([
+          foreignAddr,
+        ]);
+        expect(result.value.blockchainSpecific?.txSummary?.[0]?.type).toBe(
+          ActivityType.Receive,
+        );
+      }
+    });
+
+    // The per-address rows are picked by the same net change, so a wrong net
+    // change puts the wrong address in them.
+    it('credits the foreign recipient, not the foreign sender, once the net change is recomputed', async () => {
+      const ownAddr = Cardano.PaymentAddress(
+        'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+      );
+      const foreignAddr = Cardano.PaymentAddress(
+        'addr_test1qrr7pflnkppvp49sl2hjs9v255ydycp8zxuxzfjw03vev9ns6cdlwymh7v9kr8cd8cy5vx8l7h6v9da84ml2cjd90fusnjsh8d',
+      );
+      const sdkValue = (coins: bigint) => ({
+        coins,
+        assets: new Map<Cardano.AssetId, AssetInfoWithAmount>(),
+      });
+      const ownInput = {
+        txId: Cardano.TransactionId(
+          '4444444444444444444444444444444444444444444444444444444444444444',
+        ),
+        index: 0,
+        address: ownAddr,
+      };
+
+      vi.mocked(createTransactionInspector).mockReturnValue(async () =>
+        Promise.resolve({
+          summary: {
+            ...mockSummaryInspection,
+            coins: 399_000_000n,
+            resolvedInputs: [],
+            returnedDeposit: 0n,
+            unresolved: {
+              inputs: [{ txId: ownInput.txId, index: ownInput.index }],
+              value: { coins: 500_000_000n } as Cardano.Value,
+            },
+          },
+          metadata: '',
+          tokenTransfer: {
+            fromAddress: new Map([[foreignAddr, sdkValue(-50_000_000n)]]),
+            toAddress: new Map([
+              [ownAddr, sdkValue(399_000_000n)],
+              [foreignAddr, sdkValue(100_000_000n)],
+            ]),
+          },
+        }),
+      );
+
+      mapParams = {
+        ...mapParams,
+        activity: mockActivity,
+        txDetails: {
+          ...mockTxDetailsProviderResponse,
+          body: {
+            ...mockTxDetailsProviderResponse.body,
+            inputs: [ownInput],
+            outputs: [
+              { address: ownAddr, value: { coins: 399_000_000n } },
+              { address: foreignAddr, value: { coins: 100_000_000n } },
+            ] as Cardano.TxOut[],
+          },
+        } as ExtendedTxDetails,
+        accountAddresses: [ownAddr],
+      };
+
+      const result = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParams),
+      );
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value.blockchainSpecific?.txSummary).toEqual([
+          {
+            addr: [foreignAddr],
+            amount: 100_000_000n,
+            type: ActivityType.Send,
+          },
+        ]);
+      }
+    });
+
+    it('shows foreign recipient as Send when net positive due to reward withdrawal', async () => {
+      const ownAddr = Cardano.PaymentAddress(
+        'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+      );
+      const foreignAddr = Cardano.PaymentAddress(
+        'addr_test1qrr7pflnkppvp49sl2hjs9v255ydycp8zxuxzfjw03vev9ns6cdlwymh7v9kr8cd8cy5vx8l7h6v9da84ml2cjd90fusnjsh8d',
+      );
+      const sdkValue = (coins: bigint) => ({
+        coins,
+        assets: new Map<Cardano.AssetId, AssetInfoWithAmount>(),
+      });
+
+      vi.mocked(createTransactionInspector).mockReturnValue(async () =>
+        Promise.resolve({
+          summary: { ...mockSummaryInspection, coins: 5_000_000n },
+          metadata: '',
+          tokenTransfer: {
+            fromAddress: new Map([[ownAddr, sdkValue(-5_000_000n)]]),
+            toAddress: new Map([
+              [foreignAddr, sdkValue(3_000_000n)],
+              [ownAddr, sdkValue(7_000_000n)],
+            ]),
+          },
+        }),
+      );
+
+      mapParams = {
+        ...mapParams,
+        activity: mockActivity,
+        // A 5 ADA withdrawal into a 10 ADA own output: withdrawn rewards move
+        // between the account's own buckets, so the net gain is 5 ADA.
+        txDetails: {
+          ...withOwnOutput(ownAddr, 10_000_000n),
+          body: {
+            ...withOwnOutput(ownAddr, 10_000_000n).body,
+            withdrawals: [
+              {
+                stakeAddress: Cardano.RewardAccount(mockRewardAccount),
+                quantity: 5_000_000n,
+              },
+            ],
+          },
+        } as ExtendedTxDetails,
+        accountAddresses: [ownAddr],
+      };
+
+      const result = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParams),
+      );
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value.address).toBe(foreignAddr);
+        expect(result.value.blockchainSpecific?.txSummary).toHaveLength(1);
+        expect(result.value.blockchainSpecific?.txSummary?.[0]?.addr).toEqual([
+          foreignAddr,
+        ]);
+        expect(result.value.blockchainSpecific?.txSummary?.[0]?.type).toBe(
+          ActivityType.Send,
+        );
+      }
+    });
+
+    describe('custody account tokens', () => {
+      const TOKEN_ID = Cardano.AssetId(`${'99'.repeat(28)}746f6b656e`);
+      const grantTokenId = custodyGrantAssetId(
+        { accountValidatorHash: ACCOUNT_VALIDATOR_HASH, stakeScriptHash },
+        7n,
+      );
+      const assetInfo = (assetId: Cardano.AssetId) =>
+        ({ amount: 1n, assetInfo: { assetId } } as AssetInfoWithAmount);
+      const controlValue: Cardano.Value = {
+        coins: 1_500_000n,
+        assets: new Map([
+          [custodyStateNftId, 1n],
+          [TOKEN_ID, 5n],
+        ]),
+      };
+      const controlInput = {
+        txId: Cardano.TransactionId('11'.repeat(32)),
+        index: 0,
+        address: custodyAddress,
+        value: controlValue,
+      };
+      const controlOutput: Cardano.TxOut = {
+        address: custodyAddress,
+        value: controlValue,
+      };
+      const grantOutput: Cardano.TxOut = {
+        address: custodyAddress,
+        value: { coins: 2_000_000n, assets: new Map([[grantTokenId, 1n]]) },
+      };
+      const tokenOnly = {
+        coins: 1_500_000n,
+        assets: new Map([[TOKEN_ID, 5n]]),
+      };
+
+      const mapCustodyTransaction = async (
+        rewardAccount: CardanoRewardAccount,
+      ) => {
+        vi.mocked(createTransactionInspector).mockReturnValue(async () =>
+          Promise.resolve({
+            summary: {
+              ...mockSummaryInspection,
+              assets: new Map([
+                [custodyStateNftId, assetInfo(custodyStateNftId)],
+                [grantTokenId, assetInfo(grantTokenId)],
+                [TOKEN_ID, assetInfo(TOKEN_ID)],
+              ]),
+              resolvedInputs: [controlInput],
+            },
+            metadata: '',
+            tokenTransfer: { fromAddress: new Map(), toAddress: new Map() },
+          }),
+        );
+        return firstValueFrom(
+          mapTransactionToActivityDetails({
+            ...mapParams,
+            activity: mockActivity,
+            txDetails: {
+              ...mockTxDetailsProviderResponse,
+              body: {
+                ...mockTxDetailsProviderResponse.body,
+                outputs: [controlOutput, grantOutput],
+              },
+            } as ExtendedTxDetails,
+            rewardAccount,
+            accountAddresses: [custodyAddress],
+          }),
+        );
+      };
+
+      it('are never looked up for the custody account that owns them', async () => {
+        const result = await mapCustodyTransaction(
+          CardanoRewardAccount(custodyRewardAccount),
+        );
+
+        expect(result.isOk()).toBe(true);
+        expect(fetchAssetsMetadata).toHaveBeenCalledWith(
+          { assets: new Map([[TOKEN_ID, assetInfo(TOKEN_ID)]]) },
+          mapParams.getTokenMetadata,
+        );
+      });
+
+      it('are left out of the inputs and outputs of the custody account that owns them', async () => {
+        await mapCustodyTransaction(CardanoRewardAccount(custodyRewardAccount));
+
+        expect(vi.mocked(inputOutputTransformer).mock.calls).toEqual([
+          [{ ...controlInput, value: tokenOnly }, expect.any(Map)],
+          [{ ...controlOutput, value: tokenOnly }, expect.any(Map)],
+          [
+            {
+              ...grantOutput,
+              value: { coins: 2_000_000n, assets: new Map() },
+            },
+            expect.any(Map),
+          ],
+        ]);
+      });
+
+      it('stay ordinary assets for a key account', async () => {
+        await mapCustodyTransaction(mockRewardAccount);
+
+        expect(fetchAssetsMetadata).toHaveBeenCalledWith(
+          {
+            assets: new Map([
+              [custodyStateNftId, assetInfo(custodyStateNftId)],
+              [grantTokenId, assetInfo(grantTokenId)],
+              [TOKEN_ID, assetInfo(TOKEN_ID)],
+            ]),
+          },
+          mapParams.getTokenMetadata,
+        );
+        expect(vi.mocked(inputOutputTransformer).mock.calls).toEqual([
+          [controlInput, expect.any(Map)],
+          [controlOutput, expect.any(Map)],
+          [grantOutput, expect.any(Map)],
+        ]);
+      });
+    });
+
+    it('does not compute tx summary when transaction has stake deregistration certificate', async () => {
+      const mapParamsWithDeregCertificate = {
+        ...mapParams,
+        activity: mockActivity,
+        txDetails:
+          mockTxDetailsProviderResponseWithCertificates as ExtendedTxDetails,
+      };
+
+      const resultWithCertificates = await firstValueFrom(
+        mapTransactionToActivityDetails(mapParamsWithDeregCertificate),
+      );
+
+      expect(resultWithCertificates.isOk()).toBe(true);
+      if (resultWithCertificates.isOk()) {
+        const cardano = resultWithCertificates.value.blockchainSpecific;
+        expect(cardano).toBeDefined();
+        if (cardano) {
+          expect(cardano.txSummary).toBeUndefined();
+        }
+      }
+    });
+  });
+});

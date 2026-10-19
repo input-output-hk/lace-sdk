@@ -1,0 +1,13 @@
+{
+  "name": "@lace-contract/wallet-active-state",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@lace-contract/module": "*",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {}
+}

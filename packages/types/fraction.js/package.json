@@ -1,0 +1,8 @@
+{
+  "name": "@types/fraction.js",
+  "version": "4.0.1",
+  "private": true,
+  "description": "Types for fraction.js 4.0.1, which ships none: the surface @lace-lib/cardano-core uses.",
+  "license": "Apache-2.0",
+  "types": "index.d.ts"
+}

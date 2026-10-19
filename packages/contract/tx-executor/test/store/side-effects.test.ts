@@ -1,0 +1,516 @@
+import { BigNumber } from '@lace-lib/util';
+import { testSideEffect } from '@lace-lib/util-dev';
+import { of } from 'rxjs';
+import { describe, expect, it, vi } from 'vitest';
+
+import { genericErrorResults } from '../../src';
+import { makeExecuteTxPhase } from '../../src/store/side-effects';
+import { txExecutorActions } from '../../src/store/slice';
+
+import type { TxPhaseConfig } from '../../src/store/slice';
+import type { MakeTxExecutorImplementation } from '../../src/types';
+import type { AccountId, AnyWallet } from '@lace-contract/wallet-repo';
+import type { BlockchainName } from '@lace-lib/util-store';
+
+import '../../src/augmentations';
+
+const blockchainName: BlockchainName = 'Midnight';
+const accountId: AccountId = 'AccountId' as AccountId;
+const wallet = { accounts: [{ blockchainName, accountId }] } as AnyWallet;
+const executionId = 'executionId';
+const requestedType = 'submitTx';
+const requestedParams = {
+  serializedTx: 'serializedTx',
+  wallet,
+  blockchainName,
+  accountId,
+};
+const makeTxPhaseRequested = ({
+  type = requestedType,
+  params = requestedParams,
+  id = executionId,
+}: // eslint-disable-next-line @typescript-eslint/no-explicit-any
+{ id?: string; params?: any; type?: TxPhaseConfig['type'] } = {}) =>
+  txExecutorActions.txExecutor.txPhaseRequested({
+    executionId: id,
+    config: {
+      type,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      params,
+    },
+  });
+
+const makeTxExecutorImplementation: MakeTxExecutorImplementation = vi
+  .fn()
+  .mockImplementation(() => ({
+    blockchainName: 'Midnight',
+    confirmTx: vi.fn().mockReturnValue(of({ success: true, serializedTx: '' })),
+    buildTx: vi.fn().mockReturnValue(
+      of({
+        success: true as const,
+        fees: [],
+        serializedTx: '',
+      }),
+    ),
+    previewTx: vi
+      .fn()
+      .mockReturnValue(
+        of({ success: true as const, minimumAmount: BigNumber(1n) }),
+      ),
+    discardTx: vi.fn().mockReturnValue(of({ success: true })),
+    submitTx: vi.fn().mockReturnValue(of({ success: true, txId: '' })),
+  }));
+
+const implementationFactories: MakeTxExecutorImplementation[] = [
+  makeTxExecutorImplementation,
+];
+
+describe('txExecutor side-effects', () => {
+  describe('makeExecuteTxPhase', () => {
+    it('selects executor of active blockchain', () => {
+      const restDependencies = {
+        deps: 'deps',
+      };
+      testSideEffect(
+        makeExecuteTxPhase({
+          implementationFactories,
+        }),
+        ({ cold, expectObservable, flush }) => ({
+          actionObservables: {
+            txExecutor: {
+              txPhaseRequested$: cold('-a', {
+                a: makeTxPhaseRequested(),
+              }),
+            },
+          },
+          dependencies: { actions: txExecutorActions, ...restDependencies },
+          stateObservables: {
+            wallets: {
+              selectAll$: cold('a', {
+                a: [wallet],
+              }),
+            },
+          },
+
+          assertion: sideEffect$ => {
+            expectObservable(sideEffect$).toBe('-a', {
+              a: expect.any(Object) as unknown,
+            });
+
+            flush();
+
+            expect(makeTxExecutorImplementation).toHaveBeenCalledWith(
+              restDependencies,
+              expect.any(Object),
+            );
+          },
+        }),
+      );
+    });
+
+    it('emits "txPhaseCompleted" with generic error if no executor was found', () => {
+      testSideEffect(
+        makeExecuteTxPhase({
+          implementationFactories: [],
+        }),
+        ({ cold, expectObservable }) => ({
+          actionObservables: {
+            txExecutor: {
+              txPhaseRequested$: cold('a', {
+                a: makeTxPhaseRequested(),
+              }),
+            },
+          },
+          dependencies: { actions: txExecutorActions },
+          stateObservables: {
+            wallets: {
+              selectAll$: cold('a', {
+                a: [wallet],
+              }),
+            },
+          },
+
+          assertion: sideEffect$ => {
+            expectObservable(sideEffect$).toBe('a', {
+              a: txExecutorActions.txExecutor.txPhaseCompleted({
+                executionId,
+                result: genericErrorResults[requestedType](),
+              }),
+            });
+          },
+        }),
+      );
+    });
+
+    describe('when requested method is other than "confirmTx"', () => {
+      it('calls requested method and emits result with "txPhaseCompleted" action', () => {
+        testSideEffect(
+          makeExecuteTxPhase({
+            implementationFactories,
+          }),
+          ({ cold, expectObservable, flush }) => ({
+            actionObservables: {
+              txExecutor: {
+                txPhaseRequested$: cold('a', {
+                  a: makeTxPhaseRequested(),
+                }),
+              },
+            },
+            dependencies: { actions: txExecutorActions },
+            stateObservables: {
+              wallets: {
+                selectAll$: cold('a', {
+                  a: [wallet],
+                }),
+              },
+            },
+
+            assertion: sideEffect$ => {
+              expectObservable(sideEffect$).toBe('a', {
+                a: txExecutorActions.txExecutor.txPhaseCompleted({
+                  executionId,
+                  result: {
+                    success: true,
+                    txId: '',
+                  },
+                }),
+              });
+
+              flush();
+            },
+          }),
+        );
+      });
+    });
+
+    describe('when requested method is "confirmTx"', () => {
+      it('calls "confirmTx" with received params', () => {
+        const requestedMethodMock = vi.fn();
+        testSideEffect(
+          {
+            build: ({ cold }) => {
+              requestedMethodMock.mockReturnValue(cold(''));
+
+              const makeTxExecutorImplementation: MakeTxExecutorImplementation =
+                vi.fn().mockImplementation(() => ({
+                  blockchainName: 'Midnight',
+                  confirmTx: requestedMethodMock,
+                }));
+
+              const implementationFactories: MakeTxExecutorImplementation[] = [
+                makeTxExecutorImplementation,
+              ];
+              return makeExecuteTxPhase({
+                implementationFactories,
+              });
+            },
+          },
+          ({ cold, expectObservable, flush }) => {
+            return {
+              actionObservables: {
+                txExecutor: {
+                  txPhaseRequested$: cold('-a', {
+                    a: makeTxPhaseRequested({ type: 'confirmTx' }),
+                  }),
+                },
+              },
+              dependencies: {
+                actions: txExecutorActions,
+              },
+              stateObservables: {
+                wallets: {
+                  selectAll$: cold('a', {
+                    a: [wallet],
+                  }),
+                },
+              },
+
+              assertion: sideEffect$ => {
+                expectObservable(sideEffect$).toBe('-');
+
+                flush();
+
+                expect(requestedMethodMock).toHaveBeenCalledWith(
+                  expect.objectContaining({
+                    blockchainName: 'Midnight',
+                    serializedTx: 'serializedTx',
+                    accountId,
+                    wallet,
+                  }),
+                );
+              },
+            };
+          },
+        );
+      });
+
+      it('emits result of "confirmTx" with "txPhaseCompleted" action', () => {
+        testSideEffect(
+          makeExecuteTxPhase({
+            implementationFactories,
+          }),
+          ({ cold, expectObservable }) => ({
+            actionObservables: {
+              txExecutor: {
+                txPhaseRequested$: cold('a', {
+                  a: makeTxPhaseRequested({ type: 'confirmTx' }),
+                }),
+              },
+            },
+            dependencies: {
+              actions: txExecutorActions,
+            },
+            stateObservables: {
+              wallets: {
+                selectAll$: cold('a', {
+                  a: [wallet],
+                }),
+              },
+            },
+
+            assertion: sideEffect$ => {
+              expectObservable(sideEffect$).toBe('a', {
+                a: txExecutorActions.txExecutor.txPhaseCompleted({
+                  executionId,
+                  result: {
+                    serializedTx: '',
+                    success: true,
+                  },
+                }),
+              });
+            },
+          }),
+        );
+      });
+
+      it('contains a thrown error (accountId not in wallet) as a generic completion instead of erroring the stream', () => {
+        const invalidWallet = {
+          accounts: [{ blockchainName, accountId: 'different-account' }],
+        } as AnyWallet;
+
+        testSideEffect(
+          makeExecuteTxPhase({
+            implementationFactories,
+          }),
+          ({ cold, expectObservable }) => ({
+            actionObservables: {
+              txExecutor: {
+                txPhaseRequested$: cold('-a', {
+                  a: txExecutorActions.txExecutor.txPhaseRequested({
+                    executionId,
+                    config: {
+                      type: 'confirmTx',
+                      params: {
+                        serializedTx: 'serializedTx',
+                        wallet: invalidWallet,
+                        accountId,
+                        blockchainName,
+                        blockchainSpecificSendFlowData: {},
+                      },
+                    },
+                  }),
+                }),
+              },
+            },
+            dependencies: {
+              actions: txExecutorActions,
+            },
+            stateObservables: {
+              wallets: {
+                selectAll$: cold('a', { a: [invalidWallet] }),
+              },
+            },
+            assertion: sideEffect$ => {
+              // The confirmTx flow throws when the account is missing; the
+              // stream must not error (`#`) — it maps to a generic completion.
+              expectObservable(sideEffect$).toBe('-a', {
+                a: expect.objectContaining({
+                  type: txExecutorActions.txExecutor.txPhaseCompleted.type,
+                  payload: expect.objectContaining({
+                    executionId,
+                    result: expect.objectContaining({
+                      success: false,
+                      errorTranslationKeys: {
+                        subtitle:
+                          'tx-executor.confirmation-error.generic.subtitle',
+                        title: 'tx-executor.confirmation-error.generic.title',
+                      },
+                    }) as unknown,
+                  }) as unknown,
+                }) as unknown,
+              });
+            },
+          }),
+        );
+      });
+
+      it('keeps serving later requests after an executor phase throws', () => {
+        const throwingImplementation: MakeTxExecutorImplementation = vi
+          .fn()
+          .mockImplementation(() => ({
+            blockchainName: 'Midnight',
+            confirmTx: vi
+              .fn()
+              .mockReturnValue(of({ success: true, serializedTx: '' })),
+            buildTx: vi.fn().mockImplementation(() => {
+              throw new Error('executor blew up');
+            }),
+            previewTx: vi
+              .fn()
+              .mockReturnValue(
+                of({ success: true as const, minimumAmount: BigNumber(1n) }),
+              ),
+            discardTx: vi.fn().mockReturnValue(of({ success: true })),
+            submitTx: vi
+              .fn()
+              .mockReturnValue(of({ success: true, txId: 'ok' })),
+          }));
+
+        testSideEffect(
+          makeExecuteTxPhase({
+            implementationFactories: [throwingImplementation],
+          }),
+          ({ cold, expectObservable }) => ({
+            actionObservables: {
+              txExecutor: {
+                // First request's executor throws synchronously; the second
+                // must still be served (the shared stream is not torn down).
+                txPhaseRequested$: cold('a-b', {
+                  a: makeTxPhaseRequested({ type: 'buildTx' }),
+                  b: makeTxPhaseRequested({ type: 'submitTx' }),
+                }),
+              },
+            },
+            dependencies: { actions: txExecutorActions },
+            stateObservables: {
+              wallets: {
+                selectAll$: cold('a', { a: [wallet] }),
+              },
+            },
+            assertion: sideEffect$ => {
+              expectObservable(sideEffect$).toBe('a-b', {
+                a: txExecutorActions.txExecutor.txPhaseCompleted({
+                  executionId,
+                  result: genericErrorResults.buildTx(),
+                }),
+                b: txExecutorActions.txExecutor.txPhaseCompleted({
+                  executionId,
+                  result: { success: true, txId: 'ok' },
+                }),
+              });
+            },
+          }),
+        );
+      });
+    });
+
+    it('completes an in-flight phase even when a later request arrives while it runs', () => {
+      testSideEffect(
+        {
+          build: ({ cold }) => {
+            const slowConfirmImplementation: MakeTxExecutorImplementation = vi
+              .fn()
+              .mockImplementation(() => ({
+                blockchainName: 'Midnight',
+                confirmTx: vi.fn().mockReturnValue(
+                  cold('--a', {
+                    a: { success: true, serializedTx: 'signedTx' },
+                  }),
+                ),
+                buildTx: vi.fn(),
+                previewTx: vi.fn(),
+                discardTx: vi.fn(),
+                submitTx: vi
+                  .fn()
+                  .mockReturnValue(of({ success: true, txId: 'ok' })),
+              }));
+
+            return makeExecuteTxPhase({
+              implementationFactories: [slowConfirmImplementation],
+            });
+          },
+        },
+        ({ cold, expectObservable }) => ({
+          actionObservables: {
+            txExecutor: {
+              txPhaseRequested$: cold('ab', {
+                a: makeTxPhaseRequested({ id: 'exec-a', type: 'confirmTx' }),
+                b: makeTxPhaseRequested({ id: 'exec-b', type: 'submitTx' }),
+              }),
+            },
+          },
+          dependencies: { actions: txExecutorActions },
+          stateObservables: {
+            wallets: {
+              selectAll$: cold('a', { a: [wallet] }),
+            },
+          },
+          assertion: sideEffect$ => {
+            expectObservable(sideEffect$).toBe('-ba', {
+              b: txExecutorActions.txExecutor.txPhaseCompleted({
+                executionId: 'exec-b',
+                result: { success: true, txId: 'ok' },
+              }),
+              a: txExecutorActions.txExecutor.txPhaseCompleted({
+                executionId: 'exec-a',
+                result: { success: true, serializedTx: 'signedTx' },
+              }),
+            });
+          },
+        }),
+      );
+    });
+
+    it('stops listening to an executor phase once it has produced its result', () => {
+      testSideEffect(
+        {
+          build: ({ cold }) => {
+            const chattyImplementation: MakeTxExecutorImplementation = vi
+              .fn()
+              .mockImplementation(() => ({
+                blockchainName: 'Midnight',
+                confirmTx: vi.fn(),
+                buildTx: vi.fn(),
+                previewTx: vi.fn(),
+                discardTx: vi.fn(),
+                // No completion notation: the real Cardano submitTx and
+                // confirmTx project BehaviorSubjects that never complete, so a
+                // retained inner re-emits on the next source tick.
+                submitTx: vi.fn().mockReturnValue(
+                  cold('ab', {
+                    a: { success: true, txId: 'first' },
+                    b: { success: true, txId: 'second' },
+                  }),
+                ),
+              }));
+
+            return makeExecuteTxPhase({
+              implementationFactories: [chattyImplementation],
+            });
+          },
+        },
+        ({ cold, expectObservable }) => ({
+          actionObservables: {
+            txExecutor: {
+              txPhaseRequested$: cold('a', { a: makeTxPhaseRequested() }),
+            },
+          },
+          dependencies: { actions: txExecutorActions },
+          stateObservables: {
+            wallets: {
+              selectAll$: cold('a', { a: [wallet] }),
+            },
+          },
+          assertion: sideEffect$ => {
+            expectObservable(sideEffect$).toBe('a', {
+              a: txExecutorActions.txExecutor.txPhaseCompleted({
+                executionId,
+                result: { success: true, txId: 'first' },
+              }),
+            });
+          },
+        }),
+      );
+    });
+  });
+});

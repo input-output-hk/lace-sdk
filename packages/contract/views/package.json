@@ -1,0 +1,13 @@
+{
+  "name": "@lace-contract/views",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@lace-contract/analytics": "*",
+    "@lace-contract/module": "*"
+  },
+  "devDependencies": {}
+}

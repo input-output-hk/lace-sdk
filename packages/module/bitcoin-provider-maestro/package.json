@@ -1,0 +1,17 @@
+{
+  "name": "@lace-module/bitcoin-provider-maestro",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts"
+  },
+  "main": "src/index.ts",
+  "dependencies": {
+    "@lace-contract/bitcoin-context": "*",
+    "@lace-contract/module": "*",
+    "@lace-lib/bitcoin-provider-core": "*"
+  }
+}

@@ -1,0 +1,290 @@
+import { useTranslation } from '@lace-contract/i18n';
+import { useNavigation } from '@react-navigation/native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import React, { useCallback, useEffect, useState } from 'react';
+import { AppState, StyleSheet, View, Linking } from 'react-native';
+
+import { radius, spacing } from '../../../../design-tokens';
+import { Text } from '../../../atoms';
+import { Sheet } from '../../../organisms';
+
+import type { Theme } from '../../../../design-tokens';
+export interface QrScannerSheetProps {
+  onScan: (data: string) => void;
+  onClose: () => void;
+  validateScan?: (data: string) => boolean;
+  theme: Theme;
+  /**
+   * Navigator that hosts the sheet footer. Defaults to the nearest navigator;
+   * pass a parent (e.g. navigation.getParent()) when this sheet is nested in a
+   * headerless stack so the permission / Done buttons land on the real sheet
+   * chrome instead of a navigator that never renders a footer.
+   */
+  footerNavigation?: {
+    setOptions: (options: { footer?: React.ReactNode }) => void;
+  };
+}
+
+export const QrScannerSheet = ({
+  onScan,
+  onClose,
+  validateScan,
+  theme,
+  footerNavigation,
+}: QrScannerSheetProps) => {
+  const { t } = useTranslation();
+  const navigation = useNavigation();
+  // Footer chrome host: the passed parent when nested, else the nearest navigator.
+  const footerNav = footerNavigation ?? navigation;
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
+  const [isScanned, setIsScanned] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hasRequestedOnce, setHasRequestedOnce] = useState(false);
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false);
+
+  const styles = getStyles(theme);
+
+  const handleOpenSettings = () => {
+    void Linking.openSettings();
+  };
+
+  const handleRequestPermission = useCallback(async () => {
+    setIsRequestingPermission(true);
+    try {
+      await requestPermission();
+    } finally {
+      setIsRequestingPermission(false);
+      setHasRequestedOnce(true);
+    }
+  }, [requestPermission]);
+
+  useEffect(() => {
+    if (!permission?.granted && permission?.canAskAgain !== false) {
+      if (!hasRequestedOnce) {
+        void handleRequestPermission();
+      }
+    }
+  }, [permission, hasRequestedOnce, handleRequestPermission]);
+
+  // Refresh permission when returning from Settings or app resuming
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        void getPermission();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [getPermission]);
+
+  useEffect(() => {
+    if (!permission?.granted) {
+      footerNav.setOptions({
+        footer: (
+          <Sheet.Footer
+            primaryButton={{
+              label:
+                permission?.canAskAgain === false
+                  ? t('v2.send-flow.qr-scanner.open-settings')
+                  : t('v2.send-flow.qr-scanner.request-permission'),
+              onPress:
+                permission?.canAskAgain === false
+                  ? handleOpenSettings
+                  : handleRequestPermission,
+              loading: isRequestingPermission,
+            }}
+            secondaryButton={
+              permission?.canAskAgain === false
+                ? undefined
+                : {
+                    label: t('v2.send-flow.qr-scanner.open-settings'),
+                    onPress: handleOpenSettings,
+                  }
+            }
+          />
+        ),
+      });
+      return;
+    }
+
+    navigation.setOptions({
+      footer: (
+        <Sheet.Footer
+          primaryButton={{
+            label: t('v2.send-flow.qr-scanner.done'),
+            onPress: onClose,
+          }}
+        />
+      ),
+    });
+  }, [
+    footerNav,
+    permission,
+    t,
+    handleRequestPermission,
+    isRequestingPermission,
+    onClose,
+  ]);
+
+  const handleBarCodeScanned = ({ data }: { type: string; data: string }) => {
+    if (isScanned) return;
+
+    setIsScanned(true);
+
+    // Validate the scanned data if validator is provided
+    if (validateScan && !validateScan(data)) {
+      setError(t('v2.send-flow.qr-scanner.invalid-qr'));
+      setTimeout(() => {
+        setIsScanned(false);
+        setError(null);
+      }, 2000);
+      return;
+    }
+
+    onScan(data);
+  };
+
+  if (!permission?.granted) {
+    return (
+      <View style={styles.permissionContent}>
+        <Text.L style={styles.permissionTitle}>
+          {t('v2.send-flow.qr-scanner.permission-denied')}
+        </Text.L>
+        <Text.M style={styles.permissionMessage}>
+          {t('v2.send-flow.qr-scanner.permission-message')}
+        </Text.M>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.cameraContainer}>
+      <CameraView
+        style={styles.camera}
+        facing="back"
+        onBarcodeScanned={isScanned ? undefined : handleBarCodeScanned}
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr'],
+        }}
+      />
+
+      <View style={styles.overlay}>
+        <View style={styles.scanArea}>
+          <View style={[styles.corner, styles.topLeft]} />
+          <View style={[styles.corner, styles.topRight]} />
+          <View style={[styles.corner, styles.bottomLeft]} />
+          <View style={[styles.corner, styles.bottomRight]} />
+        </View>
+
+        {error && (
+          <View style={styles.errorContainer}>
+            <Text.M style={styles.errorText}>{error}</Text.M>
+          </View>
+        )}
+
+        <Text.L style={styles.instructionText}>
+          {t('v2.send-flow.qr-scanner.title')}
+        </Text.L>
+      </View>
+    </View>
+  );
+};
+
+const getStyles = (theme: Theme) =>
+  StyleSheet.create({
+    cameraContainer: {
+      flex: 1,
+      marginVertical: spacing.XXL,
+      borderRadius: radius.L,
+      overflow: 'hidden',
+      position: 'relative',
+    },
+    camera: {
+      flex: 1,
+    },
+    overlay: {
+      ...StyleSheet.absoluteFill,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    scanArea: {
+      width: 280,
+      height: 280,
+      position: 'relative',
+    },
+    corner: {
+      position: 'absolute',
+      width: 50,
+      height: 50,
+      borderColor: theme.brand.white,
+      borderWidth: 5,
+    },
+    topLeft: {
+      top: 0,
+      left: 0,
+      borderBottomWidth: 0,
+      borderRightWidth: 0,
+      borderTopLeftRadius: radius.M,
+    },
+    topRight: {
+      top: 0,
+      right: 0,
+      borderBottomWidth: 0,
+      borderLeftWidth: 0,
+      borderTopRightRadius: radius.M,
+    },
+    bottomLeft: {
+      bottom: 0,
+      left: 0,
+      borderTopWidth: 0,
+      borderRightWidth: 0,
+      borderBottomLeftRadius: radius.M,
+    },
+    bottomRight: {
+      bottom: 0,
+      right: 0,
+      borderTopWidth: 0,
+      borderLeftWidth: 0,
+      borderBottomRightRadius: radius.M,
+    },
+    instructionText: {
+      position: 'absolute',
+      bottom: spacing.XXL,
+      color: theme.brand.white,
+    },
+    permissionLoading: {
+      flex: 1,
+      marginVertical: spacing.L,
+      borderRadius: radius.L,
+      backgroundColor: theme.background.primary,
+    },
+    permissionContent: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: spacing.XL,
+      gap: spacing.M,
+    },
+    permissionTitle: {
+      textAlign: 'center',
+      marginTop: spacing.M,
+    },
+    permissionMessage: {
+      textAlign: 'center',
+      color: theme.text.secondary,
+    },
+    errorContainer: {
+      position: 'absolute',
+      top: spacing.XXL * 2,
+      backgroundColor: theme.background.negative,
+      paddingHorizontal: spacing.L,
+      paddingVertical: spacing.M,
+      borderRadius: spacing.S,
+    },
+    errorText: {
+      color: theme.text.primary,
+      textAlign: 'center',
+    },
+  });

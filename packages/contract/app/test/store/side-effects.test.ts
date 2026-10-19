@@ -1,0 +1,268 @@
+import { analyticsActions } from '@lace-contract/analytics';
+import { featuresActions } from '@lace-contract/feature';
+import { type Features } from '@lace-contract/feature';
+import { ViewId } from '@lace-contract/module';
+import { viewsActions } from '@lace-contract/views';
+import { testSideEffect } from '@lace-lib/util-dev';
+import { EMPTY, of, Subject, throwError } from 'rxjs';
+import { dummyLogger } from 'ts-log';
+import { describe, expect, it, vi } from 'vitest';
+
+import { appActions } from '../../src';
+import {
+  performAppReload,
+  reloadAppInTheBackground,
+  trackSession,
+} from '../../src/store/side-effects';
+
+import type { View } from '@lace-contract/views';
+import type { Mock } from 'vitest';
+
+// Define type for dependencies
+interface ReloadAppDependencies {
+  reloadApplication: Mock;
+  actions: typeof actions;
+}
+
+interface TrackSessionDependencies {
+  actions: typeof actions;
+}
+
+vi.mock('uuid', () => {
+  return {
+    v4: vi.fn(() => '452a30b2-1024-41fa-aefc-38c2d7c4776b'),
+  };
+});
+
+const actions = {
+  ...featuresActions,
+  ...viewsActions,
+  ...analyticsActions,
+  ...appActions,
+};
+
+const onboardingView: View = {
+  id: ViewId('onboarding_view_id'),
+  type: 'sidePanel',
+  location: 'onboarding',
+};
+
+describe('Side Effects', () => {
+  describe('reloadAppInTheBackground', () => {
+    it('should reload the application when updateFeatures action is dispatched and no views are open', () => {
+      const mockReloadApplication = vi.fn();
+      testSideEffect(reloadAppInTheBackground, ({ hot, expectObservable }) => {
+        return {
+          actionObservables: {
+            features: {
+              updateFeatures$: hot('-a', {
+                a: actions.features.updateFeatures({} as Features),
+              }),
+            },
+          },
+          stateObservables: {
+            views: { selectOpenViews$: hot('-a', { a: [] }) },
+          },
+          dependencies: {
+            reloadApplication: mockReloadApplication,
+            actions,
+          } as ReloadAppDependencies,
+          assertion: sideEffect$ => {
+            expectObservable(sideEffect$).toBe('-a', {
+              a: {
+                type: 'app/reloadApplication',
+              },
+            });
+          },
+        };
+      });
+    });
+
+    it('should not reload the application if there are open views after an updateFeatures action', () => {
+      const mockReloadApplication = vi.fn();
+      testSideEffect(
+        reloadAppInTheBackground,
+        ({ flush, hot, expectObservable }) => {
+          return {
+            actionObservables: {
+              features: {
+                updateFeatures$: hot('-a', {
+                  a: actions.features.updateFeatures({} as Features),
+                }),
+              },
+            },
+            stateObservables: {
+              views: { selectOpenViews$: hot('-a', { a: [onboardingView] }) },
+            },
+            dependencies: {
+              reloadApplication: mockReloadApplication,
+            } as ReloadAppDependencies,
+            assertion: sideEffect$ => {
+              expectObservable(sideEffect$).toBe('-');
+
+              flush();
+
+              expect(mockReloadApplication).not.toHaveBeenCalled();
+            },
+          };
+        },
+      );
+    });
+  });
+
+  describe('performAppReload', () => {
+    it('invokes performAppReload dependency when reloadApplication action fires', () => {
+      const reloadApplication$ = new Subject<
+        ReturnType<typeof actions.app.reloadApplication>
+      >();
+      const doReload = vi.fn(() => EMPTY);
+
+      testSideEffect(performAppReload, ({ flush }) => ({
+        actionObservables: { app: { reloadApplication$ } },
+        stateObservables: {},
+        dependencies: {
+          performAppReload: doReload,
+          flushPersistedState: () => of(undefined),
+          logger: dummyLogger,
+        },
+        assertion: sideEffect$ => {
+          sideEffect$.subscribe();
+          flush();
+
+          reloadApplication$.next(actions.app.reloadApplication());
+
+          expect(doReload).toHaveBeenCalledTimes(1);
+        },
+      }));
+    });
+
+    it('keeps the subscription alive when performAppReload rejects', () => {
+      // Regression: if the platform reload (e.g. `Updates.reloadAsync()` on
+      // mobile, `runtime.reload()` on extension) errors, the inner observable's
+      // error must not terminate the outer subscription; future reload requests
+      // must still call `performAppReload`.
+      const reloadApplication$ = new Subject<
+        ReturnType<typeof actions.app.reloadApplication>
+      >();
+      const doReload = vi.fn(() =>
+        throwError(() => new Error('reload failed')),
+      );
+
+      testSideEffect(performAppReload, ({ flush }) => ({
+        actionObservables: { app: { reloadApplication$ } },
+        stateObservables: {},
+        dependencies: {
+          performAppReload: doReload,
+          flushPersistedState: () => of(undefined),
+          logger: dummyLogger,
+        },
+        assertion: sideEffect$ => {
+          sideEffect$.subscribe();
+          flush();
+
+          reloadApplication$.next(actions.app.reloadApplication());
+          reloadApplication$.next(actions.app.reloadApplication());
+
+          expect(doReload).toHaveBeenCalledTimes(2);
+        },
+      }));
+    });
+
+    it('withholds the reload until the flush emits', () => {
+      const reloadApplication$ = new Subject<
+        ReturnType<typeof actions.app.reloadApplication>
+      >();
+      // A controllable flush (not a synchronous `of()`): a same-tick stub
+      // can't distinguish "reload awaits the flush" from "reload fires anyway".
+      const flushSubject = new Subject<void>();
+      const flushPersistedState = vi.fn(() => flushSubject.asObservable());
+      const doReload = vi.fn(() => EMPTY);
+
+      testSideEffect(performAppReload, ({ flush }) => ({
+        actionObservables: { app: { reloadApplication$ } },
+        stateObservables: {},
+        dependencies: {
+          performAppReload: doReload,
+          flushPersistedState,
+          logger: dummyLogger,
+        },
+        assertion: sideEffect$ => {
+          sideEffect$.subscribe();
+          flush();
+
+          reloadApplication$.next(actions.app.reloadApplication());
+          expect(flushPersistedState).toHaveBeenCalledTimes(1);
+          expect(doReload).not.toHaveBeenCalled();
+
+          flushSubject.next();
+          expect(doReload).toHaveBeenCalledTimes(1);
+        },
+      }));
+    });
+
+    it('still reloads when flushing persisted state fails', () => {
+      const reloadApplication$ = new Subject<
+        ReturnType<typeof actions.app.reloadApplication>
+      >();
+      const doReload = vi.fn(() => EMPTY);
+      const flushPersistedState = vi.fn(() =>
+        throwError(() => new Error('flush failed')),
+      );
+
+      testSideEffect(performAppReload, ({ flush }) => ({
+        actionObservables: { app: { reloadApplication$ } },
+        stateObservables: {},
+        dependencies: {
+          performAppReload: doReload,
+          flushPersistedState,
+          logger: dummyLogger,
+        },
+        assertion: sideEffect$ => {
+          sideEffect$.subscribe();
+          flush();
+
+          reloadApplication$.next(actions.app.reloadApplication());
+
+          expect(doReload).toHaveBeenCalledTimes(1);
+        },
+      }));
+    });
+  });
+
+  describe('trackSession', () => {
+    it('should track session based on view connections', () => {
+      testSideEffect(trackSession, ({ hot, expectObservable }) => {
+        return {
+          actionObservables: {
+            views: {
+              viewConnected$: hot('-a', {
+                a: actions.views.viewConnected(onboardingView),
+              }),
+            },
+          },
+          stateObservables: {
+            views: {
+              selectOpenViews$: hot('-a-b', {
+                a: [onboardingView],
+                b: [],
+              }),
+            },
+          },
+          dependencies: { actions } as TrackSessionDependencies,
+          assertion: sideEffect$ => {
+            expectObservable(sideEffect$).toBe('-a 500ms -b', {
+              a: actions.analytics.trackEvent({
+                eventName: 'wallet | session start | Pageview',
+                payload: { sessionId: '452a30b2-1024-41fa-aefc-38c2d7c4776b' },
+              }),
+              b: actions.analytics.trackEvent({
+                eventName: 'wallet | session | end',
+                payload: { sessionId: '452a30b2-1024-41fa-aefc-38c2d7c4776b' },
+              }),
+            });
+          },
+        };
+      });
+    });
+  });
+});

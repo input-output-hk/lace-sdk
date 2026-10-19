@@ -1,0 +1,24 @@
+{
+  "name": "@lace-lib/util-hw",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension/index.ts",
+    "./extension-ui": "./src/extension-ui/index.ts",
+    "./mobile": "./src/mobile/index.ts"
+  },
+  "main": "src/index.ts",
+  "dependencies": {
+    "@cardano-foundation/ledgerjs-hw-app-cardano": "^8.0.0",
+    "@lace-contract/i18n": "*",
+    "@lace-lib/util-store": "*",
+    "@ledgerhq/react-native-hw-transport-ble": "^6.40.1",
+    "react-native-ble-plx": "^3.5.1"
+  },
+  "devDependencies": {
+    "@ledgerhq/errors": "^6.35.0"
+  }
+}

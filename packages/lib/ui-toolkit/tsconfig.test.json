@@ -1,0 +1,13 @@
+{
+  "extends": "../../../tsconfig.test.json",
+  "exclude": ["node_modules", "dist", "coverage"],
+  "include": [
+    "../../../declarations.d.ts",
+    // Tests reach src modules needing these ambient declarations, and
+    // src/index.ts — which pulls them in for the src program — is not included.
+    "src/typings/*.d.ts",
+    "test/**/*.ts",
+    "test/**/*.tsx",
+    "vitest.config.js"
+  ]
+}

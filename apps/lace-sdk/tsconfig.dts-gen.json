@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": true,
+    "declarationMap": false,
+    "removeComments": false,
+    "emitDeclarationOnly": true,
+    "outDir": "./dist/.dts-work",
+    "rootDir": "../..",
+    "noEmit": false,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "**/*.test.*",
+    "**/test/**",
+    "**/*.stories.*",
+    "**/stories/**",
+    "**/__mocks__/**"
+  ]
+}

@@ -1,0 +1,1571 @@
+import {
+  convertHttpUrlToWebsocket,
+  MidnightSDKNetworkId,
+} from '@lace-contract/midnight-context';
+import { networkId } from '@lace-contract/midnight-context/src/stub-data';
+import { ErrorCodes } from '@midnight-ntwrk/dapp-connector-api';
+import * as ledger from '@midnight-ntwrk/ledger-v8';
+import { NetworkId } from '@midnightntwrk/wallet-sdk-abstractions';
+import { Observable, of } from 'rxjs';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { APIError } from '../../src/api-error';
+import { MidnightDappConnectorApi } from '../../src/store/dependencies/midnight-dapp-connector-api';
+
+import type { MidnightDappConnectorApiOptions } from '../../src/store/dependencies/midnight-dapp-connector-api';
+import type { SenderContext } from '../../src/types';
+import type {
+  MidnightWalletsByAccountId,
+  MidnightNetworkConfig,
+  MidnightWallet,
+} from '@lace-contract/midnight-context';
+import type { AccountId } from '@lace-contract/wallet-repo';
+import type {
+  DesiredInput,
+  DesiredOutput,
+} from '@midnight-ntwrk/dapp-connector-api';
+
+vi.mock('@midnight-ntwrk/ledger-v8', async () => {
+  const actual = await vi.importActual('@midnight-ntwrk/ledger-v8');
+  return {
+    ...actual,
+    addressFromKey: vi.fn().mockReturnValue('own-useraddress-hex'),
+  };
+});
+
+vi.mock('@midnightntwrk/wallet-sdk-address-format', () => ({
+  MidnightBech32m: { parse: (address: string) => address },
+  ShieldedAddress: {
+    codec: { decode: (_networkId: string, address: string) => address },
+  },
+  ShieldedCoinPublicKey: {
+    codec: {
+      encode: () => ({
+        asString: () => 'bech32m-shielded-coin-public-key',
+      }),
+    },
+  },
+  ShieldedEncryptionPublicKey: {
+    codec: {
+      encode: () => ({
+        asString: () => 'bech32m-shielded-encryption-public-key',
+      }),
+    },
+  },
+  UnshieldedAddress: {
+    codec: { decode: (_networkId: string, address: string) => address },
+  },
+}));
+
+const mockWalletState = {
+  shielded: {
+    balances: { token1: 100n },
+    address: {
+      coinPublicKeyString: vi.fn().mockReturnValue('shielded-address'),
+    },
+    coinPublicKey: {
+      toHexString: vi.fn().mockReturnValue('shielded-coin-public-key'),
+    },
+    encryptionPublicKey: {
+      toHexString: vi.fn().mockReturnValue('shielded-encryption-public-key'),
+    },
+  },
+
+  unshielded: {
+    balances: {
+      token2: 200n,
+      [ledger.nativeToken().raw]: 1000n,
+    },
+  },
+
+  dust: {
+    totalCoins: [{ generatedNow: 1000n, maxCap: 5000000000000n }],
+  },
+};
+
+const mockNetworkConfig: MidnightNetworkConfig = {
+  indexerAddress: 'http://test-indexer-uri',
+  proofServer: { kind: 'local-host' as const, url: 'http://test-prover-uri' },
+  nodeAddress: 'http://test-substrate-uri',
+};
+const mockNetwork$ = of({ config: mockNetworkConfig, networkId });
+const mockNetworkWithPreview$ = of({
+  config: mockNetworkConfig,
+  networkId: NetworkId.NetworkId.Preview,
+});
+
+const initialSupportedNetworkIds = MidnightSDKNetworkId.filter(
+  id => id !== 'devnet' && id !== 'testnet',
+);
+
+const userConfirmation = vi.fn().mockResolvedValue({
+  accessAuthSecret: vi.fn(),
+  isConfirmed: true,
+});
+
+const testAccountId = 'test-account-id' as AccountId;
+const testOrigin = 'https://test-dapp.io';
+const testSender = { sender: { url: testOrigin } } as unknown as SenderContext;
+const getAccountIdForOrigin = (origin: string): AccountId | undefined =>
+  origin === testOrigin ? testAccountId : undefined;
+
+const optionsWithoutWallet: MidnightDappConnectorApiOptions = {
+  wallets$: of({}),
+  network$: mockNetwork$,
+  userConfirmTransaction: userConfirmation,
+  supportedNetworksIds$: of(initialSupportedNetworkIds),
+  isUnlocked$: of(true),
+  getAccountIdForOrigin,
+};
+
+describe('MidnightDappConnectorApi', () => {
+  let mockWallet: MidnightWallet;
+  let mockWallet$: Observable<MidnightWalletsByAccountId>;
+  let optionsWithWallet: MidnightDappConnectorApiOptions;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWallet = {
+      accountId: 'test-account-id',
+      networkId: NetworkId.NetworkId.Preview,
+      state: vi.fn().mockReturnValue(of(mockWalletState)),
+      address$: of({
+        dust: 'dust-address',
+        unshielded: 'unshielded-address',
+        shielded: 'shielded-address',
+      }),
+      proofServerTransport: {
+        check: vi.fn().mockResolvedValue(new Uint8Array([0xc0])),
+        prove: vi.fn().mockResolvedValue(new Uint8Array([0xf0])),
+      },
+    } as unknown as MidnightWallet;
+
+    mockWallet$ = of({ [mockWallet.accountId]: mockWallet });
+
+    optionsWithWallet = {
+      ...optionsWithoutWallet,
+      wallets$: mockWallet$,
+    };
+  });
+
+  describe('getNetworkId', () => {
+    it('should return network id', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getNetworkId();
+      expect(result).toBe(NetworkId.NetworkId.Preview);
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      await expect(api.getNetworkId()).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('getShieldedBalances', () => {
+    it('should return shielded balances', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getShieldedBalances(testSender);
+      expect(result).toEqual({ token1: 100n });
+      expect(mockWallet.state).toHaveBeenCalled();
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      await expect(api.getShieldedBalances(testSender)).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('getUnshieldedBalances', () => {
+    it('should return unshielded balances', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getUnshieldedBalances(testSender);
+      expect(result).toEqual({
+        '0000000000000000000000000000000000000000000000000000000000000000':
+          1000n,
+        token2: 200n,
+      });
+      expect(mockWallet.state).toHaveBeenCalled();
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      await expect(api.getUnshieldedBalances(testSender)).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('getDustBalance', () => {
+    it('should return dust balance', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const result = await api.getDustBalance(testSender);
+      expect(result).toEqual({
+        balance: 1000n,
+        cap: 5000000000000n,
+      });
+      expect(mockWallet.state).toHaveBeenCalled();
+    });
+
+    it('returns non-zero balance when all dust is pending', async () => {
+      const pendingState = {
+        ...mockWalletState,
+        dust: {
+          totalCoins: [{ generatedNow: 750n, maxCap: 5000000000000n }],
+        },
+      };
+      (mockWallet.state as ReturnType<typeof vi.fn>).mockReturnValue(
+        of(pendingState),
+      );
+
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getDustBalance(testSender);
+
+      expect(result).toEqual({
+        balance: 750n,
+        cap: 5000000000000n,
+      });
+    });
+  });
+
+  describe('getShieldedAddresses', () => {
+    it('should return shielded addresses in bech32m format', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getShieldedAddresses(testSender);
+      expect(result).toEqual({
+        shieldedAddress: 'shielded-address',
+        shieldedCoinPublicKey: 'bech32m-shielded-coin-public-key',
+        shieldedEncryptionPublicKey: 'bech32m-shielded-encryption-public-key',
+      });
+      expect(mockWallet.state).toHaveBeenCalled();
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      await expect(api.getShieldedAddresses(testSender)).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('getUnshieldedAddress', () => {
+    it('should return unshielded address', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getUnshieldedAddress(testSender);
+      expect(result).toEqual({ unshieldedAddress: 'unshielded-address' });
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      await expect(api.getUnshieldedAddress(testSender)).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('getDustAddress', () => {
+    it('should return dust address', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getDustAddress(testSender);
+      expect(result).toEqual({ dustAddress: 'dust-address' });
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      await expect(api.getDustAddress(testSender)).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('getConnectionStatus', () => {
+    it('should return connected status when wallet is available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getConnectionStatus();
+      expect(result).toEqual({
+        status: 'connected',
+        networkId: NetworkId.NetworkId.Preview,
+      });
+    });
+
+    it('should return disconnected status when wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      const result = await api.getConnectionStatus();
+      expect(result).toEqual({ status: 'disconnected' });
+    });
+  });
+
+  describe('getConfiguration', () => {
+    it('should return configuration', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const result = await api.getConfiguration();
+      expect(result).toEqual({
+        networkId: NetworkId.NetworkId.Preview,
+        indexerUri: mockNetworkConfig.indexerAddress,
+        indexerWsUri: convertHttpUrlToWebsocket(
+          mockNetworkConfig.indexerAddress,
+        ),
+        proverServerUri:
+          mockNetworkConfig.proofServer.kind === 'in-process'
+            ? undefined
+            : mockNetworkConfig.proofServer.url,
+        substrateNodeUri: mockNetworkConfig.nodeAddress,
+      });
+    });
+
+    it('publishes no prover URL for a tee-delegated proof server', async () => {
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        network$: of({
+          networkId,
+          config: {
+            ...mockNetworkConfig,
+            proofServer: {
+              kind: 'tee-delegated',
+              url: 'https://api.proofserver.example',
+              label: 'TEE',
+            },
+          },
+        }),
+      });
+
+      const result = await api.getConfiguration();
+
+      expect(result.proverServerUri).toBeUndefined();
+      expect(result.indexerUri).toBe(mockNetworkConfig.indexerAddress);
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+      await expect(api.getConfiguration()).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+
+    it('should throw error if network config is not available', async () => {
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        network$: of(undefined),
+      });
+      await expect(api.getConfiguration()).rejects.toThrow(
+        new APIError(
+          ErrorCodes.InternalError,
+          'Network configuration is unavailable',
+        ),
+      );
+    });
+  });
+
+  describe('checkCircuit / proveCircuit', () => {
+    const payload = new Uint8Array([1, 2, 3]);
+
+    it('forwards the check payload through the bound wallet transport', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await expect(api.checkCircuit(payload, testSender)).resolves.toEqual(
+        new Uint8Array([0xc0]),
+      );
+      expect(mockWallet.proofServerTransport.check).toHaveBeenCalledWith(
+        payload,
+      );
+    });
+
+    it('forwards the prove payload through the bound wallet transport', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await expect(api.proveCircuit(payload, testSender)).resolves.toEqual(
+        new Uint8Array([0xf0]),
+      );
+      expect(mockWallet.proofServerTransport.prove).toHaveBeenCalledWith(
+        payload,
+      );
+    });
+
+    it('refuses when no account is bound to the requesting origin', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+      const unknownSender = {
+        sender: { url: 'https://unknown.example' },
+      } as unknown as SenderContext;
+
+      await expect(api.proveCircuit(payload, unknownSender)).rejects.toThrow(
+        new APIError(
+          ErrorCodes.InternalError,
+          'No account is connected for this dApp. Please reconnect.',
+        ),
+      );
+      expect(mockWallet.proofServerTransport.prove).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('submitTransaction', () => {
+    it('should submit transaction successfully', async () => {
+      const mockSerializedTx =
+        '6d69646e696768743a7472616e73616374696f6e5b76365d287369676e61747572655b76315d2c70726f6f662c706564657273656e2d7363686e6f72725b76315d293a';
+      const mockDeserializedTx = {} as unknown as ledger.Transaction<
+        ledger.SignatureEnabled,
+        ledger.Proof,
+        ledger.Binding
+      >;
+      const mockSubmitTransaction = vi.fn().mockReturnValue(of(undefined));
+
+      // Mock the Transaction.deserialize to return a mock transaction object
+      vi.spyOn(ledger.Transaction, 'deserialize').mockResolvedValue(
+        mockDeserializedTx,
+      );
+
+      mockWallet.submitTransaction = mockSubmitTransaction;
+
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.submitTransaction(mockSerializedTx, testSender);
+
+      expect(ledger.Transaction.deserialize).toHaveBeenCalledWith(
+        'signature',
+        'proof',
+        'binding',
+        Buffer.from(mockSerializedTx, 'hex'),
+      );
+      expect(mockSubmitTransaction).toHaveBeenCalledWith(mockDeserializedTx);
+      expect(mockSubmitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+
+      await expect(
+        api.submitTransaction('mock-transaction', testSender),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+
+    it('should propagate wallet submission errors', async () => {
+      const mockError = new Error('Network submission failed');
+
+      mockWallet.submitTransaction = vi.fn().mockReturnValue(
+        new Observable(subscriber => {
+          subscriber.error(mockError);
+        }),
+      );
+
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await expect(
+        api.submitTransaction('mock-transaction', testSender),
+      ).rejects.toThrow(mockError);
+    });
+
+    describe('onPendingActivity callback', () => {
+      const mockSerializedTx = 'deadbeef';
+      const ownUserAddress = 'own-useraddress-hex';
+      const nightVerifyingKey = {
+        placeholder: 'night-key',
+      } as unknown as Parameters<typeof ledger.addressFromKey>[0];
+
+      beforeEach(() => {
+        (mockWallet as unknown as { state: ReturnType<typeof vi.fn> }).state =
+          vi.fn().mockReturnValue(
+            of({
+              ...mockWalletState,
+              unshielded: { ...mockWalletState.unshielded, availableCoins: [] },
+            }),
+          );
+        (
+          mockWallet as unknown as { nightVerifyingKey: unknown }
+        ).nightVerifyingKey = nightVerifyingKey;
+        mockWallet.submitTransaction = vi.fn().mockReturnValue(of(undefined));
+      });
+
+      it('invokes onPendingActivity with a pending activity when the helper attributes the tx', async () => {
+        vi.spyOn(ledger.Transaction, 'deserialize').mockResolvedValue({
+          intents: new Map([
+            [
+              1,
+              {
+                guaranteedUnshieldedOffer: {
+                  inputs: [],
+                  outputs: [
+                    {
+                      owner: ownUserAddress,
+                      type: '0000000000000000000000000000000000000000000000000000000000000000',
+                      value: 42n,
+                    },
+                  ],
+                },
+                fallibleUnshieldedOffer: undefined,
+              },
+            ],
+          ]),
+          transactionHash: () => 'hash-xyz',
+        } as unknown as ledger.Transaction<ledger.SignatureEnabled, ledger.Proof, ledger.Binding>);
+
+        const onPendingActivity = vi.fn();
+        const api = new MidnightDappConnectorApi({
+          ...optionsWithWallet,
+          onPendingActivity,
+        });
+
+        await api.submitTransaction(mockSerializedTx, testSender);
+
+        expect(onPendingActivity).toHaveBeenCalledTimes(1);
+        expect(onPendingActivity).toHaveBeenCalledWith(
+          expect.objectContaining({
+            accountId: 'test-account-id',
+            activityId: 'hash-xyz',
+            type: 'Pending',
+          }),
+        );
+      });
+
+      it('does not invoke onPendingActivity when the helper returns undefined', async () => {
+        vi.spyOn(ledger.Transaction, 'deserialize').mockResolvedValue({
+          intents: new Map([
+            [
+              1,
+              {
+                guaranteedUnshieldedOffer: {
+                  inputs: [],
+                  outputs: [
+                    {
+                      owner: 'other-address',
+                      type: '0000000000000000000000000000000000000000000000000000000000000000',
+                      value: 42n,
+                    },
+                  ],
+                },
+                fallibleUnshieldedOffer: undefined,
+              },
+            ],
+          ]),
+          transactionHash: () => 'hash-other',
+        } as unknown as ledger.Transaction<ledger.SignatureEnabled, ledger.Proof, ledger.Binding>);
+
+        const onPendingActivity = vi.fn();
+        const api = new MidnightDappConnectorApi({
+          ...optionsWithWallet,
+          onPendingActivity,
+        });
+
+        await api.submitTransaction(mockSerializedTx, testSender);
+
+        expect(onPendingActivity).not.toHaveBeenCalled();
+      });
+
+      it('swallows derivation errors so the DApp-facing submit remains successful', async () => {
+        vi.spyOn(ledger.Transaction, 'deserialize').mockResolvedValue({
+          get intents(): never {
+            throw new Error('boom');
+          },
+          transactionHash: () => 'hash-err',
+        } as unknown as ledger.Transaction<ledger.SignatureEnabled, ledger.Proof, ledger.Binding>);
+
+        const onPendingActivity = vi.fn();
+        const api = new MidnightDappConnectorApi({
+          ...optionsWithWallet,
+          onPendingActivity,
+        });
+
+        await expect(
+          api.submitTransaction(mockSerializedTx, testSender),
+        ).resolves.toBeUndefined();
+        expect(onPendingActivity).not.toHaveBeenCalled();
+      });
+
+      it('does not invoke onPendingActivity when wallet submit fails', async () => {
+        mockWallet.submitTransaction = vi.fn().mockReturnValue(
+          new Observable(subscriber => {
+            subscriber.error(new Error('submit failed'));
+          }),
+        );
+        const onPendingActivity = vi.fn();
+        const api = new MidnightDappConnectorApi({
+          ...optionsWithWallet,
+          onPendingActivity,
+        });
+
+        await expect(
+          api.submitTransaction(mockSerializedTx, testSender),
+        ).rejects.toThrow('submit failed');
+        expect(onPendingActivity).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe('makeIntent', () => {
+    const mockSerializedTx = Buffer.from('mock-serialized-tx');
+    const mockFinalizedTx = {
+      serialize: vi.fn().mockReturnValue(mockSerializedTx),
+    };
+    const mockRecipe = { type: 'UNPROVEN_TRANSACTION' as const };
+
+    const shieldedInputs: DesiredInput[] = [
+      { kind: 'shielded', type: 'token-a', value: 1000n },
+    ];
+
+    const shieldedOutputs: DesiredOutput[] = [
+      {
+        kind: 'shielded',
+        type: 'token-b',
+        value: 500n,
+        recipient: 'shielded-recipient-address',
+      },
+    ];
+
+    const defaultOptions = { intentId: 'random' as const, payFees: true };
+
+    beforeEach(() => {
+      mockWallet.initSwap = vi.fn().mockReturnValue(of(mockRecipe));
+      mockWallet.signRecipe = vi.fn().mockReturnValue(of(mockRecipe));
+      mockWallet.finalizeRecipe = vi.fn().mockReturnValue(of(mockFinalizedTx));
+    });
+
+    it('should create intent transaction with shielded inputs and outputs', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const result = await api.makeIntent(
+        shieldedInputs,
+        shieldedOutputs,
+        defaultOptions,
+        testSender,
+      );
+
+      expect(result.tx).toBe(mockSerializedTx.toString('hex'));
+      expect(mockWallet.initSwap).toHaveBeenCalledWith(
+        { shielded: { 'token-a': 1000n } },
+        [
+          {
+            type: 'shielded',
+            outputs: [
+              {
+                type: 'token-b',
+                receiverAddress: 'shielded-recipient-address',
+                amount: 500n,
+              },
+            ],
+          },
+        ],
+        expect.objectContaining({ payFees: true }),
+      );
+      expect(mockWallet.signRecipe).not.toHaveBeenCalled();
+      expect(mockWallet.finalizeRecipe).toHaveBeenCalledWith(mockRecipe);
+    });
+
+    it('should create intent transaction with unshielded inputs and outputs', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const unshieldedInputs: DesiredInput[] = [
+        { kind: 'unshielded', type: 'token-x', value: 2000n },
+      ];
+      const unshieldedOutputs: DesiredOutput[] = [
+        {
+          kind: 'unshielded',
+          type: 'token-y',
+          value: 1000n,
+          recipient: 'unshielded-recipient-address',
+        },
+      ];
+
+      await api.makeIntent(
+        unshieldedInputs,
+        unshieldedOutputs,
+        defaultOptions,
+        testSender,
+      );
+
+      expect(mockWallet.initSwap).toHaveBeenCalledWith(
+        { unshielded: { 'token-x': 2000n } },
+        [
+          {
+            type: 'unshielded',
+            outputs: [
+              {
+                type: 'token-y',
+                receiverAddress: 'unshielded-recipient-address',
+                amount: 1000n,
+              },
+            ],
+          },
+        ],
+        expect.objectContaining({ payFees: true }),
+      );
+    });
+
+    it('should create intent transaction with mixed inputs and outputs', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const mixedInputs: DesiredInput[] = [
+        { kind: 'shielded', type: 'token-a', value: 500n },
+        { kind: 'unshielded', type: 'token-b', value: 300n },
+      ];
+      const mixedOutputs: DesiredOutput[] = [
+        {
+          kind: 'shielded',
+          type: 'token-c',
+          value: 200n,
+          recipient: 'shielded-address',
+        },
+        {
+          kind: 'unshielded',
+          type: 'token-d',
+          value: 100n,
+          recipient: 'unshielded-address',
+        },
+      ];
+
+      await api.makeIntent(
+        mixedInputs,
+        mixedOutputs,
+        defaultOptions,
+        testSender,
+      );
+
+      expect(mockWallet.initSwap).toHaveBeenCalledWith(
+        {
+          shielded: { 'token-a': 500n },
+          unshielded: { 'token-b': 300n },
+        },
+        expect.arrayContaining([
+          {
+            type: 'unshielded',
+            outputs: [
+              {
+                type: 'token-d',
+                receiverAddress: 'unshielded-address',
+                amount: 100n,
+              },
+            ],
+          },
+          {
+            type: 'shielded',
+            outputs: [
+              {
+                type: 'token-c',
+                receiverAddress: 'shielded-address',
+                amount: 200n,
+              },
+            ],
+          },
+        ]),
+        expect.objectContaining({ payFees: true }),
+      );
+    });
+
+    it('should aggregate multiple inputs of the same kind and type', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const inputs: DesiredInput[] = [
+        { kind: 'shielded', type: 'token-a', value: 500n },
+        { kind: 'shielded', type: 'token-a', value: 300n },
+      ];
+
+      await api.makeIntent(inputs, shieldedOutputs, defaultOptions, testSender);
+
+      expect(mockWallet.initSwap).toHaveBeenCalledWith(
+        { shielded: { 'token-a': 800n } },
+        expect.any(Array),
+        expect.any(Object),
+      );
+    });
+
+    it('should forward payFees: false option', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.makeIntent(
+        shieldedInputs,
+        shieldedOutputs,
+        {
+          intentId: 'random',
+          payFees: false,
+        },
+        testSender,
+      );
+
+      expect(mockWallet.initSwap).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.any(Array),
+        expect.objectContaining({ payFees: false }),
+      );
+    });
+
+    it('should skip signRecipe for shielded-only inputs and outputs', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.makeIntent(
+        shieldedInputs,
+        shieldedOutputs,
+        {
+          intentId: 'random',
+          payFees: false,
+        },
+        testSender,
+      );
+
+      expect(mockWallet.signRecipe).not.toHaveBeenCalled();
+      expect(mockWallet.finalizeRecipe).toHaveBeenCalledWith(mockRecipe);
+    });
+
+    it('should call signRecipe when inputs have unshielded parts', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const unshieldedInputs: DesiredInput[] = [
+        { kind: 'unshielded', type: 'token-x', value: 100n },
+      ];
+
+      await api.makeIntent(
+        unshieldedInputs,
+        shieldedOutputs,
+        defaultOptions,
+        testSender,
+      );
+
+      expect(mockWallet.signRecipe).toHaveBeenCalledWith(mockRecipe);
+    });
+
+    it('should throw error when user rejects the transaction', async () => {
+      const rejectingConfirmation = vi.fn().mockResolvedValue({
+        isConfirmed: false,
+      });
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        userConfirmTransaction: rejectingConfirmation,
+      });
+
+      await expect(
+        api.makeIntent(
+          shieldedInputs,
+          shieldedOutputs,
+          defaultOptions,
+          testSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.Rejected, 'User rejected transaction'),
+      );
+
+      expect(mockWallet.initSwap).not.toHaveBeenCalled();
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+
+      await expect(
+        api.makeIntent(
+          shieldedInputs,
+          shieldedOutputs,
+          defaultOptions,
+          testSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('checkNetworkSupport', () => {
+    const optionsWithPreviewNetwork: MidnightDappConnectorApiOptions = {
+      wallets$: of({} as MidnightWalletsByAccountId),
+      network$: mockNetworkWithPreview$,
+      userConfirmTransaction: userConfirmation,
+      supportedNetworksIds$: of(initialSupportedNetworkIds),
+      isUnlocked$: of(true),
+      getAccountIdForOrigin,
+    };
+
+    beforeEach(() => {
+      optionsWithPreviewNetwork.wallets$ = mockWallet$;
+    });
+
+    it('resolves when network is supported and matches active network', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithPreviewNetwork);
+      await expect(
+        api.checkNetworkSupport(NetworkId.NetworkId.Preview),
+      ).resolves.toBeUndefined();
+    });
+
+    it('resolves when wallet is null but network matches active network', async () => {
+      optionsWithPreviewNetwork.wallets$ = of({});
+      const api = new MidnightDappConnectorApi(optionsWithPreviewNetwork);
+      await expect(
+        api.checkNetworkSupport(NetworkId.NetworkId.Preview),
+      ).resolves.toBeUndefined();
+    });
+
+    it('resolves when network name string matches active network', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithPreviewNetwork);
+      await expect(api.checkNetworkSupport('preview')).resolves.toBeUndefined();
+    });
+
+    it('throws APIError for invalid network ID', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithPreviewNetwork);
+      const invalidNetworkId = 'UnsupportedNet-123';
+      await expect(api.checkNetworkSupport(invalidNetworkId)).rejects.toThrow(
+        new APIError(
+          ErrorCodes.InvalidRequest,
+          `Invalid network ID: ${invalidNetworkId}\nValid networks are: ${MidnightSDKNetworkId.join(
+            ', ',
+          )}`,
+        ),
+      );
+    });
+
+    it('throws APIError for unsupported network ID', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithPreviewNetwork);
+      await expect(
+        api.checkNetworkSupport(NetworkId.NetworkId.DevNet),
+      ).rejects.toThrow(
+        new APIError(
+          ErrorCodes.InvalidRequest,
+          `Unsupported network ID: ${
+            NetworkId.NetworkId.DevNet
+          }\nSupported networks are: ${initialSupportedNetworkIds.join(', ')}`,
+        ),
+      );
+    });
+
+    it('throws APIError when network ID does not match active network', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithPreviewNetwork);
+      await expect(
+        api.checkNetworkSupport(NetworkId.NetworkId.Undeployed),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InvalidRequest, 'Network ID mismatch'),
+      );
+    });
+
+    it('throws InternalError when active network is unavailable', async () => {
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithPreviewNetwork,
+        network$: of(undefined),
+      });
+      await expect(
+        api.checkNetworkSupport(NetworkId.NetworkId.Preview),
+      ).rejects.toThrow(
+        new APIError(
+          ErrorCodes.InternalError,
+          'Active network ID is unavailable',
+        ),
+      );
+    });
+  });
+
+  describe.todo('getTxHistory');
+
+  describe('balanceSealedTransaction', () => {
+    const mockSerializedTx = 'deadbeef';
+    const mockFinalizedSerializedTx = Buffer.from('mock-finalized-tx');
+    const mockDeserializedTx = {
+      toString: () => 'deserialized-sealed-tx',
+    } as unknown as ledger.Transaction<
+      ledger.SignatureEnabled,
+      ledger.Proof,
+      ledger.Binding
+    >;
+    const mockRecipe = { type: 'UNPROVEN_TRANSACTION' as const };
+    const mockSignedRecipe = { type: 'SIGNED_RECIPE' as const };
+    const mockFinalizedTx = {
+      serialize: vi.fn().mockReturnValue(mockFinalizedSerializedTx),
+    };
+    const mockSender = { sender: { url: 'https://test-dapp.io' } };
+
+    beforeEach(() => {
+      vi.spyOn(ledger.Transaction, 'deserialize').mockResolvedValue(
+        mockDeserializedTx,
+      );
+      mockWallet.balanceFinalizedTransaction = vi
+        .fn()
+        .mockReturnValue(of(mockRecipe));
+      mockWallet.signRecipe = vi.fn().mockReturnValue(of(mockSignedRecipe));
+      mockWallet.finalizeRecipe = vi.fn().mockReturnValue(of(mockFinalizedTx));
+    });
+
+    it('should balance sealed transaction and return serialized hex', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const result = await api.balanceSealedTransaction(
+        mockSerializedTx,
+        { payFees: true },
+        mockSender,
+      );
+
+      expect(result.tx).toBe(mockFinalizedSerializedTx.toString('hex'));
+      expect(ledger.Transaction.deserialize).toHaveBeenCalledWith(
+        'signature',
+        'proof',
+        'binding',
+        Buffer.from(mockSerializedTx, 'hex'),
+      );
+      expect(mockWallet.balanceFinalizedTransaction).toHaveBeenCalledWith(
+        mockDeserializedTx,
+        expect.objectContaining({ tokenKindsToBalance: undefined }),
+      );
+      expect(mockWallet.signRecipe).toHaveBeenCalledWith(mockRecipe);
+      expect(mockWallet.finalizeRecipe).toHaveBeenCalledWith(mockSignedRecipe);
+    });
+
+    it('should pass tokenKindsToBalance when payFees is false', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.balanceSealedTransaction(
+        mockSerializedTx,
+        { payFees: false },
+        mockSender,
+      );
+
+      expect(mockWallet.balanceFinalizedTransaction).toHaveBeenCalledWith(
+        mockDeserializedTx,
+        expect.objectContaining({
+          tokenKindsToBalance: ['shielded', 'unshielded'],
+        }),
+      );
+    });
+
+    it('should throw error when user rejects the transaction', async () => {
+      const rejectingConfirmation = vi.fn().mockResolvedValue({
+        isConfirmed: false,
+      });
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        userConfirmTransaction: rejectingConfirmation,
+      });
+
+      await expect(
+        api.balanceSealedTransaction(
+          mockSerializedTx,
+          { payFees: true },
+          mockSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.Rejected, 'User rejected transaction'),
+      );
+
+      expect(mockWallet.balanceFinalizedTransaction).not.toHaveBeenCalled();
+    });
+
+    it('should throw error when sender context is missing', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await expect(
+        api.balanceSealedTransaction(mockSerializedTx, { payFees: true }),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Missing sender context'),
+      );
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+
+      await expect(
+        api.balanceSealedTransaction(
+          mockSerializedTx,
+          { payFees: true },
+          mockSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe('balanceUnsealedTransaction', () => {
+    const mockSerializedTx = 'deadbeef';
+    const mockFinalizedSerializedTx = Buffer.from('mock-finalized-tx');
+    const mockDeserializedTx = {
+      toString: () => 'deserialized-unsealed-tx',
+    } as unknown as ledger.Transaction<
+      ledger.SignatureEnabled,
+      ledger.Proof,
+      ledger.PreBinding
+    >;
+    const mockRecipe = { type: 'UNPROVEN_TRANSACTION' as const };
+    const mockSignedRecipe = { type: 'SIGNED_RECIPE' as const };
+    const mockFinalizedTx = {
+      serialize: vi.fn().mockReturnValue(mockFinalizedSerializedTx),
+    };
+    const mockSender = { sender: { url: 'https://test-dapp.io' } };
+
+    beforeEach(() => {
+      vi.spyOn(ledger.Transaction, 'deserialize').mockResolvedValue(
+        mockDeserializedTx,
+      );
+      mockWallet.balanceUnboundTransaction = vi
+        .fn()
+        .mockReturnValue(of(mockRecipe));
+      mockWallet.signRecipe = vi.fn().mockReturnValue(of(mockSignedRecipe));
+      mockWallet.finalizeRecipe = vi.fn().mockReturnValue(of(mockFinalizedTx));
+    });
+
+    it('should balance unsealed transaction and return serialized hex', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const result = await api.balanceUnsealedTransaction(
+        mockSerializedTx,
+        { payFees: true },
+        mockSender,
+      );
+
+      expect(result.tx).toBe(mockFinalizedSerializedTx.toString('hex'));
+      expect(ledger.Transaction.deserialize).toHaveBeenCalledWith(
+        'signature',
+        'proof',
+        'pre-binding',
+        Buffer.from(mockSerializedTx, 'hex'),
+      );
+      expect(mockWallet.balanceUnboundTransaction).toHaveBeenCalledWith(
+        mockDeserializedTx,
+        expect.objectContaining({ tokenKindsToBalance: undefined }),
+      );
+      expect(mockWallet.signRecipe).toHaveBeenCalledWith(mockRecipe);
+      expect(mockWallet.finalizeRecipe).toHaveBeenCalledWith(mockSignedRecipe);
+    });
+
+    it('should pass tokenKindsToBalance when payFees is false', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.balanceUnsealedTransaction(
+        mockSerializedTx,
+        { payFees: false },
+        mockSender,
+      );
+
+      expect(mockWallet.balanceUnboundTransaction).toHaveBeenCalledWith(
+        mockDeserializedTx,
+        expect.objectContaining({
+          tokenKindsToBalance: ['shielded', 'unshielded'],
+        }),
+      );
+    });
+
+    it('should throw error when user rejects the transaction', async () => {
+      const rejectingConfirmation = vi.fn().mockResolvedValue({
+        isConfirmed: false,
+      });
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        userConfirmTransaction: rejectingConfirmation,
+      });
+
+      await expect(
+        api.balanceUnsealedTransaction(
+          mockSerializedTx,
+          { payFees: true },
+          mockSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.Rejected, 'User rejected transaction'),
+      );
+
+      expect(mockWallet.balanceUnboundTransaction).not.toHaveBeenCalled();
+    });
+
+    it('should throw error when sender context is missing', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await expect(
+        api.balanceUnsealedTransaction(mockSerializedTx, { payFees: true }),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Missing sender context'),
+      );
+    });
+
+    it('should throw error if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+
+      await expect(
+        api.balanceUnsealedTransaction(
+          mockSerializedTx,
+          { payFees: true },
+          mockSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+  describe('makeTransfer', () => {
+    const mockSerializedTx = Buffer.from('mock-serialized-tx');
+    const mockFinalizedTx = {
+      serialize: vi.fn().mockReturnValue(mockSerializedTx),
+    };
+    const mockRecipe = { type: 'UNPROVEN_TRANSACTION' as const };
+
+    const shieldedOutputs: DesiredOutput[] = [
+      {
+        kind: 'shielded',
+        type: 'token-a',
+        value: 500n,
+        recipient: 'shielded-recipient-address',
+      },
+    ];
+
+    beforeEach(() => {
+      mockWallet.transferTransaction = vi.fn().mockReturnValue(of(mockRecipe));
+      mockWallet.signRecipe = vi.fn().mockReturnValue(of(mockRecipe));
+      mockWallet.finalizeRecipe = vi.fn().mockReturnValue(of(mockFinalizedTx));
+    });
+
+    it('should create transfer transaction with shielded outputs', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const result = await api.makeTransfer(
+        shieldedOutputs,
+        {
+          payFees: true,
+        },
+        testSender,
+      );
+
+      expect(result.tx).toBe(mockSerializedTx.toString('hex'));
+      expect(mockWallet.transferTransaction).toHaveBeenCalledWith(
+        [
+          {
+            type: 'shielded',
+            outputs: [
+              {
+                type: 'token-a',
+                receiverAddress: 'shielded-recipient-address',
+                amount: 500n,
+              },
+            ],
+          },
+        ],
+        expect.objectContaining({ payFees: true }),
+      );
+    });
+
+    it('should forward payFees: false option', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.makeTransfer(shieldedOutputs, { payFees: false }, testSender);
+
+      expect(mockWallet.transferTransaction).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ payFees: false }),
+      );
+    });
+
+    it('should default payFees to true when not specified', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.makeTransfer(shieldedOutputs, undefined, testSender);
+
+      expect(mockWallet.transferTransaction).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ payFees: true }),
+      );
+    });
+
+    it('should skip signRecipe for shielded-only outputs', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      await api.makeTransfer(shieldedOutputs, { payFees: false }, testSender);
+
+      expect(mockWallet.signRecipe).not.toHaveBeenCalled();
+      expect(mockWallet.finalizeRecipe).toHaveBeenCalledWith(mockRecipe);
+    });
+
+    it('should call signRecipe for unshielded outputs', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithWallet);
+
+      const unshieldedOutputs: DesiredOutput[] = [
+        {
+          kind: 'unshielded',
+          type: 'token-b',
+          value: 300n,
+          recipient: 'unshielded-recipient-address',
+        },
+      ];
+
+      await api.makeTransfer(unshieldedOutputs, { payFees: true }, testSender);
+
+      expect(mockWallet.signRecipe).toHaveBeenCalledWith(mockRecipe);
+      expect(mockWallet.finalizeRecipe).toHaveBeenCalled();
+    });
+
+    it('should throw error when user rejects the transaction', async () => {
+      const rejectingConfirmation = vi.fn().mockResolvedValue({
+        isConfirmed: false,
+      });
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        userConfirmTransaction: rejectingConfirmation,
+      });
+
+      await expect(
+        api.makeTransfer(shieldedOutputs, { payFees: true }, testSender),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.Rejected, 'User rejects transaction'),
+      );
+
+      expect(mockWallet.transferTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('signData', () => {
+    const mockSender = { sender: { url: 'https://test-dapp.io' } };
+    const mockSignResult = {
+      signature: 'mock-signature',
+      verifyingKey: 'mock-verifying-key',
+    };
+
+    it('should sign hex-encoded data and return signature', async () => {
+      const mockSignData = vi.fn().mockReturnValue(of(mockSignResult));
+      const wallet = {
+        ...mockWallet,
+        signData: mockSignData,
+      } as unknown as MidnightWallet;
+
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        wallets$: of({ [wallet.accountId]: wallet }),
+      });
+
+      const result = await api.signData(
+        '48656c6c6f',
+        { encoding: 'hex', keyType: 'unshielded' },
+        mockSender,
+      );
+
+      expect(result).toEqual({
+        data: '48656c6c6f',
+        signature: 'mock-signature',
+        verifyingKey: 'mock-verifying-key',
+      });
+      // The wallet signs the connector-spec domain-separated bytes, not the raw
+      // decoded payload (LW-15403): `midnight_signed_message:<size>:` + "Hello".
+      expect(mockSignData).toHaveBeenCalledWith(
+        new TextEncoder().encode('midnight_signed_message:5:Hello'),
+      );
+    });
+
+    it('should sign base64-encoded data and return signature', async () => {
+      const mockSignData = vi.fn().mockReturnValue(of(mockSignResult));
+      const wallet = {
+        ...mockWallet,
+        signData: mockSignData,
+      } as unknown as MidnightWallet;
+
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        wallets$: of({ [wallet.accountId]: wallet }),
+      });
+
+      const result = await api.signData(
+        'SGVsbG8=',
+        { encoding: 'base64', keyType: 'unshielded' },
+        mockSender,
+      );
+
+      expect(result).toEqual({
+        data: 'SGVsbG8=',
+        signature: 'mock-signature',
+        verifyingKey: 'mock-verifying-key',
+      });
+      expect(mockSignData).toHaveBeenCalledWith(
+        new TextEncoder().encode('midnight_signed_message:5:Hello'),
+      );
+    });
+
+    it('should sign text-encoded data and return signature', async () => {
+      const mockSignData = vi.fn().mockReturnValue(of(mockSignResult));
+      const wallet = {
+        ...mockWallet,
+        signData: mockSignData,
+      } as unknown as MidnightWallet;
+
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        wallets$: of({ [wallet.accountId]: wallet }),
+      });
+
+      const result = await api.signData(
+        'Hello',
+        { encoding: 'text', keyType: 'unshielded' },
+        mockSender,
+      );
+
+      expect(result).toEqual({
+        data: 'Hello',
+        signature: 'mock-signature',
+        verifyingKey: 'mock-verifying-key',
+      });
+      expect(mockSignData).toHaveBeenCalledWith(
+        new TextEncoder().encode('midnight_signed_message:5:Hello'),
+      );
+    });
+
+    it.each([
+      ['text', 'é😀', 'midnight_signed_message:6:é😀'],
+      ['hex', 'c3a9f09f9880', 'midnight_signed_message:6:é😀'],
+      ['base64', 'w6nwn5iA', 'midnight_signed_message:6:é😀'],
+      ['text', '', 'midnight_signed_message:0:'],
+      ['hex', '', 'midnight_signed_message:0:'],
+      ['base64', '', 'midnight_signed_message:0:'],
+      ['hex', '48656c6c6fzzff', 'midnight_signed_message:5:Hello'],
+      ['hex', '486', 'midnight_signed_message:1:H'],
+      ['hex', 'zz', 'midnight_signed_message:0:'],
+      ['base64', 'S G!VsbG8', 'midnight_signed_message:5:Hello'],
+      ['base64', '!!!', 'midnight_signed_message:0:'],
+      [
+        'text',
+        'midnight_signed_message:0:',
+        'midnight_signed_message:26:midnight_signed_message:0:',
+      ],
+    ] as const)(
+      'preserves connector decoding for %s %j',
+      async (encoding, data, expected) => {
+        const signData = vi.fn(() => of(mockSignResult));
+        const wallet = { ...mockWallet, signData } as unknown as MidnightWallet;
+        const api = new MidnightDappConnectorApi({
+          ...optionsWithWallet,
+          wallets$: of({ [wallet.accountId]: wallet }),
+        });
+        expect(
+          await api.signData(
+            data,
+            { encoding, keyType: 'unshielded' },
+            mockSender,
+          ),
+        ).toEqual({ data, ...mockSignResult });
+        expect(signData).toHaveBeenCalledExactlyOnceWith(
+          new TextEncoder().encode(expected),
+        );
+      },
+    );
+
+    it('preserves the connector InvalidRequest error for unsupported encodings', async () => {
+      const signData = vi.fn(() => of(mockSignResult));
+      const wallet = { ...mockWallet, signData } as unknown as MidnightWallet;
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        wallets$: of({ [wallet.accountId]: wallet }),
+      });
+      await expect(
+        api.signData(
+          '',
+          {
+            encoding: 'unsupported' as 'text',
+            keyType: 'unshielded',
+          },
+          mockSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(
+          ErrorCodes.InvalidRequest,
+          'Unsupported encoding: unsupported',
+        ),
+      );
+      expect(signData).not.toHaveBeenCalled();
+    });
+
+    it('should throw if user rejects data signing', async () => {
+      const rejectedConfirmation = vi
+        .fn()
+        .mockResolvedValue({ isConfirmed: false, accessAuthSecret: vi.fn() });
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        userConfirmTransaction: rejectedConfirmation,
+      });
+
+      await expect(
+        api.signData(
+          'Hello',
+          { encoding: 'text', keyType: 'unshielded' },
+          mockSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.Rejected, 'User rejected data signing'),
+      );
+    });
+
+    it('should throw if wallet is not available', async () => {
+      const api = new MidnightDappConnectorApi(optionsWithoutWallet);
+
+      await expect(
+        api.signData(
+          'Hello',
+          { encoding: 'text', keyType: 'unshielded' },
+          mockSender,
+        ),
+      ).rejects.toThrow(
+        new APIError(ErrorCodes.InternalError, 'Wallet is unavailable'),
+      );
+    });
+  });
+
+  describe.todo('hintUsage');
+
+  describe('isLocked (app-lock integration)', () => {
+    it('should return true when app is locked', async () => {
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        isUnlocked$: of(false),
+      });
+
+      expect(await api.isLocked()).toBe(true);
+    });
+
+    it('should return false when app is unlocked', async () => {
+      const api = new MidnightDappConnectorApi({
+        ...optionsWithWallet,
+        isUnlocked$: of(true),
+      });
+
+      expect(await api.isLocked()).toBe(false);
+    });
+  });
+
+  describe('per-origin account resolution', () => {
+    const buildWallet = (accountId: string, unshielded: string) =>
+      ({
+        accountId,
+        networkId: NetworkId.NetworkId.Preview,
+        state: vi.fn().mockReturnValue(of(mockWalletState)),
+        address$: of({ dust: 'dust', unshielded, shielded: 'shielded' }),
+      } as unknown as MidnightWallet);
+
+    const originA = 'https://dapp-a.io';
+    const originB = 'https://dapp-b.io';
+    const senderA = { sender: { url: originA } } as unknown as SenderContext;
+    const senderB = { sender: { url: originB } } as unknown as SenderContext;
+
+    const multiAccountOptions: MidnightDappConnectorApiOptions = {
+      ...optionsWithoutWallet,
+      wallets$: of({
+        'account-a': buildWallet('account-a', 'unshielded-a'),
+        'account-b': buildWallet('account-b', 'unshielded-b'),
+      } as unknown as MidnightWalletsByAccountId),
+      getAccountIdForOrigin: (origin: string) => {
+        if (origin === originA) return 'account-a' as AccountId;
+        if (origin === originB) return 'account-b' as AccountId;
+        return undefined;
+      },
+    };
+
+    it('returns the account bound to the requesting origin', async () => {
+      const api = new MidnightDappConnectorApi(multiAccountOptions);
+
+      expect(await api.getUnshieldedAddress(senderA)).toEqual({
+        unshieldedAddress: 'unshielded-a',
+      });
+      expect(await api.getUnshieldedAddress(senderB)).toEqual({
+        unshieldedAddress: 'unshielded-b',
+      });
+    });
+
+    it('throws when the requesting origin has no bound account', async () => {
+      const api = new MidnightDappConnectorApi(multiAccountOptions);
+      const unboundSender = {
+        sender: { url: 'https://unbound.io' },
+      } as unknown as SenderContext;
+
+      await expect(api.getUnshieldedAddress(unboundSender)).rejects.toThrow(
+        new APIError(
+          ErrorCodes.InternalError,
+          'No account is connected for this dApp. Please reconnect.',
+        ),
+      );
+    });
+  });
+});

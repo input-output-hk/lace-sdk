@@ -1,0 +1,384 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { isNotNil } from '@cardano-sdk/util';
+import {
+  applyMiddleware,
+  combineReducers,
+  configureStore,
+  isAnyOf,
+  type Reducer,
+  type ReducersMapObject,
+  type Store,
+  type StoreEnhancer,
+} from '@reduxjs/toolkit';
+import merge from 'lodash/merge';
+import { combineEpics, createEpicMiddleware } from 'redux-observable';
+import {
+  FLUSH,
+  PAUSE,
+  PERSIST,
+  persistReducer,
+  persistStore,
+  PURGE,
+  REGISTER,
+  REHYDRATE,
+} from 'redux-persist';
+import {
+  delay,
+  distinctUntilChanged,
+  filter,
+  from,
+  map,
+  NEVER,
+  type Observable,
+  share,
+  shareReplay,
+  Subject,
+  takeUntil,
+} from 'rxjs';
+
+import { IS_PARAMETERIZED } from './util-selector';
+
+import type {
+  Action,
+  ActionObservables,
+  AnyLaceSideEffect,
+  DefaultSideEffectDependencies,
+  LaceModuleStoreInit,
+  LaceReduxObservableEpic,
+  LaceSideEffect,
+  ModuleInitDependencies,
+  ModuleInitProps,
+  ScopedActionCreators,
+  ScopedSelectors,
+  SideEffectDependencies,
+  State,
+  StateObservables,
+  WithLaceContext,
+} from './types';
+import type { StateObservable } from 'redux-observable';
+import type { Persistor, Storage } from 'redux-persist';
+
+const SERIALIZABLE_CHECK_WARN_AFTER_MS = 128;
+const IMMUTABLE_CHECK_WARN_AFTER_MS = 256;
+
+const createActionObservables = (
+  action$: Observable<Action>,
+  actions: object,
+): ActionObservables<any> => {
+  return Object.fromEntries(
+    Object.entries(actions).map(([scope, actionCreators]) => [
+      scope,
+      Object.fromEntries(
+        Object.entries(actionCreators).map(
+          ([actionCreatorName, actionCreator]) => [
+            `${actionCreatorName}$`,
+            action$.pipe(filter(isAnyOf(actionCreator as any)), share()),
+          ],
+        ),
+      ),
+    ]),
+  );
+};
+
+/**
+ * Maps scoped selectors to observables of the state, keyed `<selectorName>$`.
+ * A parameterized selector yields a function of its parameter instead of a
+ * value. Each observable emits on change and replays its latest value.
+ */
+export const createStateObservables = (
+  state$: Observable<State>,
+  selectors: object,
+): StateObservables<any> => {
+  return Object.fromEntries(
+    Object.entries(selectors).map(([scope, selectors]) => [
+      scope,
+      Object.fromEntries(
+        Object.entries(selectors).map(([selectorName, selector]) => {
+          const selectorFunction = selector as (...args: any[]) => any;
+
+          return [
+            `${selectorName}$`,
+            state$.pipe(
+              map(state => {
+                // Check for explicit parameterized marker first
+                if ((selectorFunction as any)[IS_PARAMETERIZED] === true) {
+                  return (parameter: unknown) =>
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+                    selectorFunction(state, parameter);
+                }
+                // Fallback to length check for backward compatibility
+                if (selectorFunction.length > 1) {
+                  return (parameter: unknown) =>
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+                    selectorFunction(state, parameter);
+                }
+                // Otherwise call selector directly
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+                return selectorFunction(state);
+              }),
+              distinctUntilChanged(),
+              shareReplay(1),
+            ),
+          ];
+        }),
+      ),
+    ]),
+  );
+};
+
+const rehydrateStore = async (store: Store): Promise<Persistor> =>
+  new Promise(resolve => {
+    const persistor = persistStore(store, null, () => {
+      resolve(persistor);
+    });
+  });
+
+const mergeStoreExports = <T extends object>(
+  storeExports: LaceModuleStoreInit[],
+  getter: (s: LaceModuleStoreInit) => T | undefined,
+): T => merge({}, ...storeExports.map(getter).filter(isNotNil)) as T;
+/**
+ * Options for {@link createStore}, extending the module init props.
+ * `lastEnhancer` is appended after every other store enhancer; `noEpicDelay`
+ * runs side-effect output synchronously instead of on the next tick.
+ */
+export interface CreateStoreProps extends ModuleInitProps {
+  devTools?: boolean;
+  lastEnhancer?: StoreEnhancer;
+  noEpicDelay?: boolean;
+}
+
+/** Dependencies for {@link createStore}: the module init dependencies plus the storage that persisted slices are written to. */
+export type CreateStoreDependencies = ModuleInitDependencies & {
+  reduxPersistStorage: Storage;
+  /** Merged last into epic middleware dependencies (e.g. Storybook integration overrides). */
+  sideEffectDependenciesOverride?: Partial<SideEffectDependencies>;
+};
+
+/** The store {@link createStore} builds, with the observables its side effects run against and a teardown. */
+export type CreateStoreResult<
+  Selectors extends ScopedSelectors,
+  ActionCreators extends ScopedActionCreators,
+> = {
+  actionObservables: ActionObservables<ActionCreators>;
+  /**
+   * Root state with every loaded slice at its reducer-initial value. Derived
+   * from the combined reducer, so it can never drift from the registered
+   * slices and contains only slices that are actually loaded.
+   */
+  initialState: State;
+  stateObservables: StateObservables<Selectors>;
+  store: Store<State, Action>;
+  /** Completes all side-effect epics. Call on teardown to prevent zombie subscriptions. */
+  teardown: () => void;
+};
+
+/**
+ * Builds the app's Redux store from every loaded module store: combines their
+ * reducers, middleware and side effects, rehydrates persisted slices, and
+ * starts the side effects.
+ */
+export const createStore = async <
+  Selectors extends ScopedSelectors = ScopedSelectors,
+  ActionCreators extends ScopedActionCreators = ScopedActionCreators,
+>(
+  createStoreProps: Readonly<CreateStoreProps>,
+  createStoreDependencies: Readonly<CreateStoreDependencies>,
+): Promise<CreateStoreResult<Selectors, ActionCreators>> => {
+  const { loadModules, runtime, lastEnhancer } = createStoreProps;
+  const { logger, reduxPersistStorage, sideEffectDependenciesOverride } =
+    createStoreDependencies;
+  const stores = await loadModules('store');
+  const storeExports = await Promise.all(
+    stores.map(async s =>
+      s
+        .load()
+        .then(async module =>
+          module.default(createStoreProps, createStoreDependencies),
+        ),
+    ),
+  );
+  const selectors = stores
+    .map(s => s.context.selectors)
+    .filter((selectors): selectors is object => !!selectors)
+    .reduce(Object.assign, {});
+
+  const actions = stores.map(s => s.context.actions).reduce(Object.assign, {});
+
+  const persistConfigs = mergeStoreExports(storeExports, s => s.persistConfig);
+  const preloadedState = mergeStoreExports(storeExports, s => s.preloadedState);
+  const reducer = combineReducers<ReducersMapObject<State>>(
+    Object.assign(
+      {},
+      ...storeExports.map(m =>
+        m.reducers
+          ? Object.fromEntries(
+              Object.entries(m.reducers).map(([key, reducer]) => [
+                key,
+                key in persistConfigs
+                  ? persistReducer(
+                      {
+                        key,
+                        storage: reduxPersistStorage,
+                        ...(persistConfigs as any)[key],
+                      },
+                      reducer as Reducer,
+                    )
+                  : reducer,
+              ]),
+            )
+          : undefined,
+      ),
+    ),
+  );
+
+  // Snapshot of every loaded slice at its reducer-initial value. Computed from
+  // the combined reducer (pure, side-effect free) so it stays in sync with the
+  // registered slices. persistReducer-wrapped slices return their inner initial
+  // value here (no `_persist` until a PERSIST/REHYDRATE action), which is fine:
+  // the only consumer (the extension bridge) seeds first-paint state with these
+  // and lets `state$` backfill the full slice.
+  // Cast: in this package's isolated typecheck `State` is the un-augmented
+  // empty interface, so the combined reducer's action type narrows to `never`.
+  const initialState = (reducer as Reducer<State>)(undefined, {
+    type: '@@lace/initial-state-snapshot',
+  });
+
+  const toEpic =
+    (sideEffect: AnyLaceSideEffect): LaceReduxObservableEpic =>
+    (action$, state$, dependencies) =>
+      sideEffect(
+        createActionObservables(action$, actions),
+        createStateObservables(state$, selectors),
+        dependencies,
+      ).pipe(createStoreProps.noEpicDelay ? a => a : delay(0));
+
+  let actionObservables: ActionObservables<ActionCreators>;
+  let stateObservables: StateObservables<Selectors>;
+  let state$: StateObservable<State> | null = null;
+
+  const captureObservables: LaceSideEffect<Selectors, ActionCreators> = (
+    actions,
+    state,
+  ) => {
+    actionObservables = actions;
+    stateObservables = state;
+    return NEVER;
+  };
+
+  const rootEpic = combineEpics(
+    ...[
+      ...storeExports
+        .flatMap(({ sideEffects }) => sideEffects)
+        .filter(isNotNil),
+      captureObservables,
+    ].map(toEpic),
+    (_, stateObservable$) => {
+      state$ = stateObservable$;
+      return NEVER;
+    },
+  );
+
+  // Assigned once rehydration runs (below); the flushPersistedState closure
+  // reads it lazily, so it is set by the time any reload triggers a flush.
+  let persistor: Persistor | undefined;
+  const defaultDependencies: DefaultSideEffectDependencies & WithLaceContext = {
+    actions,
+    selectors,
+    createKeyValueStorage: () => {
+      // this is here just to avoid typecast
+      throw new Error('This must be overridden by storage module');
+    },
+    __getState: () => {
+      if (!state$) {
+        throw new Error(
+          '__getState() is not available during SideEffect initialization',
+        );
+      }
+      return state$.value;
+    },
+    flushPersistedState: () => from(persistor?.flush() ?? Promise.resolve()),
+    runtime,
+    logger,
+    loadModules,
+  };
+  const dependencies = Object.assign(
+    defaultDependencies,
+    ...storeExports.map(({ sideEffectDependencies }) => sideEffectDependencies),
+    sideEffectDependenciesOverride ?? {},
+  ) as SideEffectDependencies & WithLaceContext;
+  const epicMiddleware = createEpicMiddleware<
+    Action,
+    Action,
+    State,
+    SideEffectDependencies & WithLaceContext
+  >({
+    dependencies,
+  });
+  const middleware = storeExports
+    .map(({ middleware }) => middleware)
+    .filter(isNotNil)
+    .flat();
+  const store = configureStore({
+    reducer,
+    preloadedState,
+    devTools: createStoreProps.devTools || false,
+    middleware: getDefaultMiddleware =>
+      getDefaultMiddleware({
+        immutableCheck: {
+          warnAfter: IMMUTABLE_CHECK_WARN_AFTER_MS,
+        },
+        serializableCheck: {
+          ignoredActions: [
+            'accountManagement/attemptAddAccount',
+            'accountManagement/attemptAddInMemoryWalletAccount',
+            'txExecutor/tx-phase-completed',
+            // Carries the submit result's blockchainSpecificActivityMetadata, whose
+            // Cardano produced-output coin/asset quantities are BigInt.
+            'sendFlow/processingResulted',
+            'cardanoContext/setProtocolParameters',
+            'cardanoContext/setEraSummaries',
+            'cardanoContext/setStakePoolsData',
+            'cardanoContext/setAccountUtxos',
+            FLUSH,
+            REHYDRATE,
+            PAUSE,
+            PERSIST,
+            PURGE,
+            REGISTER,
+          ],
+          warnAfter: SERIALIZABLE_CHECK_WARN_AFTER_MS,
+        },
+      }),
+    enhancers: getDefaultEnhancers => {
+      const enhancers = getDefaultEnhancers().prepend([
+        applyMiddleware(...middleware, epicMiddleware),
+      ]);
+      if (lastEnhancer) {
+        return enhancers.concat(lastEnhancer);
+      }
+      return enhancers;
+    },
+  });
+
+  if (Object.keys(persistConfigs)) {
+    persistor = await rehydrateStore(store);
+  }
+
+  const epicTeardown$ = new Subject<void>();
+  epicMiddleware.run((...args) =>
+    rootEpic(...args).pipe(takeUntil(epicTeardown$)),
+  );
+  return {
+    store,
+    initialState,
+    teardown: () => {
+      epicTeardown$.next();
+      epicTeardown$.complete();
+    },
+    actionObservables: actionObservables!,
+    stateObservables: stateObservables!,
+  };
+};

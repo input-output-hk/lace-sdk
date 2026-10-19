@@ -1,0 +1,24 @@
+{
+  "projectType": "library",
+  "tags": ["scope:lib"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist"],
+      "options": {
+        "command": "node scripts/build.mjs",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "lint": {},
+    "type-check-src": {},
+    "type-check-test": {},
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config=vitest.config.js --coverage",
+        "cwd": "{projectRoot}"
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "@lace-contract/cardano-context",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@cardano-sdk/core": "0.47.1",
+    "@cardano-sdk/crypto": "0.4.7",
+    "@cardano-sdk/key-management": "0.29.19",
+    "@cardano-sdk/tx-construction": "0.29.1",
+    "@cardano-sdk/util": "0.17.2",
+    "@lace-contract/activities": "*",
+    "@lace-contract/addresses": "*",
+    "@lace-contract/analytics": "*",
+    "@lace-contract/app": "*",
+    "@lace-contract/authentication-prompt": "*",
+    "@lace-contract/failures": "*",
+    "@lace-contract/feature": "*",
+    "@lace-contract/i18n": "*",
+    "@lace-contract/module": "*",
+    "@lace-contract/network": "*",
+    "@lace-contract/signer": "*",
+    "@lace-contract/sync": "*",
+    "@lace-contract/tokens": "*",
+    "@lace-contract/tx-executor": "*",
+    "@lace-contract/wallet-active-state": "*",
+    "@lace-contract/wallet-repo": "*",
+    "@lace-lib/cardano-custody": "*",
+    "@lace-lib/core": "*",
+    "@lace-lib/util": "*",
+    "@lace-lib/util-render": "*",
+    "libsodium-wrappers-sumo": "^0.8.4",
+    "rxjs": "^7.8.1",
+    "ts-log": "^2.2.7"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers-sumo": "^0.7.5",
+    "fast-check": "^3.23.1"
+  }
+}

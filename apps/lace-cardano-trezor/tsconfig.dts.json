@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": true,
+    "declarationMap": false,
+    "removeComments": false,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "rootDir": "../..",
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*", "../../packages/lib/cardano-*/src/**/*"]
+}

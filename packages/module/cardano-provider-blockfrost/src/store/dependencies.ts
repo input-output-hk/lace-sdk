@@ -1,0 +1,466 @@
+import { Cardano } from '@cardano-sdk/core';
+import {
+  type EvaluateTxProps,
+  type GetAccountRewardsProps,
+  type GetUtxosAtAddressProps,
+  type CardanoProviderContext,
+  type CardanoProviderDependencies,
+  type CardanoTokenMetadata,
+  type GetTokensProps,
+  LOVELACE_TOKEN_ID,
+  cardanoNetworkMagicToNetworkType,
+  getAdaTokenTickerByNetwork,
+  toContractAddress,
+} from '@lace-contract/cardano-context';
+import {
+  BlockfrostActivityProvider,
+  BlockfrostAddressDiscovery,
+  BlockfrostAssetProvider,
+  BlockfrostGovernanceProvider,
+  BlockfrostInputResolverProvider,
+  BlockfrostNetworkInfoProvider,
+  BlockfrostRewardsProvider,
+  BlockfrostDelegationsProvider,
+  BlockfrostRegistrationsProvider,
+  BlockfrostWithdrawalsProvider,
+  BlockfrostStakePoolProvider,
+  BlockfrostTokensProvider,
+  BlockfrostUtxoProvider,
+  BlockfrostTxSubmitProvider,
+  BlockfrostTxEvaluationProvider,
+  LOVELACE_METADATA,
+  toContractTokenMetadata,
+  computeBlockfrostConfigIdentifier,
+  getBlockfrostClient,
+  type BlockfrostConfig,
+} from '@lace-lib/cardano-provider-core';
+import { Bip32Account } from '@lace-lib/core';
+import { Blockchains } from '@lace-lib/ui-toolkit/src/design-system/atoms/icons/urls';
+import { Err, Ok } from '@lace-lib/util';
+import memoize from 'lodash/memoize';
+import { defer, from, map, of } from 'rxjs';
+
+import type {
+  ProviderError,
+  EraSummary,
+  SubmitTxArgs,
+} from '@cardano-sdk/core';
+import type {
+  BlockfrostPartialStakePool,
+  BlockfrostStakePool,
+  BlockfrostStakePoolMetadata,
+  CardanoStakePoolsProviderDependencies,
+  StakePoolsNetworkData,
+} from '@lace-contract/cardano-stake-pools';
+import type { LaceInit } from '@lace-contract/module';
+import type { TokenMetadata } from '@lace-contract/tokens';
+import type { Logger } from 'ts-log';
+
+const getNetworkInfoProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostNetworkInfoProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getAssetProvider = memoize((config: BlockfrostConfig, logger: Logger) => {
+  const client = getBlockfrostClient(config);
+  return new BlockfrostAssetProvider(client, logger);
+}, computeBlockfrostConfigIdentifier);
+
+const getAddressDiscoveryProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostAddressDiscovery(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getInputResolverProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostInputResolverProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getTokensProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostTokensProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getAccountActivityProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostActivityProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getAccountRewardsProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostRewardsProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getAccountDelegationsProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostDelegationsProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getAccountRegistrationsProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostRegistrationsProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getAccountWithdrawalsProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostWithdrawalsProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getStakePoolProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostStakePoolProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getUtxoProvider = memoize((config: BlockfrostConfig, logger: Logger) => {
+  const client = getBlockfrostClient(config);
+  return new BlockfrostUtxoProvider(client, logger);
+}, computeBlockfrostConfigIdentifier);
+
+const getTxSubmitProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostTxSubmitProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getTxEvaluationProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostTxEvaluationProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getGovernanceProvider = memoize(
+  (config: BlockfrostConfig, logger: Logger) => {
+    const client = getBlockfrostClient(config);
+    return new BlockfrostGovernanceProvider(client, logger);
+  },
+  computeBlockfrostConfigIdentifier,
+);
+
+const getBlockfrostConfig = (
+  context: CardanoProviderContext,
+  configs: Partial<Record<Cardano.NetworkMagic, BlockfrostConfig>>,
+) => {
+  const config = configs[context.chainId.networkMagic];
+  if (!config)
+    throw new Error(
+      `Assertion failed: no blockfrost config found (${context.chainId.networkMagic}`,
+    );
+  return config;
+};
+
+export const initializeDependencies: LaceInit<
+  CardanoProviderDependencies & CardanoStakePoolsProviderDependencies
+> = async (
+  {
+    runtime: {
+      config: {
+        cardanoProvider: { blockfrostConfigs },
+      },
+    },
+    loadModules,
+  },
+  { logger },
+) => {
+  const bip32Ed25519 = (await loadModules('addons.bip32Ed25519'))[0];
+  const blake2b = (await loadModules('addons.blake2b'))[0];
+  const dependencies = { blake2b, bip32Ed25519 };
+
+  return {
+    cardanoProvider: {
+      getTip: context => {
+        const provider = getNetworkInfoProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return from(
+          provider
+            .ledgerTip()
+            .then(Ok<Cardano.Tip>)
+            .catch(Err<ProviderError>),
+        );
+      },
+      getProtocolParameters: context => {
+        const provider = getNetworkInfoProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return defer(async () =>
+          provider
+            .protocolParameters()
+            .then(Ok<Cardano.ProtocolParameters>)
+            .catch(Err<ProviderError>),
+        );
+      },
+      getEraSummaries: context => {
+        const provider = getNetworkInfoProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return defer(async () =>
+          provider
+            .eraSummaries()
+            .then(Ok<EraSummary[]>)
+            .catch(Err<ProviderError>),
+        );
+      },
+      discoverAddresses: ({ xpub, accountIndex, thorough }, context) => {
+        const provider = getAddressDiscoveryProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+
+        const account = new Bip32Account(
+          {
+            extendedAccountPublicKey: xpub,
+            chainId: context.chainId,
+            accountIndex,
+          },
+          dependencies,
+        );
+
+        return provider
+          .discover(account, { thorough })
+          .pipe(
+            map(result =>
+              result.map(address =>
+                toContractAddress(address, context.chainId.networkMagic),
+              ),
+            ),
+          );
+      },
+      getTokenMetadata: ({ tokenId }, context) => {
+        if (tokenId === LOVELACE_TOKEN_ID) {
+          const networkType = cardanoNetworkMagicToNetworkType(
+            context.chainId.networkMagic,
+          );
+          const ticker = getAdaTokenTickerByNetwork(networkType);
+          return of(
+            Ok({ ...LOVELACE_METADATA, ticker, image: Blockchains.Cardano }),
+          );
+        }
+        const provider = getAssetProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        // `AssetId` throws without a `reason`, which `isRetriableError` would
+        // read as retriable — a malformed id must fail at the call, not retry.
+        const assetId = Cardano.AssetId(tokenId);
+        return defer(async () =>
+          provider
+            .getAsset({
+              assetId,
+              extraData: { nftMetadata: true, tokenMetadata: true },
+            })
+            .then(assetInfo =>
+              Ok<TokenMetadata<CardanoTokenMetadata>>(
+                toContractTokenMetadata(assetInfo),
+              ),
+            )
+            .catch(Err<ProviderError>),
+        );
+      },
+      getTokens: (props: GetTokensProps, context) => {
+        const provider = getTokensProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return provider.getTokens(props);
+      },
+      getAccountRewards: (props: GetAccountRewardsProps, context) => {
+        const rewardsProvider = getAccountRewardsProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return rewardsProvider.getAccountRewards(props);
+      },
+      getAccountDelegations: (props: GetAccountRewardsProps, context) => {
+        const delegationsProvider = getAccountDelegationsProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return delegationsProvider.getAccountDelegations(props);
+      },
+      getAccountRegistrations: (
+        props: GetAccountRewardsProps,
+        context: CardanoProviderContext,
+      ) => {
+        const registrationsProvider = getAccountRegistrationsProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return registrationsProvider.getAccountRegistrations(props);
+      },
+      getAccountWithdrawals: (
+        props: GetAccountRewardsProps,
+        context: CardanoProviderContext,
+      ) => {
+        const withdrawalsProvider = getAccountWithdrawalsProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return withdrawalsProvider.getAccountWithdrawals(props);
+      },
+      getRewardAccountInfo: (props: GetAccountRewardsProps, context) => {
+        const rewardsProvider = getAccountRewardsProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return rewardsProvider.getRewardAccountInfo(props);
+      },
+      getAccountUtxos: (props: GetAccountRewardsProps, context) => {
+        const utxoProvider = getUtxoProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return utxoProvider.getAccountUtxos(props);
+      },
+      getUtxosAtAddress: (props: GetUtxosAtAddressProps, context) => {
+        const utxoProvider = getUtxoProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return utxoProvider.getUtxosAtAddress(props);
+      },
+      getAddressTransactionHistory: (props, context) => {
+        const activityProvider = getAccountActivityProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return activityProvider.getAddressTransactionHistory(props);
+      },
+      getTransactionDetails: (txId: Cardano.TransactionId, context) => {
+        const activityProvider = getAccountActivityProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return activityProvider.getTransactionDetails(txId);
+      },
+      resolveInput: (txIn: Cardano.TxIn, context) => {
+        const provider = getInputResolverProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        // `defer`, not `from`: the caller's retry re-subscribes, and a settled
+        // promise replays instead of re-requesting. The config assertion stays
+        // OUTSIDE — it throws without a `reason`, which `isRetriableError`
+        // reads as retriable.
+        return defer(async () =>
+          provider
+            .resolveInput(txIn)
+            .then(Ok<Cardano.TxOut | null>)
+            .catch(Err<ProviderError>),
+        );
+      },
+      submitTx: (props: SubmitTxArgs, context) => {
+        const txSubmitProvider = getTxSubmitProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return from(
+          txSubmitProvider
+            .submitTx(props)
+            .then(id => Ok(Cardano.TransactionId(id)))
+            .catch(Err<ProviderError>),
+        );
+      },
+      evaluateTx: (props: EvaluateTxProps, context) => {
+        const provider = getTxEvaluationProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return provider.evaluateTx(props);
+      },
+      getDReps: context => {
+        const provider = getGovernanceProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return provider.getDReps();
+      },
+    },
+    cardanoStakePoolsProvider: {
+      getMetadata: (poolId: Cardano.PoolId, context) => {
+        const provider = getStakePoolProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return from(
+          provider
+            .getMetadata(poolId)
+            .then(Ok<BlockfrostStakePoolMetadata | null>)
+            .catch(Err<ProviderError>),
+        );
+      },
+      getNetworkData: context => {
+        const provider = getStakePoolProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return from(
+          provider
+            .getNetworkData()
+            .then(Ok<StakePoolsNetworkData>)
+            .catch(Err<ProviderError>),
+        );
+      },
+      getStakePool: (poolId: Cardano.PoolId, context) => {
+        const provider = getStakePoolProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return from(
+          provider
+            .getStakePool(poolId)
+            .then(Ok<BlockfrostStakePool | null>)
+            .catch(Err<ProviderError>),
+        );
+      },
+      getStakePools: context => {
+        const provider = getStakePoolProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return from(
+          provider
+            .getStakePools()
+            .then(Ok<BlockfrostPartialStakePool[]>)
+            .catch(Err<ProviderError>),
+        );
+      },
+    },
+  };
+};

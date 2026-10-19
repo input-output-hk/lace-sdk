@@ -1,0 +1,25 @@
+{
+  "name": "@lace-module/cardano-provider-blockfrost",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts"
+  },
+  "main": "src/index.ts",
+  "dependencies": {
+    "@lace-contract/cardano-context": "*",
+    "@lace-contract/cardano-stake-pools": "*",
+    "@lace-contract/crypto": "*",
+    "@lace-contract/module": "*",
+    "@lace-lib/cardano-provider-core": "*",
+    "@lace-lib/core": "*",
+    "@lace-lib/ui-toolkit": "*",
+    "@lace-lib/util-provider": "*"
+  },
+  "devDependencies": {
+    "@blockfrost/blockfrost-js": "^6.0.0"
+  }
+}

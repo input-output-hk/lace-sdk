@@ -1,0 +1,31 @@
+{
+  "name": "lace-cardano-ledger",
+  "projectType": "library",
+  "tags": ["scope:app"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/build.sh",
+        "cwd": "apps/lace-cardano-ledger"
+      },
+      "dependsOn": [
+        {
+          "projects": ["lace-cardano"],
+          "target": "build"
+        }
+      ],
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*",
+        "{workspaceRoot}/packages/lib/cardano-*/src/**/*",
+        "{workspaceRoot}/packages/lib/util/src/common/**/*",
+        "{workspaceRoot}/apps/lace-cardano/dist/**/*",
+        "{workspaceRoot}/tsconfig.base.json"
+      ],
+      "outputs": ["{projectRoot}/dist"]
+    },
+    "type-check-src": {},
+    "lint": {}
+  }
+}

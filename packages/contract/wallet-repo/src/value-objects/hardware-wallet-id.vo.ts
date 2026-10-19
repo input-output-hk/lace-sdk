@@ -1,0 +1,61 @@
+import { canonicalUsbProductId } from '@lace-lib/util-hw';
+
+import type { WalletId } from './wallet-id.vo';
+import type { DeviceDescriptor, HardwareVendorName } from '@lace-lib/util-hw';
+import type { Tagged } from 'type-fest';
+
+const USB_HW_PATTERN = /^usb-hw-(\d+)-(\d+)-(.+)$/;
+const BLE_HW_PATTERN = /^ble-(ledger|trezor)-(.+)$/;
+
+const USB_NO_SERIAL_SENTINEL = 'no-serial';
+
+/**
+ * Wallet ID for hardware wallets, derived from the physical device descriptor.
+ * USB IDs use `usb-hw-{vid}-{pid}-{serial}`, while BLE use `ble-{vendor}-{id}`.
+ * The productId is canonicalized so ids stay stable for vendors whose devices
+ * report app/firmware-dependent productId bits (Ledger).
+ */
+export type HardwareWalletId = Tagged<WalletId, 'HardwareWalletId'>;
+/**
+ * The wallet ID of the hardware device a descriptor describes.
+ * `HardwareWalletId.parse` reads the descriptor back from a wallet ID, or
+ * returns `null` for an ID of another form.
+ */
+export const HardwareWalletId = (
+  descriptor: DeviceDescriptor,
+): HardwareWalletId => {
+  switch (descriptor.kind) {
+    case 'usb':
+      return `usb-hw-${descriptor.vendorId}-${canonicalUsbProductId(
+        descriptor.vendorId,
+        descriptor.productId,
+      )}-${
+        descriptor.serialNumber ?? USB_NO_SERIAL_SENTINEL
+      }` as HardwareWalletId;
+    case 'ble':
+      return `ble-${descriptor.vendorName}-${descriptor.id}` as HardwareWalletId;
+  }
+};
+HardwareWalletId.parse = (walletId: string): DeviceDescriptor | null => {
+  const usbMatch = USB_HW_PATTERN.exec(walletId);
+  if (usbMatch) {
+    const serialSegment = usbMatch[3];
+    return {
+      kind: 'usb',
+      vendorId: Number(usbMatch[1]),
+      productId: Number(usbMatch[2]),
+      serialNumber:
+        serialSegment === USB_NO_SERIAL_SENTINEL ? null : serialSegment,
+    };
+  }
+  const bleMatch = BLE_HW_PATTERN.exec(walletId);
+  if (bleMatch) {
+    return {
+      kind: 'ble',
+      vendorName: bleMatch[1] as HardwareVendorName,
+      id: bleMatch[2],
+      name: null,
+    };
+  }
+  return null;
+};

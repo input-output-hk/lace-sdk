@@ -1,0 +1,836 @@
+import type { CARDANO_TOKEN_METADATA_SCHEMA_VERSION } from './const';
+import type { ExtensionAccountProps } from './extensions';
+import type { CardanoNetworkId, MasterFingerprint } from './value-objects';
+import type {
+  Asset,
+  Cardano,
+  EraSummary,
+  ProviderError,
+  Serialization,
+  SubmitTxArgs,
+} from '@cardano-sdk/core';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519KeyHashHex,
+  Hash28ByteBase16,
+} from '@cardano-sdk/crypto';
+import type {
+  AccountKeyDerivationPath,
+  GroupedAddress,
+} from '@cardano-sdk/key-management';
+import type { ActivityType, RewardActivity } from '@lace-contract/activities';
+import type {
+  AnyAddress,
+  AnyBlockchainAddress,
+  Address,
+} from '@lace-contract/addresses';
+import type {
+  RawTokenWithoutContext,
+  TokenId,
+  TokenMetadata,
+  TokenMetadataValue,
+} from '@lace-contract/tokens';
+import type { FeeEntry } from '@lace-contract/tx-executor';
+import type { AccountId, InMemoryWallet } from '@lace-contract/wallet-repo';
+import type {
+  BigNumber,
+  HexBytes,
+  Milliseconds,
+  Result,
+  Timestamp,
+} from '@lace-lib/util';
+import type { Observable } from 'rxjs';
+import type { Logger } from 'ts-log';
+import type { Tagged } from 'type-fest';
+
+/** A Cardano address in its string form, of any kind. */
+export type CardanoAddress = Address & Tagged<string, 'CardanoAddress'>;
+/** A Cardano address that can receive payments: a base or enterprise address. */
+export type CardanoPaymentAddress = CardanoAddress &
+  Tagged<string, 'CardanoPaymentAddress'>;
+/** A Cardano payment address with a stake part. */
+export type CardanoBaseAddress = CardanoPaymentAddress &
+  Tagged<string, 'CardanoBaseAddress'>;
+/** A Cardano payment address with no stake part. */
+export type CardanoEnterpriseAddress = CardanoPaymentAddress &
+  Tagged<string, 'CardanoEnterpriseAddress'>;
+/** A Cardano reward account, the stake address rewards accrue to. */
+export type CardanoRewardAccount = CardanoAddress &
+  Tagged<string, 'CardanoRewardAccount'>;
+
+/** Types a string as a Cardano address, as the providers take it. It checks nothing. */
+export const CardanoAddress = (address: string) => address as CardanoAddress;
+/** Types a string as a Cardano payment address. It checks nothing. */
+export const CardanoPaymentAddress = (address: string) =>
+  address as CardanoPaymentAddress;
+/** Types a string as a Cardano base address, with a stake part. It checks nothing. */
+export const CardanoBaseAddress = (address: string) =>
+  address as CardanoBaseAddress;
+/** Types a string as a Cardano enterprise address, with no stake part. It checks nothing. */
+export const CardanoEnterpriseAddress = (address: string) =>
+  address as CardanoEnterpriseAddress;
+/** Types a string as a Cardano reward account, a stake address. It checks nothing. */
+export const CardanoRewardAccount = (account: string) =>
+  account as CardanoRewardAccount;
+
+export enum ActivityKind {
+  Reward = 'reward',
+  Transaction = 'transaction',
+}
+
+export type CardanoTokenMetadataFile = {
+  mediaType: Asset.MediaType;
+  src: Asset.Uri;
+  name?: string;
+  additionalProperties?: Record<string, TokenMetadataValue>;
+};
+
+export type CoinItemProps = {
+  amount: string;
+  id: number | string;
+  logo?: string;
+  name: string;
+  symbol?: string;
+};
+
+export type TxOutputInput = {
+  addr: string;
+  amount: Cardano.Lovelace;
+  assetList?: CoinItemProps[];
+};
+
+export interface TxSummary extends Omit<TxOutputInput, 'addr'> {
+  addr: string[];
+  type: ActivityType;
+}
+
+export type TransactionPool = {
+  name: string;
+  ticker: string;
+  id: string;
+};
+
+export type TxInput = Pick<Cardano.HydratedTxIn, 'index' | 'txId'> & {
+  value?: Cardano.Value;
+  address?: Cardano.HydratedTxIn['address'];
+};
+
+export type AssetMetadataMap = Map<
+  Cardano.AssetId,
+  TokenMetadata<CardanoTokenMetadata>
+>;
+
+export interface TxMetadata {
+  key: string;
+  value: unknown[] | string;
+}
+
+export type CardanoTransaction = {
+  addrInputs: TxOutputInput[];
+  addrOutputs: TxOutputInput[];
+  certificates?: Cardano.HydratedCertificate[];
+  collateral: Cardano.Lovelace;
+  deposit: Cardano.Lovelace;
+  donation?: Cardano.Lovelace;
+  metadata?: TxMetadata[];
+  proposalProcedures?: Cardano.ProposalProcedure[];
+  returnedDeposit: Cardano.Lovelace;
+  txSummary?: TxSummary[];
+  votingProcedures?: Cardano.VotingProcedures;
+  pools?: TransactionPool[];
+};
+
+export type Reward = {
+  epoch: Cardano.EpochNo;
+  rewards: BigNumber;
+  /*
+   * Pool ID is optional, as it will be undefined for rewards that are not associated with a pool
+   * (e.g., treasury or reserves)
+   * */
+  poolId?: Cardano.PoolId;
+};
+
+export type CardanoRewardActivity = RewardActivity<Omit<Reward, 'rewards'>>;
+
+export type CardanoTokenMetadata = {
+  files?: CardanoTokenMetadataFile[];
+  metadataSchemaVersion?: typeof CARDANO_TOKEN_METADATA_SCHEMA_VERSION;
+  updatedAt: Timestamp;
+  policyId?: string;
+};
+
+export type CardanoAddressData = Pick<
+  GroupedAddress,
+  'accountIndex' | 'index' | 'networkId' | 'stakeKeyDerivationPath' | 'type'
+> & { networkMagic: Cardano.NetworkMagic; rewardAccount: CardanoRewardAccount };
+
+export type CardanoTransactionHistoryItem = {
+  txId: Cardano.TransactionId;
+  txIndex: Cardano.TxIndex;
+  blockNumber: Cardano.BlockNo;
+  blockTime: Timestamp;
+};
+
+export type CardanoAddressTransactionHistoryMap = Record<
+  CardanoPaymentAddress,
+  {
+    hasLoadedOldestEntry: boolean;
+    transactionHistory: CardanoTransactionHistoryItem[];
+  }
+>;
+
+export type CardanoAccountAddressHistoryMap = Record<
+  AccountId,
+  CardanoAddressTransactionHistoryMap
+>;
+
+export type CardanoAccountTransactionsHistoryMap = Record<
+  AccountId,
+  CardanoTransactionHistoryItem[]
+>;
+
+export type CardanoRewardAccountToRewardMap = Record<
+  CardanoRewardAccount,
+  Reward[]
+>;
+
+export type CardanoAccountToRewardAccountsMap = Record<
+  AccountId,
+  CardanoRewardAccountToRewardMap
+>;
+
+export type CardanoRewardAccountToDelegationMap = Record<
+  CardanoRewardAccount,
+  (DelegationInfo | RegistrationInfo | WithdrawalInfo)[]
+>;
+
+export type CardanoAccountToDelegationAccountsMap = Record<
+  AccountId,
+  CardanoRewardAccountToDelegationMap
+>;
+
+export type CardanoAccountToRewardsMap = Record<AccountId, Reward[]>;
+
+export type CardanoProviderContext = {
+  chainId: Cardano.ChainId;
+};
+
+export type GetTokensProps = {
+  address: CardanoPaymentAddress;
+  accountId: AccountId;
+};
+
+export type GetAccountRewardsProps = {
+  rewardAccount: CardanoRewardAccount;
+  page?: number;
+  pageSize?: number;
+};
+
+export type GetUtxosAtAddressProps = {
+  address: CardanoPaymentAddress;
+  pageSize?: number;
+  /**
+   * Populate each UTxO's reference script, at one extra provider read per
+   * producing transaction. UTxOs whose scripts cannot be read are excluded
+   * from the listing, so they cannot be selected without pricing their scripts.
+   * Without it, `scriptReference` is absent.
+   */
+  withReferenceScripts?: boolean;
+};
+
+export type EvaluateTxProps = {
+  /**
+   * CBOR of the transaction to evaluate. Witnesses are not required: the
+   * scripts are re-executed against the chain's own UTxO set, so an unsigned
+   * draft evaluates exactly like the signed transaction that follows it.
+   */
+  tx: Serialization.TxCBOR;
+};
+
+/**
+ * One redeemer's execution budget, identified the way `Cardano.Redeemer` is:
+ * by purpose plus the redeemer's index within that purpose group. Structurally
+ * the SDK's `TxEvaluationResult` entry, so a provider-backed `TxEvaluator` can
+ * hand it to the tx builder unchanged.
+ */
+export type RedeemerExecutionUnits = {
+  purpose: Cardano.RedeemerPurpose;
+  index: number;
+  budget: Cardano.ExUnits;
+};
+
+export type RewardAccountInfo = {
+  poolId?: Cardano.PoolId;
+  drepId?: string;
+  rewardsSum: BigNumber;
+  isActive: boolean;
+  isRegistered: boolean;
+  controlledAmount: BigNumber;
+  withdrawableAmount: BigNumber;
+};
+
+export type DelegationInfo = {
+  activeEpoch: Cardano.EpochNo;
+  txHash: Cardano.TransactionId;
+  amount: BigNumber;
+  poolId: Cardano.PoolId;
+};
+
+export type RegistrationInfo = {
+  txHash: Cardano.TransactionId;
+  action: 'deregistered' | 'registered';
+};
+
+export type WithdrawalInfo = {
+  txHash: Cardano.TransactionId;
+  amount: BigNumber;
+};
+
+export type GetRewardAccountInfoProps = {
+  rewardAccount: CardanoRewardAccount;
+};
+
+export type RewardAccountDetails = {
+  rewardAccountInfo: RewardAccountInfo;
+};
+
+export type AccountRewardAccountDetailsMap = Record<
+  AccountId,
+  RewardAccountDetails
+>;
+
+export type DiscoverAddressesProps = {
+  xpub: Bip32PublicKeyHex;
+  accountIndex: number;
+  /**
+   * When true, run thorough discovery: gap-limit termination is augmented with
+   * set-driven exhaustion and a hard upper bound. Reserved for user-triggered
+   * sync; defaults to false (automatic discovery uses the standard predicate).
+   */
+  thorough?: boolean;
+};
+
+export type ExtendedTxDetails = Cardano.HydratedTx & {
+  blockTime: number;
+};
+
+export type DelegationTransactionDetailsMap = Record<
+  CardanoRewardAccount,
+  Record<string, ExtendedTxDetails>
+>;
+
+export type GetNextTxHistoryPageParams = {
+  startAtBlock?: Cardano.BlockNo;
+  startAtIndex?: Cardano.TxIndex;
+  endAtBlock?: Cardano.BlockNo;
+  endAtIndex?: Cardano.TxIndex;
+  order?: 'asc' | 'desc';
+};
+
+export type GetAddressTransactionHistoryProps = GetNextTxHistoryPageParams & {
+  address: CardanoPaymentAddress;
+  numberOfItems: number;
+};
+
+export interface CardanoProvider {
+  /***
+   * @returns Observable that emits once and completes
+   *
+   */
+  getTip: (
+    context: CardanoProviderContext,
+  ) => Observable<Result<Cardano.Tip, ProviderError>>;
+  /**
+   * @returns Observable that emits addresses one by one and completes when the discovery is finished
+   * Stops discovery and completes after first error is encountered and emitted.
+   */
+  discoverAddresses: (
+    props: DiscoverAddressesProps,
+    context: CardanoProviderContext,
+  ) => Observable<
+    Result<AnyBlockchainAddress<CardanoAddressData>, ProviderError>
+  >;
+  /**
+   * @returns Observable that emits once and completes
+   */
+  getTokens: (
+    props: GetTokensProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<RawTokenWithoutContext[], ProviderError>>;
+  /**
+   * @returns Observable that emits once and completes
+   */
+  getTokenMetadata: (
+    props: { tokenId: TokenId },
+    context: CardanoProviderContext,
+  ) => Observable<Result<TokenMetadata<CardanoTokenMetadata>, ProviderError>>;
+  /**
+   * @returns Observable that emits the sorted (by block time) and paged transactions for given
+   * addresses once and completes
+   */
+  getAddressTransactionHistory: (
+    props: GetAddressTransactionHistoryProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<CardanoTransactionHistoryItem[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits the sorted (by block time) and paged transactions for given
+   * addresses once and completes
+   */
+  getAccountRewards: (
+    props: GetAccountRewardsProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<Reward[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits account delegations history once and completes
+   */
+  getAccountDelegations: (
+    props: GetAccountRewardsProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<DelegationInfo[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits account registrations history once and completes
+   */
+  getAccountRegistrations: (
+    props: GetAccountRewardsProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<RegistrationInfo[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits account withdrawals history once and completes
+   */
+  getAccountWithdrawals: (
+    props: GetAccountRewardsProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<WithdrawalInfo[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits account UTxOs once and completes
+   */
+  getAccountUtxos: (
+    props: GetAccountRewardsProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<Cardano.Utxo[], ProviderError>>;
+
+  /**
+   * Fetch the UTxOs sitting at an arbitrary payment address (with inline
+   * datums populated). Unlike {@link getAccountUtxos} this targets a single
+   * address rather than a stake account — used to discover script-address
+   * UTxOs.
+   *
+   * @returns Observable that emits the address' UTxOs once and completes
+   */
+  getUtxosAtAddress: (
+    props: GetUtxosAtAddressProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<Cardano.Utxo[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits reward account info (rewards sum and controlled amount) once and completes
+   */
+  getRewardAccountInfo: (
+    props: GetRewardAccountInfoProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<RewardAccountInfo, ProviderError>>;
+
+  /**
+   * @returns Observable that emits transaction details for given id once and completes
+   */
+  getTransactionDetails: (
+    txId: Cardano.TransactionId,
+    context: CardanoProviderContext,
+  ) => Observable<Result<ExtendedTxDetails, ProviderError>>;
+
+  /**
+   * @returns Observable that emits a Result with latest Cardano protocol parameters once and completes
+   */
+  getProtocolParameters: (
+    context: CardanoProviderContext,
+  ) => Observable<Result<Cardano.ProtocolParameters, ProviderError>>;
+
+  getEraSummaries: (
+    context: CardanoProviderContext,
+  ) => Observable<Result<EraSummary[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits a Result with resolved input from Blockfrost once and completes
+   */
+  resolveInput: (
+    txIn: Cardano.TxIn,
+    context: CardanoProviderContext,
+  ) => Observable<Result<Cardano.TxOut | null, ProviderError>>;
+
+  /**
+   * @returns Observable that emits the transaction ID once and completes
+   */
+  submitTx: (
+    props: SubmitTxArgs,
+    context: CardanoProviderContext,
+  ) => Observable<Result<Cardano.TransactionId, ProviderError>>;
+
+  /**
+   * Evaluate how many execution units each redeemer of `props.tx` consumes, by
+   * running its scripts against the chain's UTxO set.
+   *
+   * @returns Observable that emits one budget per redeemer once and completes.
+   * `Ok([])` means the transaction carries no redeemers at all; every state in
+   * which the network could not produce budgets — a script failure, a provider
+   * fault, an unparseable response, a transport error — is an `Err`, so a
+   * caller can tell "nothing to evaluate" from "evaluation unavailable" and
+   * fall back to a fixed budget only in the latter case.
+   */
+  evaluateTx: (
+    props: EvaluateTxProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<RedeemerExecutionUnits[], ProviderError>>;
+
+  /**
+   * @returns Observable that emits the complete registered-DRep list once and
+   * completes. Internally pages through the provider until exhausted.
+   */
+  getDReps: (
+    context: CardanoProviderContext,
+  ) => Observable<Result<DRepSummary[], ProviderError>>;
+}
+
+export interface CardanoProviderDependencies {
+  cardanoProvider: CardanoProvider;
+}
+
+export interface CardanoProviderConfig {
+  tipPollFrequency: Milliseconds;
+}
+
+type CommonCardanoAccountProps = {
+  chainId: Cardano.ChainId;
+  networkId?: CardanoNetworkId;
+};
+export type CardanoBip32AccountProps = CommonCardanoAccountProps & {
+  accountIndex: number;
+  extendedAccountPublicKey: Bip32PublicKeyHex;
+  /**
+   * 4-byte BTC BIP-32 master fingerprint (xfp) of the seed owning this
+   * account. Present for hardware signers that require it to target the
+   * device seed (e.g. the Seed Signer); absent for other account types.
+   */
+  masterFingerprint?: MasterFingerprint;
+};
+export type CardanoMultiSigAccountProps = CommonCardanoAccountProps & {
+  /**
+   * All own signers must use the same key path
+   */
+  paymentKeyPath: AccountKeyDerivationPath;
+  /**
+   * All own signers must use the same key path
+   */
+  stakingKeyPath: AccountKeyDerivationPath;
+  paymentScript: Cardano.NativeScript;
+  stakingScript: Cardano.NativeScript;
+};
+
+/**
+ * Passkey through which the bound device key signs: a credential the dApp
+ * uses directly, or the hosted signer page at `origin`. A passkey is scoped
+ * to its relying party, so each channel derives a different device key.
+ */
+export type CardanoCustodyDeviceChannel =
+  | { type: 'hosted'; origin: string }
+  | { type: 'local'; credentialId: string; rpId: string };
+
+/**
+ * Public binding to the device key the wallet signs a Cardano script
+ * account's operations with. The key is `m/1854'/1815'/a'/0/<index>` (CIP-1854), with
+ * the account `a` the contract version assigns to the network; the signer
+ * re-derives it and compares its hash with `keyHash` before signing.
+ */
+export type CardanoCustodyDeviceBinding = {
+  /** CIP-1854 account extended public key, `m/1854'/1815'/a'`. */
+  extendedAccountPublicKey: Bip32PublicKeyHex;
+  index: number;
+  keyHash: Ed25519KeyHashHex;
+  channel: CardanoCustodyDeviceChannel;
+};
+
+/**
+ * Cardano custody account: one account at the custody contract's script
+ * address on a single network. Every field is public; the chain, not this
+ * record, holds the devices, in the control datum, and the grants, in grant
+ * UTxOs.
+ */
+export type CardanoCustodyAccountProps = CommonCardanoAccountProps & {
+  accountValidatorHash: Hash28ByteBase16;
+  /** Key the stake validator is applied to; it fixes the address for life. */
+  creatorKeyHash: Ed25519KeyHashHex;
+  stakeScriptHash: Hash28ByteBase16;
+  address: Cardano.PaymentAddress;
+  rewardAccount: Cardano.RewardAccount;
+  /**
+   * The device key the wallet signs owner operations with. Absent
+   * for an observer, such as an agent or a read-only viewer, which syncs the
+   * account but holds no owner authority.
+   */
+  device?: CardanoCustodyDeviceBinding;
+};
+
+export type CardanoAnyAccountProps =
+  | CardanoBip32AccountProps
+  | CardanoMultiSigAccountProps
+  | ExtensionAccountProps;
+
+export type CardanoHardwareWalletProps = object;
+export type CardanoMultiSigWalletProps = object;
+
+export type CardanoSpecificInMemoryWalletData = {
+  encryptedRootPrivateKey: HexBytes;
+};
+
+export type AddCardanoInMemoryWalletAccountProps = {
+  password: Uint8Array;
+  accountIndex: number;
+  chainId: Cardano.ChainId;
+  wallet: InMemoryWallet<CardanoAnyAccountProps>;
+  logger: Logger;
+};
+
+export type CardanoSideEffectsDependencies = {
+  addCardanoInMemoryWalletAccount: (
+    props: AddCardanoInMemoryWalletAccountProps,
+  ) => Observable<InMemoryWallet<CardanoAnyAccountProps>>;
+  txExecutorCardano: {
+    cardanoProtocolParameters$: Observable<
+      RequiredProtocolParameters | undefined
+    >;
+    cardanoNetworkMagic$: Observable<Cardano.NetworkMagic | undefined>;
+    cardanoAccountUtxos$: Observable<AccountUtxoMap>;
+    cardanoAccountUnspendableUtxos$: Observable<AccountUtxoMap>;
+    cardanoAddresses$: Observable<AnyAddress[]>;
+    cardanoChainId$: Observable<Cardano.ChainId | undefined>;
+    cardanoRewardAccountDetails$: Observable<AccountRewardAccountDetailsMap>;
+  };
+};
+
+export type RequiredProtocolParameters = Pick<
+  Cardano.ProtocolParameters,
+  // NOTE: when this changes, create a redux store migration that deletes old parameters
+  | 'coinsPerUtxoByte'
+  | 'collateralPercentage'
+  | 'desiredNumberOfPools'
+  | 'dRepDeposit'
+  | 'maxCollateralInputs'
+  | 'maxTxSize'
+  | 'maxValueSize'
+  | 'minFeeCoefficient'
+  | 'minFeeConstant'
+  | 'minFeeRefScriptCostPerByte'
+  | 'monetaryExpansion'
+  | 'poolDeposit'
+  | 'poolInfluence'
+  | 'prices'
+  | 'stakeKeyDeposit'
+>;
+
+export type AccountUtxoMap = Record<AccountId, Cardano.Utxo[]>;
+
+export type AccountUnspendableUtxoMap = Record<AccountId, Cardano.Utxo[]>;
+
+export type CardanoBlockchainSpecificTxData = {
+  memo: string;
+};
+
+export type DRepOption =
+  | { type: 'alwaysAbstain' }
+  | { type: 'alwaysNoConfidence' }
+  | { type: 'specific'; drepId: Cardano.DRepID };
+
+/**
+ * A real DRep, excluding the abstain / no-confidence sentinels. Flows that must
+ * delegate to an actual representative — earn-rewards, whose spec forbids
+ * casting the user's vote as Always Abstain / No Confidence — take this instead
+ * of {@link DRepOption} so the prohibition is enforced by the compiler rather
+ * than by a runtime check alone.
+ */
+export type SpecificDRepOption = Extract<DRepOption, { type: 'specific' }>;
+
+export type DRepReference = { label?: string; uri: string };
+
+/** CIP-119 metadata fields Lace displays, parsed from the inline `json_metadata.body`. */
+export type DRepMetadata = {
+  /** CIP-100 anchor: where the metadata document is hosted. */
+  metadataUrl?: string;
+  /** blake2b-256 hash of the anchored metadata document. */
+  metadataHash?: string;
+  /** `body.image.contentUrl`. */
+  imageUrl?: string;
+  bio?: string;
+  email?: string;
+  objectives?: string;
+  motivations?: string;
+  qualifications?: string;
+  paymentAddress?: string;
+  references?: DRepReference[];
+};
+
+export type DRepSummary = {
+  drepId: Cardano.DRepID;
+  cip105DrepId: Cardano.DRepID;
+  hex: string;
+  /** Derived convenience flag: `!retired && !expired`. */
+  isActive: boolean;
+  /** DRep has been deregistered. */
+  retired: boolean;
+  /** Inactive beyond the `drep_activity` protocol window. */
+  expired: boolean;
+  amount: string;
+  hasScript: boolean;
+  name?: string;
+  metadata?: DRepMetadata;
+};
+
+export type BuildVoteDelegationTxParams = {
+  accountId: AccountId;
+  dRep: DRepOption;
+};
+
+export type BuildVoteDelegationTxResult =
+  | {
+      success: false;
+      error: Error;
+    }
+  | {
+      success: true;
+      serializedTx: string;
+      fees: FeeEntry[];
+      deposit: string;
+    };
+
+export type BuildVoteDelegationTx = (
+  params: BuildVoteDelegationTxParams,
+) => Observable<BuildVoteDelegationTxResult>;
+
+export type MakeBuildVoteDelegationTx<TDependencies = unknown> = (
+  dependencies: TDependencies,
+) => BuildVoteDelegationTx;
+
+export type BuildDelegationTxParams = {
+  accountId: AccountId;
+  poolId: Cardano.PoolId;
+};
+
+export type BuildDelegationTxResult =
+  | {
+      success: false;
+      error: Error;
+    }
+  | {
+      success: true;
+      serializedTx: string;
+      fees: FeeEntry[];
+      deposit: string;
+    };
+
+export type BuildDelegationTx = (
+  params: BuildDelegationTxParams,
+) => Observable<BuildDelegationTxResult>;
+
+export type MakeBuildDelegationTx<TDependencies = unknown> = (
+  dependencies: TDependencies,
+) => BuildDelegationTx;
+
+/**
+ * Combined stake + vote delegation in a single transaction, backing the
+ * one-tap "earn rewards" flow. The `dRep` is always a specific DRep for that
+ * flow, but the type accepts any `DRepOption` so the builder stays reusable.
+ */
+export type BuildEarnRewardsTxParams = {
+  accountId: AccountId;
+  /**
+   * DRep to delegate voting power to. **Omit** when no promoted DRep is
+   * configured — the transaction then stakes without a vote certificate. At
+   * least one of `dRep` / `poolId` must be present: with neither there is no
+   * certificate to emit, and the builder refuses rather than minting an empty
+   * transaction.
+   */
+  dRep?: SpecificDRepOption;
+  /**
+   * Stake pool to delegate to. **Omit** to delegate voting power only, leaving an
+   * existing stake delegation untouched — the `vote-only` mode for an account that
+   * already stakes but has no DRep. Vote delegation requires a registered stake
+   * credential, so omitting this is only valid for an already-registered account.
+   */
+  poolId?: Cardano.PoolId;
+};
+
+export type BuildEarnRewardsTxResult =
+  | {
+      success: false;
+      error: Error;
+    }
+  | {
+      success: true;
+      serializedTx: string;
+      fees: FeeEntry[];
+      deposit: string;
+    };
+
+export type BuildEarnRewardsTx = (
+  params: BuildEarnRewardsTxParams,
+) => Observable<BuildEarnRewardsTxResult>;
+
+export type MakeBuildEarnRewardsTx<TDependencies = unknown> = (
+  dependencies: TDependencies,
+) => BuildEarnRewardsTx;
+
+export type BuildDeregistrationTxParams = {
+  accountId: AccountId;
+};
+
+export type BuildDeregistrationTxResult =
+  | {
+      success: false;
+      error: Error;
+    }
+  | {
+      success: true;
+      serializedTx: string;
+      fees: FeeEntry[];
+      /** Deposit return in lovelace as string (positive value) */
+      depositReturn: string;
+      /** Staking rewards withdrawn in lovelace as string (positive value, '0' when no rewards) */
+      withdrawalAmount: string;
+    };
+
+export type BuildDeregistrationTx = (
+  params: BuildDeregistrationTxParams,
+) => Observable<BuildDeregistrationTxResult>;
+
+export type MakeBuildDeregistrationTx<TDependencies = unknown> = (
+  dependencies: TDependencies,
+) => BuildDeregistrationTx;
+
+// In-memory signing types (ADR 19 compliant)
+export type SigningError = { code: 'SIGNING_FAILED'; message: string };
+
+export interface SignInMemoryTransactionProps {
+  tx: Serialization.Transaction;
+  authSecret: Uint8Array;
+  accountIndex: number;
+  chainId: Cardano.ChainId;
+  extendedAccountPublicKey: Bip32PublicKeyHex;
+  encryptedRootPrivateKey: HexBytes;
+  knownAddresses: GroupedAddress[];
+  utxo: Cardano.Utxo[];
+}
+
+export interface CardanoInMemorySigningDependencies {
+  cardanoInMemorySigning: {
+    /**
+     * Signs an in-memory Cardano transaction using the provided auth secret.
+     * @returns Observable that emits the signed transaction once and completes
+     */
+    signTransaction: (
+      props: SignInMemoryTransactionProps,
+    ) => Observable<Result<Serialization.Transaction, SigningError>>;
+  };
+}

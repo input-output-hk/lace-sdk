@@ -1,0 +1,208 @@
+import {
+  createTxInspector,
+  transactionSummaryInspector,
+} from '@cardano-sdk/core';
+import { Cardano } from '@cardano-sdk/core';
+import { ActivityType } from '@lace-contract/activities';
+import { TokenId } from '@lace-contract/tokens';
+import { BigNumber, Err, Ok, type Result, Timestamp } from '@lace-lib/util';
+import { catchError, from, mergeMap, of } from 'rxjs';
+
+import { classifyExtensionActivity, isAccountTokenOf } from '../../extensions';
+import {
+  computeOwnKeyHashes,
+  filterOwnWitnesses,
+  deterministicNonce202606,
+} from '../../security';
+
+import { computeOwnNetCoins } from './compute-own-net-coins';
+import { assetProvider } from './get-fallback-asset';
+
+import type {
+  CardanoPaymentAddress,
+  CardanoRewardAccount,
+  ExtendedTxDetails,
+  RequiredProtocolParameters,
+} from '../../types';
+import type { Milliseconds } from '@cardano-sdk/core';
+import type { Activity } from '@lace-contract/activities';
+import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Observable } from 'rxjs';
+import type { Logger } from 'ts-log';
+
+const TX_SUMMARY_INSPECTOR_TIMEOUT = 10_000 as Milliseconds;
+
+export type MapTransactionToActivityParams = {
+  accountId: AccountId;
+  txDetails: ExtendedTxDetails;
+  accountAddresses: CardanoPaymentAddress[];
+  rewardAccount: CardanoRewardAccount;
+  protocolParameters: RequiredProtocolParameters;
+  resolveInput: Cardano.ResolveInput;
+  logger: Logger;
+  isExtensionActivityEnabled: boolean;
+};
+
+/**
+ * Retrieves and processes transaction activity details for a given account.
+ *
+ * @param params - Parameters required to fetch and process account activity.
+ *   - `txDetails`: Details of the transactions to analyze.
+ *   - `accountAddresses`: A set of account addresses to track activity for.
+ *   - `rewardAccount`: The reward account to monitor for activity.
+ *   - `protocolParameters`: Current protocol parameters required for transaction validation and processing.
+ *   - `resolveInput`: A resolver function used to fetch detailed information about transaction inputs.
+ *   - `logger`: A logger instance for logging purposes during processing.
+ * @returns An observable for the account activity operation result.
+ * Results will be encapsulated in the `Result` type, which is a success (`Ok`) or error (`Err`).
+ *
+ * The function inspects transaction details, resolves inputs, and identifies token balance changes and activity type (e.g., send/receive).
+ * It processes the activity and categorizes assets, including ADA (identified with the token ID 'lovelace'), while using a fallback
+ * asset provider for assets that need minimal attribute resolution.
+ *
+ * Errors encountered during the observable stream processing are captured as `Err` in the result.
+ */
+export const mapTransactionToActivity = ({
+  accountId,
+  txDetails,
+  accountAddresses,
+  rewardAccount,
+  protocolParameters,
+  resolveInput,
+  logger,
+  isExtensionActivityEnabled,
+}: MapTransactionToActivityParams): Observable<Result<Activity, Error>> => {
+  const ownAddresses = accountAddresses.map(address =>
+    Cardano.PaymentAddress(address),
+  );
+  const ownRewardAccount = Cardano.RewardAccount(rewardAccount);
+  const isAccountToken = isAccountTokenOf(ownRewardAccount);
+
+  const txSummaryInspector = createTxInspector({
+    summary: transactionSummaryInspector({
+      addresses: ownAddresses,
+      rewardAccounts: [ownRewardAccount],
+      inputResolver: {
+        resolveInput,
+      },
+      protocolParameters,
+      // Using a dummy asset provider as we don't need to fetch assets for the summary
+      // We don't want the transactionSummaryInspector to build a fallback asset on its own getAssets() failure,
+      // because it logs an error, and we don't want that as having a fallback asset is intentional.
+      assetProvider,
+      timeout: TX_SUMMARY_INSPECTOR_TIMEOUT,
+      logger,
+    }),
+  });
+
+  // Activities the features classify themselves, from the tx body alone: the
+  // type and the metadata the UI renders without re-parsing it. It applies
+  // only while the feature is on.
+  const classifiedActivity = classifyExtensionActivity(txDetails.body);
+  const extensionActivity = isExtensionActivityEnabled
+    ? classifiedActivity
+    : undefined;
+
+  // What the chain actually consumed, unresolved: consumers that care about
+  // ownership intersect this with the account's own UTxO set, which does that
+  // filtering for free. Load-bearing for `canTrustFetchAsSettled` in
+  // cardano-sync, which reads a still-present outpoint as proof the provider has
+  // not applied this transaction — so it must be what was really spent, and
+  // complete for the tx rather than narrowed to what looks relevant here.
+  //
+  // `inputSource` decides which list that is. A transaction that failed phase-2
+  // validation consumed its COLLATERALS; its `body.inputs` were never spent and
+  // legitimately stay in the account's UTxO set, so recording them would leave
+  // a consumer withholding forever against a provider that is reporting them
+  // correctly.
+  const spentOutpoints = (
+    txDetails.inputSource === Cardano.InputSource.collaterals
+      ? txDetails.body.collaterals ?? []
+      : txDetails.body.inputs
+  ).map(({ txId, index }) => ({ txId, index }));
+
+  // Semantics on `CardanoActivityUtxoMetadata.producedOwnOutpoints`.
+  // Indexed per on-chain position BEFORE filtering. A phase-2 failure's only
+  // materialised output is its collateral return, whose ledger index
+  // (|outputs|) hydration does not preserve — so record no evidence rather
+  // than a wrong outpoint; empty falls through per the field's contract.
+  const producedOwnOutpoints: Cardano.TxIn[] =
+    txDetails.inputSource === Cardano.InputSource.collaterals
+      ? []
+      : (() => {
+          const ownAddresses = new Set<string>(accountAddresses);
+          return txDetails.body.outputs.flatMap((output, index) =>
+            ownAddresses.has(output.address)
+              ? [{ txId: txDetails.id, index }]
+              : [],
+          );
+        })();
+
+  return from(txSummaryInspector(txDetails)).pipe(
+    mergeMap(async ({ summary }) => {
+      const ownNetCoins = computeOwnNetCoins({
+        accountAddresses: ownAddresses,
+        rewardAccount: ownRewardAccount,
+        protocolParameters,
+        txBody: txDetails.body,
+        summary,
+      });
+
+      const tokenBalanceChanges = [
+        ...Array.from(summary.assets.entries())
+          .filter(([assetId]) => !isAccountToken(assetId))
+          .map(([assetId, assetInfo]) => ({
+            tokenId: TokenId(assetId),
+            amount: BigNumber(assetInfo.amount),
+          })),
+        // TODO: handle different networks and ADA token id correctly (LW-13023)
+        {
+          tokenId: TokenId('lovelace'),
+          amount: BigNumber(ownNetCoins),
+        },
+      ];
+
+      // Signature-based compromise detection (deterministicNonce202606) runs for
+      // EVERY tx regardless of classification — the check keys off the witness
+      // signature, not send/receive semantics, so a designation signed by a
+      // compromised key must still be flagged. See
+      // src/security/exploits/deterministicNonce202606/ for what this checks.
+      const ownKeyHashes = computeOwnKeyHashes(accountAddresses, rewardAccount);
+      const ownWitnesses = filterOwnWitnesses(
+        txDetails.witness.signatures,
+        ownKeyHashes,
+      );
+      const compromiseChecks = await Promise.all(
+        ownWitnesses.map(async ([, signature]) =>
+          deterministicNonce202606.txIsCompromised(txDetails.id, signature),
+        ),
+      );
+      const security = {
+        exploits: {
+          deterministicNonce202606: compromiseChecks.some(Boolean),
+        },
+      };
+
+      return Ok({
+        accountId,
+        activityId: txDetails.id,
+        timestamp: Timestamp(txDetails.blockTime * 1000),
+        tokenBalanceChanges,
+        type:
+          extensionActivity?.type ??
+          (ownNetCoins > 0n ? ActivityType.Receive : ActivityType.Send),
+        blockchainSpecific: {
+          Cardano: {
+            consumedInputs: spentOutpoints,
+            producedOutputs: [],
+            producedOwnOutpoints,
+            slot: txDetails.blockHeader.slot,
+            ...extensionActivity?.metadata,
+            security,
+          },
+        },
+      });
+    }),
+    catchError((error: Error) => of(Err(error))),
+  );
+};

@@ -1,0 +1,38 @@
+@laceio/cardano
+
+This package is built from source ported from the Cardano JS SDK
+(https://github.com/input-output-hk/cardano-js-sdk) at commit 48019e49. It
+contains the code of the cardano-js-sdk packages @cardano-sdk/core,
+@cardano-sdk/crypto, @cardano-sdk/util, @cardano-sdk/key-management,
+@cardano-sdk/input-selection, @cardano-sdk/tx-construction, and
+@cardano-sdk/dapp-connector, whose notices follow.
+
+---
+
+@cardano-sdk/core, @cardano-sdk/input-selection, @cardano-sdk/dapp-connector:
+
+Copyright 2021 IOHK
+
+Licensed under the Apache License, Version 2.0 (the "License”). You may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.txt
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+
+---
+
+@cardano-sdk/util, @cardano-sdk/key-management:
+
+Copyright 2022 IOHK
+
+Licensed under the Apache License, Version 2.0 (the "License”). You may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.txt
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+
+---
+
+@cardano-sdk/crypto, @cardano-sdk/tx-construction:
+
+Copyright 2023 IOHK
+
+Licensed under the Apache License, Version 2.0 (the "License”). You may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.txt
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.

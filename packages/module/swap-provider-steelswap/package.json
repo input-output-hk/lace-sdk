@@ -1,0 +1,20 @@
+{
+  "name": "@lace-module/swap-provider-steelswap",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts"
+  },
+  "main": "src/index.ts",
+  "dependencies": {
+    "@cardano-sdk/core": "0.47.1",
+    "@lace-contract/feature": "*",
+    "@lace-contract/module": "*",
+    "@lace-contract/swap-provider": "*",
+    "@lace-lib/util": "*"
+  },
+  "devDependencies": {}
+}

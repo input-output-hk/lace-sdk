@@ -1,0 +1,34 @@
+{
+  "name": "@lace-module/dapp-connector-midnight",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts",
+    "./src/render/components/midnight-account-selector": "./src/render/components/midnight-account-selector.tsx"
+  },
+  "main": "src/index.ts",
+  "dependencies": {
+    "@lace-contract/activities": "*",
+    "@lace-contract/analytics": "*",
+    "@lace-contract/app-lock": "*",
+    "@lace-contract/authentication-prompt": "*",
+    "@lace-contract/feature": "*",
+    "@lace-contract/i18n": "*",
+    "@lace-contract/midnight-context": "*",
+    "@lace-contract/module": "*",
+    "@lace-contract/tokens": "*",
+    "@lace-contract/views": "*",
+    "@lace-contract/wallet-repo": "*",
+    "@lace-lib/util": "*",
+    "@lace-lib/util-render": "*",
+    "@lace-lib/util-store": "*",
+    "@lace-lib/vendor": "*",
+    "webextension-polyfill": "^0.10.0"
+  },
+  "devDependencies": {
+    "@types/webextension-polyfill": "^0.10.7"
+  }
+}

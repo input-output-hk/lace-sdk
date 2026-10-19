@@ -1,0 +1,234 @@
+{
+  "name": "lace-sdk-repository",
+  "private": true,
+  "description": "The Lace SDK: @laceio/sdk, the Cardano domain layer @laceio/cardano and its hardware wallet packages, and the workspace packages they build from.",
+  "engines": {
+    "node": "24.14.0",
+    "npm": "11.9.0"
+  },
+  "workspaces": [
+    "apps/lace-sdk",
+    "apps/lace-cardano",
+    "apps/lace-cardano-ledger",
+    "apps/lace-cardano-trezor",
+    "packages/contract/account-management",
+    "packages/contract/activities",
+    "packages/contract/address-book",
+    "packages/contract/addresses",
+    "packages/contract/analytics",
+    "packages/contract/app",
+    "packages/contract/app-lock",
+    "packages/contract/authentication-prompt",
+    "packages/contract/bitcoin-context",
+    "packages/contract/cardano-context",
+    "packages/contract/cardano-stake-pools",
+    "packages/contract/crypto",
+    "packages/contract/dev",
+    "packages/contract/failures",
+    "packages/contract/feature",
+    "packages/contract/governance-center",
+    "packages/contract/i18n",
+    "packages/contract/in-memory",
+    "packages/contract/midnight-context",
+    "packages/contract/module",
+    "packages/contract/network",
+    "packages/contract/onboarding-v2",
+    "packages/contract/passport",
+    "packages/contract/secure-store",
+    "packages/contract/send-flow",
+    "packages/contract/signer",
+    "packages/contract/staking-center",
+    "packages/contract/storage",
+    "packages/contract/swap-provider",
+    "packages/contract/sync",
+    "packages/contract/token-pricing",
+    "packages/contract/tokens",
+    "packages/contract/tx-executor",
+    "packages/contract/views",
+    "packages/contract/wallet-active-state",
+    "packages/contract/wallet-repo",
+    "packages/lib/bitcoin-provider-core",
+    "packages/lib/cardano-core",
+    "packages/lib/cardano-crypto",
+    "packages/lib/cardano-custody",
+    "packages/lib/cardano-dapp-connector",
+    "packages/lib/cardano-hardware-ledger",
+    "packages/lib/cardano-hardware-trezor",
+    "packages/lib/cardano-input-selection",
+    "packages/lib/cardano-key-management",
+    "packages/lib/cardano-provider-core",
+    "packages/lib/cardano-tx-construction",
+    "packages/lib/cardano-util-rxjs",
+    "packages/lib/cnight-dust-designation",
+    "packages/lib/core",
+    "packages/lib/crypto",
+    "packages/lib/image-url",
+    "packages/lib/observability",
+    "packages/lib/passkey",
+    "packages/lib/ui-toolkit",
+    "packages/lib/ur-transport",
+    "packages/lib/util",
+    "packages/lib/util-dev-cardano",
+    "packages/lib/util-hw",
+    "packages/lib/util-provider",
+    "packages/lib/util-redacted",
+    "packages/lib/util-render",
+    "packages/lib/util-store",
+    "packages/lib/vendor",
+    "packages/module/bitcoin-mempool-fee-market",
+    "packages/module/bitcoin-provider-maestro",
+    "packages/module/blockchain-bitcoin",
+    "packages/module/blockchain-cardano",
+    "packages/module/cardano-provider-blockfrost",
+    "packages/module/cardano-sync",
+    "packages/module/crypto-cardano-sdk",
+    "packages/module/dapp-connector-midnight",
+    "packages/module/feature-dev",
+    "packages/module/midnight-sync",
+    "packages/module/passport-account",
+    "packages/module/storage-in-memory",
+    "packages/module/storage-web-indexeddb",
+    "packages/module/swap-provider-steelswap",
+    "packages/types/chacha",
+    "packages/types/fraction.js",
+    "packages/types/get-random-values",
+    "packages/types/node-hid",
+    "packages/types/web-encoding"
+  ],
+  "scripts": {
+    "build": "bash apps/lace-sdk/scripts/build.sh",
+    "build:cardano": "bash apps/lace-cardano/scripts/build.sh && bash apps/lace-cardano-ledger/scripts/build.sh && bash apps/lace-cardano-trezor/scripts/build.sh",
+    "test": "cd apps/lace-sdk && NODE_OPTIONS=--experimental-require-module vitest run --config=vitest.config.js && node test/check-stable-variants.mjs"
+  },
+  "dependencies": {
+    "@blaze-cardano/data": "0.6.6",
+    "@cardano-sdk/util-dev": "0.25.38",
+    "@cardano-sdk/util-rxjs": "0.9.37",
+    "@react-navigation/native": "7.1.31",
+    "@tanstack/react-form": "^1.20.0",
+    "@testing-library/react-native": "13.2.2",
+    "@types/d3": "7.4.3",
+    "@types/eslint": "9.6.1",
+    "@types/react": "~19.2.0",
+    "@types/react-test-renderer": "19.1.0",
+    "@types/uuid": "^9.0.8",
+    "d3": "7.9.0",
+    "date-fns": "2.30.0",
+    "dayjs": "1.11.19",
+    "eslint": "^9.9.1",
+    "eslint-plugin-react-native": "^5.0.0",
+    "expo-camera": "56.0.8",
+    "expo-haptics": "56.0.3",
+    "expo-image": "~56.0.11",
+    "expo-secure-store": "~56.0.4",
+    "fake-indexeddb": "^6.2.5",
+    "history": "^5.3.0",
+    "immer": "^10.1.1",
+    "jest-expo": "~56.0.5",
+    "react": "19.2.3",
+    "react-native-safe-area-context": "5.7.0",
+    "react-native-svg": "15.15.4",
+    "react-native-worklets": "0.8.3",
+    "react-redux": "^9.1.0",
+    "react-test-renderer": "19.2.3",
+    "reassure": "^1.5.1",
+    "typescript-eslint": "^8.46.2",
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "prettier": "^2.8.8",
+    "semver": "6.3.1",
+    "tsdown": "^0.21.3",
+    "typescript": "~5.9.2"
+  },
+  "overrides": {
+    "websocket-driver": "0.7.5",
+    "path-to-regexp@0.1.12": "0.1.13",
+    "path-to-regexp@8.3.0": "8.4.2",
+    "yaml@1.10.2": "1.10.3",
+    "morgan": "1.11.0",
+    "uuid@13.0.0": "13.0.2",
+    "react-native-ble-plx": "3.5.1",
+    "libsodium-sumo": "0.7.10",
+    "libsodium-wrappers-sumo": "0.7.10",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-is": "19.2.3",
+    "react-remove-scroll": "2.6.3",
+    "koa": "3.1.2",
+    "serialize-javascript": "7.0.5",
+    "tar-fs": "3.1.2",
+    "flatted": "3.4.2",
+    "fast-xml-parser": "5.7.0",
+    "minimatch": "9.0.7",
+    "eslint-plugin-import": {
+      "minimatch": "3.1.5"
+    },
+    "undici": "6.27.0",
+    "cheerio": {
+      "undici": "7.28.0"
+    },
+    "testcontainers": {
+      "undici": "7.28.0"
+    },
+    "cross-spawn": "7.0.6",
+    "tar": "7.5.16",
+    "protobufjs": "7.6.3",
+    "shell-quote": "1.8.4",
+    "tmp": "0.2.7",
+    "postcss": "8.5.10",
+    "qs": "6.15.3",
+    "form-data@^4": "4.0.6",
+    "@ledgerhq/react-native-hw-transport-ble": {
+      "uuid": "^11.1.1"
+    },
+    "xcode": {
+      "uuid": "^11.1.1"
+    },
+    "jayson": {
+      "uuid": "^11.1.1"
+    },
+    "@tootallnate/once": "2.0.1",
+    "@xmldom/xmldom": "0.8.13",
+    "@module-federation/dts-plugin": {
+      "ws": "8.21.0"
+    },
+    "vite": {
+      "esbuild": "0.28.1"
+    },
+    "tsx": {
+      "esbuild": "0.28.1"
+    },
+    "@nx/js": {
+      "picomatch": "4.0.4"
+    },
+    "@nx/rollup": {
+      "picomatch": "4.0.4"
+    },
+    "@nx/vite": {
+      "picomatch": "4.0.4"
+    },
+    "@nx/workspace": {
+      "picomatch": "4.0.4"
+    },
+    "@cardano-sdk/core": {
+      "ip-address": "10.2.0"
+    },
+    "@cardano-sdk/wallet": {
+      "uuid": "^11.1.1"
+    },
+    "@sentry/webpack-plugin": {
+      "uuid": "^11.1.1"
+    },
+    "graphql@^16": "16.13.0",
+    "@midnight-ntwrk/dapp-connector-api": "4.0.1",
+    "@midnight-ntwrk/ledger-v8": "8.1.0",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider@4.x": "4.0.2",
+    "@midnight-ntwrk/midnight-js-types@4.x": "4.0.2",
+    "@midnightntwrk/wallet-sdk": "1.2.0",
+    "@midnightntwrk/wallet-sdk-abstractions@2.x": "2.1.0",
+    "@midnightntwrk/wallet-sdk-address-format": "3.1.2",
+    "@midnightntwrk/wallet-sdk-indexer-client": "1.2.3",
+    "@midnightntwrk/wallet-sdk-utilities": "1.2.0"
+  }
+}

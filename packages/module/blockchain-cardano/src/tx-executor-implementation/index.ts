@@ -1,0 +1,49 @@
+import { makeBuildTx, makePreviewTx } from './build-tx';
+import { makeConfirmTx } from './confirm-tx';
+import { makeDiscardTx } from './discard-tx';
+import { makeSubmitTx } from './submit-tx';
+
+import type { AccountUtxoMap } from '@lace-contract/cardano-context';
+import type { MakeTxExecutorImplementation } from '@lace-contract/tx-executor';
+import type { Observable } from 'rxjs';
+
+export { makeBuildDelegationTx } from './build-delegation-tx';
+export { makeBuildDeregistrationTx } from './build-deregistration-tx';
+export { makeBuildVoteDelegationTx } from './build-vote-delegation-tx';
+export { makeBuildEarnRewardsTx } from './build-earn-rewards-tx';
+
+type StateObservablesWithAvailableAccountUtxos = {
+  cardanoContext?: {
+    selectAvailableAccountUtxos$?: Observable<AccountUtxoMap>;
+    selectCollateralOwnershipUtxos$?: Observable<AccountUtxoMap>;
+  };
+};
+
+export const makeTxExecutor =
+  (): MakeTxExecutorImplementation => (dependencies, stateObservables) => {
+    const cardanoAvailableAccountUtxos$ = (
+      stateObservables as StateObservablesWithAvailableAccountUtxos
+    )?.cardanoContext?.selectAvailableAccountUtxos$;
+    const cardanoCollateralOwnershipUtxos$ = (
+      stateObservables as StateObservablesWithAvailableAccountUtxos
+    )?.cardanoContext?.selectCollateralOwnershipUtxos$;
+    if (!cardanoAvailableAccountUtxos$ || !cardanoCollateralOwnershipUtxos$) {
+      throw new Error(
+        '[blockchain-cardano] makeTxExecutor requires cardanoContext.selectAvailableAccountUtxos$ and selectCollateralOwnershipUtxos$ state observables',
+      );
+    }
+    return {
+      blockchainName: 'Cardano',
+      buildTx: makeBuildTx(dependencies, cardanoAvailableAccountUtxos$),
+      previewTx: makePreviewTx(dependencies, cardanoAvailableAccountUtxos$),
+      confirmTx: makeConfirmTx(
+        dependencies,
+        cardanoAvailableAccountUtxos$,
+        cardanoCollateralOwnershipUtxos$,
+      ),
+      discardTx: makeDiscardTx(),
+      submitTx: makeSubmitTx(dependencies),
+    };
+  };
+
+export default makeTxExecutor;

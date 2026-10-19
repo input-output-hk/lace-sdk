@@ -1,0 +1,130 @@
+import type { Cardano, Serialization } from '@cardano-sdk/core';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519PublicKeyHex,
+} from '@cardano-sdk/crypto';
+import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type { HexBlob } from '@cardano-sdk/util';
+import type { AuthSecret } from '@lace-contract/authentication-prompt';
+import type {
+  DataSigner,
+  SignTransactionRequest,
+  SignTransactionResult,
+  SignerAuth,
+  SignerContext,
+  SignerFactory,
+  TransactionSigner,
+} from '@lace-contract/signer';
+import type { HexBytes } from '@lace-lib/util';
+
+/** Interface for Cardano key operations. */
+export interface CardanoKeyAgent {
+  /** Release any short-lived in-memory unlock material after the sign call. */
+  dispose?(): void;
+  /** Signs a transaction body and returns VKey witnesses. */
+  signTransaction(
+    txBody: Serialization.TransactionBody,
+    context: {
+      knownAddresses: GroupedAddress[];
+      utxo: Cardano.Utxo[];
+      /**
+       * Native scripts carried by the transaction. When provided, signature
+       * detection also matches their RequireSignature key hashes against the
+       * wallet's own credentials so a witness is produced for keys required
+       * only via a native script.
+       */
+      scripts?: Cardano.Script[];
+    },
+  ): Promise<Map<Ed25519PublicKeyHex, string>>;
+
+  /** Signs raw bytes with a derived key. */
+  signBlob(
+    derivationPath: { role: number; index: number },
+    blob: HexBlob,
+  ): Promise<{ signature: string; publicKey: string }>;
+}
+
+/** Creates a CardanoKeyAgent from wallet credentials. */
+export type CreateCardanoKeyAgent = (params: {
+  accountIndex: number;
+  chainId: Cardano.ChainId;
+  encryptedRootPrivateKey: HexBytes;
+  extendedAccountPublicKey: Bip32PublicKeyHex;
+  authSecret: AuthSecret;
+}) => Promise<CardanoKeyAgent>;
+
+/** Cardano signer context with knownAddresses. */
+export interface CardanoSignerContext extends SignerContext {
+  knownAddresses: GroupedAddress[];
+  auth: SignerAuth;
+}
+
+/** Extends CardanoSignerContext with UTXOs for input resolution. */
+export interface CardanoTransactionSignerContext extends CardanoSignerContext {
+  utxo: Cardano.Utxo[];
+  /**
+   * Resolves each collateral input to the output it spends, for the
+   * collateral-return ownership rule (LW-15390). Its local layer is the
+   * account's ownership UTxOs -- the FULL settled set, collateral-reserved
+   * UTxOs included, plus own pending outputs and whatever chained-transaction
+   * outputs the origin can see -- and, where the origin has a provider, the
+   * chain behind it. An input it cannot resolve is not the wallet's
+   * (LW-15506). Required, not optional, so every construction site decides it
+   * explicitly. Unrelated to `utxo` above, which serves key-path resolution.
+   */
+  collateralInputResolver: Cardano.InputResolver;
+}
+
+/** Transaction sign request. */
+export interface CardanoSignRequest extends SignTransactionRequest {}
+
+/** A signed Cardano transaction, ready for `submitCardanoTx`. */
+export interface CardanoSignResult extends SignTransactionResult {
+  /** How many witnesses signing added. */
+  signatureCount: number;
+}
+
+export type CardanoTransactionSigner = TransactionSigner<
+  CardanoSignRequest,
+  CardanoSignResult
+>;
+
+/** Data sign request. */
+export interface CardanoSignDataRequest {
+  signWith: Cardano.PaymentAddress | Cardano.RewardAccount;
+  payload: string;
+}
+
+export interface CardanoSignDataResult {
+  signature: HexBytes;
+  key: HexBytes;
+}
+
+export type CardanoDataSigner = DataSigner<
+  CardanoSignDataRequest,
+  CardanoSignDataResult
+>;
+
+/** Creates Cardano-specific transaction and data signers. */
+export interface CardanoSignerFactory extends SignerFactory {
+  createTransactionSigner(
+    context: CardanoTransactionSignerContext,
+  ): CardanoTransactionSigner;
+  createDataSigner(context: CardanoSignerContext): CardanoDataSigner;
+}
+
+/** Resolved wallet/account props for signer construction. */
+export interface CardanoSignerProps {
+  createKeyAgent: CreateCardanoKeyAgent;
+  accountIndex: number;
+  chainId: Cardano.ChainId;
+  extendedAccountPublicKey: Bip32PublicKeyHex;
+  encryptedRootPrivateKey: HexBytes;
+  knownAddresses: GroupedAddress[];
+  auth: SignerAuth;
+}
+
+/** Extends CardanoSignerProps with UTXOs. */
+export interface CardanoTransactionSignerProps extends CardanoSignerProps {
+  utxo: Cardano.Utxo[];
+}

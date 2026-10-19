@@ -1,0 +1,492 @@
+name: Publish release
+
+# Companion to the lace-platform publish workflow, for the Lace SDK's
+# standalone repository (ADR 66).
+#
+# Each SDK release reaches this repository as one commit on main, pushed by the
+# publishing App, whose message starts `release: lace-sdk@<version>`. Build the
+# package from that commit, check it against the versioning rules, publish it
+# to npmjs and GitHub Packages, then publish the corresponding draft GitHub
+# release against the commit. The release goes public last, so a release that
+# fails a check or a publish stays a draft and a re-run resumes it.
+#
+# Each release also publishes the SDK's Cardano packages (@laceio/cardano and
+# its hardware wallet packages, ADR 68) from the same commit, on the same
+# channel and with the same checks, at the release's version: the family
+# releases in lockstep, and lace-platform stamps the version into every
+# manifest of the pushed commit. A version npm already has must be this build
+# byte for byte.
+#
+# Only the App may update main (a ruleset), and only release managers may cut
+# the private release that makes it push, so a push here is the decision to
+# publish.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  # The package is built from the pushed public source, which installs from
+  # public registries only. The build runs dependency code, so it holds no
+  # credentials: it hands the two tarballs to publish-sdk, which runs no
+  # installed code. These jobs live in this workflow because a release
+  # published with GITHUB_TOKEN never triggers a separate on-release workflow.
+
+  build-sdk:
+    if: >
+      startsWith(github.event.head_commit.message, 'release: lace-sdk@')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+      NPM_PACKAGE: '@laceio/sdk'
+      GITHUB_PACKAGE: '@input-output-hk/lace-sdk'
+      # The SDK build and its declaration programs outgrow Node's default heap.
+      NODE_OPTIONS: '--max_old_space_size=8192'
+    outputs:
+      npm_tarball: ${{ steps.pack.outputs.npm_tarball }}
+      github_tarball: ${{ steps.pack.outputs.github_tarball }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # No package cache from an earlier run: the install resolves the
+      # lockfile against the public registries alone, so the build is of
+      # bytes that the release commit names.
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # Two channels (ADR 66): lace-sdk@X.Y.Z is the stable build on `latest`;
+      # lace-sdk@X.Y.Z-canary.N is the canary build on `canary`, a preview of
+      # the stable version X.Y.Z. lace-platform computes each release's
+      # version from its tags and stamps it into apps/lace-sdk/package.json,
+      # so the manifest names the release's version exactly.
+      - name: Resolve the channel from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          subject=${COMMIT_MESSAGE%%$'\n'*}
+          tag=${subject#release: }
+          stamped=$(node -p "require('./apps/lace-sdk/package.json').version")
+          version=${tag#lace-sdk@}
+          if [[ "$version" != "$stamped" ]]; then
+            echo "::error::release $tag does not match apps/lace-sdk/package.json, which names $stamped"
+            exit 1
+          fi
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            channel=stable
+            dist_tag=latest
+          elif [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]+$ ]]; then
+            channel=canary
+            dist_tag=canary
+          else
+            echo "::error::release $tag is neither lace-sdk@X.Y.Z nor lace-sdk@X.Y.Z-canary.N"
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "value=$version"
+            echo "channel=$channel"
+            echo "dist_tag=$dist_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+
+      - run: npm run build
+        env:
+          SDK_CHANNEL: ${{ steps.version.outputs.channel }}
+
+      # ADR 66's versioning rules, against the latest stable on npm. The
+      # private repo runs the same check before it mirrors; this is the last
+      # one before anything publishes.
+      - name: Check the versioning rules
+        run: node apps/lace-sdk/scripts/check-release.ts
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+
+      # The same build is packed twice, once per name: npmjs carries the SDK as
+      # @laceio/sdk, and GitHub Packages accepts only this repository owner's
+      # scope, so it carries the identical contents as @input-output-hk/lace-sdk.
+      # scripts/pack.mjs is the one way the package is packed: the developer
+      # site packs the same build with it, so it documents the published bytes.
+      - name: Pack for each registry
+        id: pack
+        run: |
+          set -euo pipefail
+          pack="apps/lace-sdk/scripts/pack.mjs"
+          echo "npm_tarball=$(node "$pack" --out "$RUNNER_TEMP/tarballs")" >> "$GITHUB_OUTPUT"
+          echo "github_tarball=$(node "$pack" --out "$RUNNER_TEMP/tarballs" --name "$GITHUB_PACKAGE")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sdk-tarballs
+          path: ${{ runner.temp }}/tarballs/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The Cardano packages, built from the same commit with no credentials.
+  # apps/lace-cardano/scripts/check-release.ts applies the versioning rules for
+  # the release's channel, refuses a version npm has unless this build is
+  # identical to it, and packs every package at the release's version under
+  # each registry's name.
+  build-cardano:
+    if: >
+      startsWith(github.event.head_commit.message, 'release: lace-sdk@')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - run: npm ci
+
+      - run: npm run build:cardano
+
+      - name: Check the versioning rules and pack what the release publishes
+        run: |
+          set -euo pipefail
+          subject=${COMMIT_MESSAGE%%$'\n'*}
+          RELEASE_TAG=${subject#release: } node apps/lace-cardano/scripts/check-release.ts
+        env:
+          RELEASE_TARBALLS: ${{ runner.temp }}/cardano-tarballs
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cardano-tarballs
+          path: ${{ runner.temp }}/cardano-tarballs/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Setup on this repo: environment npm-publish, deploying from main only; for
+  # the first npmjs publish only, its secret NPM_PUBLISH_TOKEN (publish rights
+  # in the @laceio npm org); afterwards npmjs trusted publishing (OIDC) for this
+  # workflow and environment replaces it. The GitHub Packages package
+  # @input-output-hk/lace-sdk must grant this repository write access; until
+  # it does, the repository variable GH_PACKAGES_PENDING=true lets a
+  # release skip that copy.
+  # Each publish job waits for both build jobs, so a release whose checks
+  # fail for any package publishes nothing and stays a draft.
+  publish-sdk:
+    needs: [build-sdk, build-cardano]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # npm's trusted publisher is bound to this environment, so only this job
+    # can mint a token npm accepts; it also holds NPM_PUBLISH_TOKEN.
+    environment: npm-publish
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      NPM_PACKAGE: '@laceio/sdk'
+      GITHUB_PACKAGE: '@input-output-hk/lace-sdk'
+      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      # npm only, for the publishes; nothing is installed and no lockfile is
+      # checked out, so no package cache.
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      # From the event, not from build-sdk's outputs: the build runs dependency
+      # code, so nothing it hands over decides what publishes.
+      - name: Resolve the release from the commit
+        id: release
+        run: |
+          set -euo pipefail
+          subject=${COMMIT_MESSAGE%%$'\n'*}
+          tag=${subject#release: }
+          version=${tag#lace-sdk@}
+          if [[ "$tag" != lace-sdk@* || ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-canary\.[0-9]+)?$ ]]; then
+            echo "::error::'$subject' does not name lace-sdk@X.Y.Z[-canary.N]"
+            exit 1
+          fi
+          dist_tag=latest
+          [[ "$version" == *-canary.* ]] && dist_tag=canary
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "DIST_TAG=$dist_tag" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sdk-tarballs
+          path: ${{ runner.temp }}/tarballs
+
+      # The build job runs dependency code, so each tarball is held to the name
+      # and version this release publishes before anything signs or publishes it.
+      # npm reads the manifest of whichever top-level directory unpacks last, so
+      # a tarball holding anything outside package/ is refused.
+      - name: Check each tarball's name and version
+        env:
+          NPM_TARBALL: ${{ runner.temp }}/tarballs/${{ needs.build-sdk.outputs.npm_tarball }}
+          GITHUB_TARBALL: ${{ runner.temp }}/tarballs/${{ needs.build-sdk.outputs.github_tarball }}
+        run: |
+          set -euo pipefail
+          check() {
+            local entries
+            entries=$(tar -tzf "$1")
+            if grep -v '^package/' <<<"$entries" >/dev/null; then
+              echo "::error::$(basename "$1") holds entries outside package/"
+              exit 1
+            fi
+            local manifest
+            manifest=$(tar -xzOf "$1" package/package.json)
+            local actual
+            # shellcheck disable=SC2016 # JavaScript's template literal, not the shell's
+            actual=$(node -e 'const m = JSON.parse(process.argv[1]); console.log(`${m.name}@${m.version}`)' "$manifest")
+            if [[ "$actual" != "$2@$VERSION" ]]; then
+              echo "::error::$(basename "$1") holds $actual, not $2@$VERSION"
+              exit 1
+            fi
+            echo "✓ $(basename "$1") is $actual"
+          }
+          check "$NPM_TARBALL" "$NPM_PACKAGE"
+          check "$GITHUB_TARBALL" "$GITHUB_PACKAGE"
+
+      - uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/tarballs/${{ needs.build-sdk.outputs.npm_tarball }}
+            ${{ runner.temp }}/tarballs/${{ needs.build-sdk.outputs.github_tarball }}
+
+      # Each publish names its scope's registry explicitly, so no .npmrc scope
+      # mapping can redirect it. Each skips a version already present, so a
+      # re-run after a partial failure completes the other registry.
+      - name: Publish to npmjs
+        env:
+          NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+          NPM_TARBALL: ${{ runner.temp }}/tarballs/${{ needs.build-sdk.outputs.npm_tarball }}
+        run: |
+          set -euo pipefail
+          registry=https://registry.npmjs.org
+          if [[ -n "$NPM_PUBLISH_TOKEN" ]]; then
+            echo "//registry.npmjs.org/:_authToken=${NPM_PUBLISH_TOKEN}" > "$RUNNER_TEMP/.npmrc-npmjs"
+          else
+            : > "$RUNNER_TEMP/.npmrc-npmjs"
+          fi
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc-npmjs"
+          if npm view "$NPM_PACKAGE@$VERSION" version --@laceio:registry=$registry >/dev/null 2>&1; then
+            echo "::notice::$NPM_PACKAGE@$VERSION is already on npmjs; skipping"
+            exit 0
+          fi
+          npm publish "$NPM_TARBALL" --provenance --access public --tag "$DIST_TAG" \
+            --@laceio:registry=$registry
+
+      # npmjs is the SDK's registry; GitHub Packages carries a copy. While the
+      # repository variable GH_PACKAGES_PENDING is `true`, a copy this
+      # repository may not write to (a package another repository created, not
+      # yet granted to this one) is skipped with a warning, so it never holds
+      # back a release that npmjs already has. Without the variable, a refused
+      # publish fails the job.
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TARBALL: ${{ runner.temp }}/tarballs/${{ needs.build-sdk.outputs.github_tarball }}
+          GH_PACKAGES_PENDING: ${{ vars.GH_PACKAGES_PENDING }}
+        run: |
+          set -euo pipefail
+          registry=https://npm.pkg.github.com
+          echo "//npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}" > "$RUNNER_TEMP/.npmrc-gpr"
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc-gpr"
+          if npm view "$GITHUB_PACKAGE@$VERSION" version --@input-output-hk:registry=$registry >/dev/null 2>&1; then
+            echo "::notice::$GITHUB_PACKAGE@$VERSION is already on GitHub Packages; skipping"
+            exit 0
+          fi
+          if ! out=$(npm publish "$GITHUB_TARBALL" --access public --tag "$DIST_TAG" \
+            --@input-output-hk:registry=$registry 2>&1); then
+            echo "$out"
+            if grep -qE 'E403|403 Forbidden|permission|not authorized' <<<"$out"; then
+              if [[ "$GH_PACKAGES_PENDING" == true ]]; then
+                echo "::warning::$GITHUB_PACKAGE is not writable from this repository; GitHub Packages was skipped because the repository variable GH_PACKAGES_PENDING is true. npmjs carries this release."
+                exit 0
+              fi
+              echo "::error::$GITHUB_PACKAGE is not writable from this repository. Grant the package write access to this repository, or set the repository variable GH_PACKAGES_PENDING to true while another repository still owns it."
+            fi
+            exit 1
+          fi
+          echo "$out"
+
+  # Publishes each Cardano package the release carries to each registry that
+  # does not have it yet, so a re-run after a partial publish completes it.
+  # Every release carries each package at the release's version, which its
+  # package.json names, on `latest` for a stable release and `canary` for a
+  # canary. What publishes is decided here from the tag and the release
+  # commit, not by build-cardano, which runs dependency code, and not by the
+  # registry, which only says what each still lacks: build-cardano's tarballs are
+  # only accepted when they hold exactly that name and version, and this job
+  # runs no npm command on their contents. The same environment, token and
+  # trusted publishing as publish-sdk; on GitHub Packages each package is
+  # @input-output-hk/<directory name>.
+  publish-cardano:
+    needs: [build-sdk, build-cardano]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-publish
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+    steps:
+      # The three manifests, read as data, and the planning script, which
+      # imports Node's built-ins alone; nothing is installed.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            apps/lace-cardano/package.json
+            apps/lace-cardano-ledger/package.json
+            apps/lace-cardano-trezor/package.json
+            apps/lace-cardano/scripts/release-plan.mjs
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cardano-tarballs
+          path: ${{ runner.temp }}/cardano-tarballs
+
+      # The domain layer first: the hardware wallet packages depend on it.
+      # Both tarballs of each package the release carries are held to the
+      # name and version it publishes.
+      - name: Resolve what publishes
+        id: plan
+        # apps/lace-cardano/scripts/release-plan.mjs: every package at the
+        # release's version, from the tag and the manifests alone; each publish
+        # step then asks the registry only whether it already has it, and a
+        # lookup that neither finds it nor gets E404 fails the step.
+        run: |
+          set -euo pipefail
+          subject=${COMMIT_MESSAGE%%$'\n'*}
+          RELEASE_TAG=${subject#release: } \
+            CARDANO_TARBALLS="$RUNNER_TEMP/cardano-tarballs" \
+            CARDANO_PLAN="$RUNNER_TEMP/cardano-plan" \
+            node apps/lace-cardano/scripts/release-plan.mjs plan
+
+      - uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        if: steps.plan.outputs.any == 'true'
+        with:
+          subject-path: ${{ steps.plan.outputs.subjects }}
+
+      - name: Publish to npmjs
+        if: steps.plan.outputs.any == 'true'
+        env:
+          NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          registry=https://registry.npmjs.org
+          if [[ -n "$NPM_PUBLISH_TOKEN" ]]; then
+            echo "//registry.npmjs.org/:_authToken=${NPM_PUBLISH_TOKEN}" > "$RUNNER_TEMP/.npmrc-npmjs"
+          else
+            : > "$RUNNER_TEMP/.npmrc-npmjs"
+          fi
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc-npmjs"
+          while read -r name version tarball _ _ dist_tag; do
+            # Fails the step unless the registry answers either way.
+            state=$(node apps/lace-cardano/scripts/release-plan.mjs exists "$name@$version" "$registry" </dev/null)
+            if [[ "$state" == present ]]; then
+              echo "::notice::$name@$version is already on npmjs; skipping"
+              continue
+            fi
+            npm publish "$tarball" --provenance --access public --tag "$dist_tag" \
+              --@laceio:registry=$registry </dev/null
+          done < "$RUNNER_TEMP/cardano-plan"
+
+      - name: Publish to GitHub Packages
+        if: steps.plan.outputs.any == 'true'
+        env:
+          GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PACKAGES_PENDING: ${{ vars.GH_PACKAGES_PENDING }}
+        run: |
+          set -euo pipefail
+          registry=https://npm.pkg.github.com
+          echo "//npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}" > "$RUNNER_TEMP/.npmrc-gpr"
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc-gpr"
+          while read -r _ version _ github_name github_tarball dist_tag; do
+            if ! state=$(node apps/lace-cardano/scripts/release-plan.mjs exists "$github_name@$version" "$registry" </dev/null 2>&1); then
+              echo "$state"
+              if [[ "$GH_PACKAGES_PENDING" == true ]]; then
+                echo "::warning::$github_name could not be read from this repository; skipped because GH_PACKAGES_PENDING is true. npmjs carries this release."
+                continue
+              fi
+              exit 1
+            fi
+            if [[ "$state" == present ]]; then
+              echo "::notice::$github_name@$version is already on GitHub Packages; skipping"
+              continue
+            fi
+            if ! out=$(npm publish "$github_tarball" --access public --tag "$dist_tag" \
+              --@input-output-hk:registry=$registry </dev/null 2>&1); then
+              echo "$out"
+              if grep -qE 'E403|403 Forbidden|permission|not authorized' <<<"$out" && [[ "$GH_PACKAGES_PENDING" == true ]]; then
+                echo "::warning::$github_name is not writable from this repository; skipped because GH_PACKAGES_PENDING is true. npmjs carries this release."
+                continue
+              fi
+              exit 1
+            fi
+            echo "$out"
+          done < "$RUNNER_TEMP/cardano-plan"
+
+  flip:
+    needs: [build-sdk, publish-sdk, build-cardano, publish-cardano]
+    # The release goes public once everything it publishes is out.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.publish-sdk.outputs.tag }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Look up the draft via the LIST endpoint (which returns
+          # drafts) rather than `gh release view <tag>` (which goes
+          # through /releases/tags/<tag> — that endpoint only returns
+          # published releases since drafts don't have a real git tag).
+          release_id=$(gh api --paginate "/repos/$GITHUB_REPOSITORY/releases" \
+            --jq "[.[] | select(.tag_name == \"$TAG\" and .draft == true)][0].id")
+
+          if [[ -z "$release_id" || "$release_id" == "null" ]]; then
+            echo "::error::no draft release found for tag '$TAG' (commit $RELEASE_SHA). Existing releases:"
+            gh api "/repos/$GITHUB_REPOSITORY/releases" \
+              --jq '.[] | "  tag=\(.tag_name) draft=\(.draft) published_at=\(.published_at // "(draft)")"'
+            exit 1
+          fi
+
+          # Point the draft at the release commit and publish it, which
+          # creates the tag there.
+          gh api -X PATCH "/repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false -f target_commitish="$RELEASE_SHA" > /dev/null
+          echo "Published $TAG (release id $release_id) at $RELEASE_SHA"

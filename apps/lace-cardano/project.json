@@ -1,0 +1,46 @@
+{
+  "name": "lace-cardano",
+  "projectType": "library",
+  "tags": ["scope:app"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/build.sh",
+        "cwd": "apps/lace-cardano"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*",
+        "{workspaceRoot}/packages/lib/cardano-*/src/**/*",
+        "{workspaceRoot}/packages/lib/util/src/common/**/*",
+        "{workspaceRoot}/tsconfig.base.json"
+      ],
+      "outputs": ["{projectRoot}/dist"]
+    },
+    "test": {
+      "description": "Integration tests of the release path (test/release.test.mjs): scripts/check-release.ts and scripts/release-plan.mjs against fixture packages, a directory standing in for npm and a local registry answering 404 or 503",
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/scripts/**/*",
+        "{projectRoot}/test/release.test.mjs",
+        "{workspaceRoot}/apps/lace-sdk/scripts/release-compat.ts"
+      ],
+      "options": {
+        "command": "node --test test/release.test.mjs",
+        "cwd": "apps/lace-cardano"
+      }
+    },
+    "type-check-src": {},
+    "lint": {},
+    "upstream-e2e": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash test/upstream-e2e.sh",
+        "cwd": "apps/lace-cardano"
+      },
+      "cache": false
+    }
+  }
+}

@@ -4,8 +4,7 @@ name: Close unsolicited PRs
 # Contributor PRs here can't flow back into real releases. This workflow
 # auto-closes any PR whose branch lives outside this repository, with a
 # comment pointing the author at the issue and discussion channels. A branch
-# inside it takes write access to push, so release PRs and maintainers' PRs
-# stay open.
+# inside it takes write access to push, so maintainers' PRs stay open.
 #
 # The `pull_request_target` trigger (vs `pull_request`) is required to
 # get write permissions for PRs from forks — that's where unsolicited
@@ -51,7 +50,7 @@ jobs:
             and attach your patch (inline diff, gist, or fork link).
           - 💬 Question or idea → [start a discussion](https://github.com/input-output-hk/lace-sdk/discussions).
           - 🤝 Larger or ongoing contribution → [open a contribution proposal](https://github.com/input-output-hk/lace-sdk/issues/new?template=contribution_proposal.yml).
-            We'll reach out to coordinate scope and access.
+            We reach out to coordinate scope and access.
 
           The issue forms and discussions are the right places to
           continue the conversation and coordinate any contribution.

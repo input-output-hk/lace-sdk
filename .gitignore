@@ -1,0 +1,116 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# IDE
+.idea
+.vscode
+.cursor
+.claude/worktrees
+.claude/workspaces
+.agents/worktrees
+.agents/workspaces
+.claude/*.lock
+
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# testing
+coverage
+apps/lace-mobile-storybook/allure-results
+apps/lace-mobile-storybook/allure-report
+
+# misc
+.DS_Store
+*.pem
+tmp
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# feature flags override files
+feature-flags.override.ts
+
+# dist files
+dist
+dist-web/
+dist-canary/
+apps/lace-sdk/tsconfig.dts-gen.generated.json
+dist-extension/
+dist-approval/
+dist-native/
+
+# cache
+.nx
+
+# tsc
+*.tsbuildinfo
+
+# storybook
+storybook-static
+**/lace-mobile-storybook-performance-reporter.log
+**/test-runner.log
+**/ctrf-report.json
+**/lace-mobile-storybook-performance-timings.json
+
+# nx
+.nx/cache
+.nx/workspace-data
+
+# Claude Code
+settings.local.json
+**/CLAUDE.local.md
+.osgrep/
+# per-run scratch for the triage-severity bulk pass (queue, assessments, plans)
+.claude/triage-run/
+
+# Expo
+node_modules/
+.expo/
+.yarn/
+dist/
+npm-debug.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+cache/
+apps/lace-mobile-e2e/artifacts
+# perf harness outputs: archived builds, raw traces, network fixtures, seeded profiles, machine-local canary history
+apps/lace-next/perfs/artifacts/
+apps/lace-next/perfs/extension/traces/
+apps/lace-next/perfs/extension/fixtures/
+apps/lace-next/perfs/extension/profiles/
+apps/lace-next/perfs/extension/canary-history.json
+.junie/
+/android/
+# expo prebuild output (scoped to apps so ci/android + ci/ios stay tracked)
+apps/*/android/
+apps/*/ios/
+# local expo modules are source (kotlin/swift), but their gradle output is not
+apps/*/modules/*/android/build/
+# …nor Gradle's own project cache/locks, which a local build creates beside it
+# (this omission is why `git add -A` swept apollo-crypto's .gradle/ into a
+# commit during LW-15041 T209)
+apps/*/modules/*/android/.gradle/
+
+# reassure perf-test output (baseline/current measurements + compare reports)
+.reassure/
+**/.gradle/
+
+# EAS local-signing file: carries plain-text signing passwords; CI writes it
+# on runners only — a local copy must never be committable.
+apps/lace-next/credentials.json
