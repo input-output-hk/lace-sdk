@@ -13,9 +13,11 @@
 //   node scripts/releases.mjs check                       refuse releases and tags that disagree
 //   node scripts/releases.mjs previous [--below X.Y.Z]    newest stable release (below X.Y.Z)
 //   node scripts/releases.mjs latest [--except TAG]       newest release, canary or stable (other than TAG)
+//   node scripts/releases.mjs reference --channel C [--except TAG]
+//                                                          the release a C release must differ from
 //   node scripts/releases.mjs stamp <root> <version>      stamp the family's manifests
 //
-// `previous` and `latest` print a tag, or nothing when there is none. The
+// `previous`, `latest` and `reference` print a tag, or nothing when there is none. The
 // releases come from LACE_SDK_RELEASES_FILE (as `fetch` writes it) when set,
 // otherwise from the GitHub API through `gh`, for GITHUB_REPOSITORY or the
 // checked-out repository.
@@ -186,7 +188,7 @@ export const previousStable = (releases, { below } = {}) =>
 
 /**
  * The release published last, canary or stable, or undefined before the
- * first: what a canary's changes count from. By publication, not version: a
+ * first: what a canary must contain. By publication, not version: a
  * stable release can ship below a canary's version (the stable release that
  * canary previewed past), and is then the newer of the two. Releases with the
  * same time, or none recorded, fall back to version order.
@@ -201,6 +203,19 @@ export const latestRelease = releases =>
         ) || a.order - b.order,
     )
     .at(-1)?.release;
+
+/**
+ * The release a new release of `channel` is compared with to find whether
+ * anything it ships changed: the latest of its own channel, by publication,
+ * since a release must never repeat the previous release of its channel. A
+ * stable release is held to the latest stable release and a canary to the
+ * latest canary, whatever the other channel released since. Undefined while
+ * the channel has no release: nothing could be identical, so it ships.
+ */
+export const changeReference = (releases, channel) =>
+  channel === 'canary'
+    ? latestRelease(releases.filter(({ canary }) => canary !== undefined))
+    : previousStable(releases);
 
 /**
  * The highest stable version a canary since the latest stable release
@@ -372,6 +387,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     allowPositionals: true,
     options: {
       below: { type: 'string' },
+      channel: { type: 'string' },
       except: { type: 'string' },
       out: { type: 'string' },
     },
@@ -401,12 +417,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       latestRelease(
         loadReleases().filter(release => release.tag !== values.except),
       )?.tag,
+    reference: () => {
+      if (values.channel !== 'stable' && values.channel !== 'canary') {
+        throw new Error('reference needs --channel stable or --channel canary');
+      }
+      return changeReference(
+        loadReleases().filter(release => release.tag !== values.except),
+        values.channel,
+      )?.tag;
+    },
     stamp: () => stampVersion(positionals[1], positionals[2]).join('\n'),
   };
   if (!Object.hasOwn(commands, command ?? '')) {
     // eslint-disable-next-line no-console -- usage
     console.error(
-      'usage: node scripts/releases.mjs fetch [--out <file>] | check | previous [--below X.Y.Z] | latest [--except TAG] | stamp <root> <version>',
+      'usage: node scripts/releases.mjs fetch [--out <file>] | check | previous [--below X.Y.Z] | latest [--except TAG] | reference --channel stable|canary [--except TAG] | stamp <root> <version>',
     );
     process.exit(2);
   }

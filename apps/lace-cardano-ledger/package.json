@@ -1,6 +1,6 @@
 {
   "name": "@laceio/cardano-ledger",
-  "version": "0.1.0",
+  "version": "0.1.1-canary.0",
   "private": false,
   "description": "Ledger hardware wallet signing for Cardano, over ledgerjs: the Ledger key agent of the Cardano domain layer Lace builds on.",
   "repository": {
@@ -32,7 +32,7 @@
   ],
   "dependencies": {
     "@cardano-foundation/ledgerjs-hw-app-cardano": "8.0.0",
-    "@laceio/cardano": "0.1.0",
+    "@laceio/cardano": "0.1.1-canary.0",
     "@ledgerhq/hw-transport": "6.35.5",
     "@ledgerhq/hw-transport-node-hid-noevents": "6.36.0",
     "@ledgerhq/hw-transport-webusb": "6.35.0",

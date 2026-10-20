@@ -25,6 +25,7 @@ import {
   bumpVersion,
   canaryBaseFloor,
   DEVELOPMENT_VERSION,
+  changeReference,
   latestRelease,
   nextCanaryNumber,
   parseReleaseTag,
@@ -308,6 +309,14 @@ describe('releases', () => {
     ).toBe('lace-sdk@0.1.1-canary.3');
   });
 
+  it("finds the release a new release must differ from: its own channel's latest", () => {
+    expect(changeReference(all, 'stable')?.tag).toBe('lace-sdk@0.10.0');
+    expect(changeReference(all, 'canary')?.tag).toBe('lace-sdk@0.2.0-canary.0');
+    // No canary yet: nothing a canary could repeat.
+    expect(changeReference(tags('lace-sdk@0.1.0'), 'canary')).toBeUndefined();
+    expect(changeReference([], 'stable')).toBeUndefined();
+  });
+
   it('numbers the next canary one past the highest of its version', () => {
     expect(nextCanaryNumber(all, '0.1.1')).toBe(2);
     expect(nextCanaryNumber(all, '0.2.0')).toBe(1);
@@ -511,6 +520,25 @@ describe('release scope', () => {
     );
     expect(renderNotes({ ref: undefined, changes: [] })).toBe(
       "## Changes\n\nThe SDK's first release.\n",
+    );
+  });
+
+  it('name the first canary and list the changes since the latest stable release', () => {
+    expect(
+      renderNotes({
+        ref: 'lace-sdk@0.1.0',
+        changes: [
+          { sha: 'a'.repeat(40), number: 12, title: 'feat: add a wallet' },
+        ],
+        firstCanary: true,
+      }),
+    ).toBe(
+      "## Changes\n\nThe SDK's first canary, with the changes since `lace-sdk@0.1.0`:\n- feat: add a wallet (#12)\n",
+    );
+    expect(
+      renderNotes({ ref: 'lace-sdk@0.1.0', changes: [], firstCanary: true }),
+    ).toBe(
+      "## Changes\n\nThe SDK's first canary, with the changes since `lace-sdk@0.1.0`: none, beyond the canary features\n",
     );
   });
 });

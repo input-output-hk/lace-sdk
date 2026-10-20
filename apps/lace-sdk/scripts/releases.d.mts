@@ -48,6 +48,10 @@ export const previousStable: (
 export const latestRelease: (
   releases: readonly ReleaseTag[],
 ) => ReleaseTag | undefined;
+export const changeReference: (
+  releases: readonly ReleaseTag[],
+  channel: 'canary' | 'stable',
+) => ReleaseTag | undefined;
 export const canaryBaseFloor: (
   releases: readonly ReleaseTag[],
 ) => string | undefined;

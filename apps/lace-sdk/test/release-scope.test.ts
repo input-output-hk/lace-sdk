@@ -641,16 +641,24 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
       execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
     /**
-     * A repository whose main has a stable release and two canaries, each on
-     * its own commit, with GitHub's records of them served by a stand-in
-     * `gh`; the step runs at `checkout` for `expect`.
+     * A repository whose main has `releases` (by default a stable release and
+     * two canaries), each on its own commit and published a day apart in
+     * that order, with GitHub's records of them served by a stand-in `gh`;
+     * the step runs at `checkout` (a release, or `main` for its tip) for
+     * `expect`.
      */
     const runStep = ({
       checkout,
       expect,
+      releases = [
+        'lace-sdk@0.1.0',
+        'lace-sdk@0.2.0-canary.1',
+        'lace-sdk@0.2.0-canary.2',
+      ],
     }: {
       checkout: string;
       expect: string;
+      releases?: readonly string[];
     }) => {
       const root = fs.mkdtempSync(
         path.join(os.tmpdir(), 'sdk-canary-follows-'),
@@ -675,11 +683,6 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
         git(repository, 'config', 'user.name', 'test');
         git(repository, 'config', 'commit.gpgsign', 'false');
         git(repository, 'config', 'tag.gpgsign', 'false');
-        const releases = [
-          'lace-sdk@0.1.0',
-          'lace-sdk@0.2.0-canary.1',
-          'lace-sdk@0.2.0-canary.2',
-        ];
         const shas: Record<string, string> = {};
         for (const tag of releases) {
           git(repository, 'add', '-A');
@@ -687,6 +690,7 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
           git(repository, 'tag', tag);
           shas[tag] = git(repository, 'rev-parse', 'HEAD');
         }
+        git(repository, 'commit', '-q', '--allow-empty', '-m', 'a change');
         const bin = path.join(root, 'bin');
         fs.mkdirSync(bin);
         fs.writeFileSync(
@@ -766,9 +770,66 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
         checkout: 'lace-sdk@0.2.0-canary.1',
         expect: '',
       });
+
       expect(result.passed).toBe(false);
       expect(result.output).toContain(
         'does not contain lace-sdk@0.2.0-canary.2',
+      );
+    });
+
+    const outputOf = (output: string, key: string) =>
+      new RegExp(`^${key}=(.*)$`, 'm').exec(output)?.[1];
+
+    it('counts a first canary from nothing, so it ships, with notes since the latest stable release', () => {
+      const result = runStep({
+        checkout: 'main',
+        expect: '',
+        releases: ['lace-sdk@0.1.0'],
+      });
+      expect(result.passed).toBe(true);
+      expect(outputOf(result.output, 'scope_ref')).toBe('');
+      expect(outputOf(result.output, 'first_canary')).toBe('true');
+      expect(outputOf(result.output, 'notes_ref')).toBe('lace-sdk@0.1.0');
+    });
+
+    it('counts a canary from the latest canary, at its commit or after it', () => {
+      for (const checkout of ['lace-sdk@0.2.0-canary.2', 'main']) {
+        const result = runStep({ checkout, expect: '' });
+        expect(result.passed).toBe(true);
+        expect(outputOf(result.output, 'scope_ref')).toBe(
+          'lace-sdk@0.2.0-canary.2',
+        );
+        expect(outputOf(result.output, 'notes_ref')).toBe(
+          'lace-sdk@0.2.0-canary.2',
+        );
+        expect(outputOf(result.output, 'first_canary')).toBe('false');
+      }
+    });
+
+    it('counts a canary from the latest canary when a stable release came since', () => {
+      const result = runStep({
+        checkout: 'main',
+        expect: '',
+        releases: [
+          'lace-sdk@0.1.0',
+          'lace-sdk@0.1.1-canary.0',
+          'lace-sdk@0.1.1',
+        ],
+      });
+      expect(result.passed).toBe(true);
+      expect(outputOf(result.output, 'previous_tag')).toBe('lace-sdk@0.1.1');
+      expect(outputOf(result.output, 'scope_ref')).toBe(
+        'lace-sdk@0.1.1-canary.0',
+      );
+    });
+
+    it("checks a canary's own release against the canary before it", () => {
+      const result = runStep({
+        checkout: 'lace-sdk@0.2.0-canary.2',
+        expect: 'lace-sdk@0.2.0-canary.2',
+      });
+      expect(outputOf(result.output, 'scope_ref')).toBe(
+        'lace-sdk@0.2.0-canary.1',
       );
     });
   },

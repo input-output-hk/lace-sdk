@@ -8,7 +8,7 @@
 // output.
 //
 //   node scripts/release-scope.ts changed [<ref>]                 JSON: { ref, ships, files }
-//   node scripts/release-scope.ts notes [<ref>] [--api <json>] [--out <file>]
+//   node scripts/release-scope.ts notes [<ref>] [--api <json>] [--first-canary] [--out <file>]
 //   node scripts/release-scope.ts public-notes --api <json> [--out <file>]
 //
 // `changed` says whether anything the SDK ships differs between <ref> (the
@@ -18,7 +18,9 @@
 // notes. `public-notes` writes the public ones from next-version.ts's result
 // alone: the version, the API section and where the docs and packages are,
 // with no pull request, commit or SHA. Without <ref>, before the
-// first release, everything ships and the notes name the first release.
+// first release of the channel, everything ships and the notes name the
+// first release; the first canary's notes take the latest stable release as
+// <ref> with --first-canary, and list the changes since it.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -481,10 +483,13 @@ export const renderNotes = ({
   ref,
   changes,
   api,
+  firstCanary = false,
 }: {
   ref: string | undefined;
   changes: readonly ShippedChange[];
   api?: NotesApi;
+  /** The first canary, whose changes count from the latest stable `ref`. */
+  firstCanary?: boolean;
 }): string => {
   const lines = ['## Changes', ''];
   const item = (change: ShippedChange) =>
@@ -495,6 +500,12 @@ export const renderNotes = ({
   const dependencies = changes.filter(change => change.dependencies);
   if (ref === undefined) {
     lines.push("The SDK's first release.");
+  } else if (firstCanary) {
+    lines.push(
+      `The SDK's first canary, with the changes since \`${ref}\`${
+        changes.length === 0 ? ': none, beyond the canary features' : ':'
+      }`,
+    );
   } else if (changes.length === 0) {
     lines.push(`No change to what the SDK ships since \`${ref}\`.`);
   } else if (code.length === 0) {
@@ -635,7 +646,11 @@ export const shippedPullRequests = (
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { api: { type: 'string' }, out: { type: 'string' } },
+    options: {
+      api: { type: 'string' },
+      out: { type: 'string' },
+      'first-canary': { type: 'boolean' },
+    },
   });
   const [command, ref] = positionals;
   const readApi = () =>
@@ -648,7 +663,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   ) {
     // eslint-disable-next-line no-console -- usage
     console.error(
-      'usage: node scripts/release-scope.ts changed [<ref>] | notes [<ref>] [--api <json>] [--out <file>] | public-notes --api <json> [--out <file>]',
+      'usage: node scripts/release-scope.ts changed [<ref>] | notes [<ref>] [--api <json>] [--first-canary] [--out <file>] | public-notes --api <json> [--out <file>]',
     );
     process.exit(2);
   }
@@ -671,6 +686,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         ref,
         changes: ref ? shippedPullRequests(ref) : [],
         api: readApi(),
+        firstCanary: values['first-canary'] === true,
       });
   if (values.out) fs.writeFileSync(values.out, result);
   process.stdout.write(result);

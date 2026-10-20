@@ -21,7 +21,10 @@ build() {
       # Global augmentations from another entry must not enter its declarations.
       find dist/.dts-work -mindepth 1 -maxdepth 1 ! -name bundled-contracts.json -exec rm -rf {} +
       ENTRY="$entry" node scripts/dts-gen-config.mjs
-      tsc -p tsconfig.dts-gen.generated.json
+      # The workspace's TypeScript, whatever tsc PATH holds: run directly,
+      # outside Nx and npm, PATH has no node_modules/.bin, and a runner's
+      # global tsc can be another major.
+      npx tsc -p tsconfig.dts-gen.generated.json
       npx rollup -c rollup.dts.config.mjs --environment "ENTRY:$entry"
     done
   )

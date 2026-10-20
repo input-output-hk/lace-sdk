@@ -2,7 +2,9 @@
 // (scripts/check-release.ts) and the publish job's plan
 // (scripts/release-plan.mjs), run as a release runs them, against fixture
 // packages packed by npm, a directory of tarballs standing in for npm, and a
-// local registry that answers 404 or 503.
+// local registry that answers 404 or 503. Nothing reads the real registry: a
+// check given no stand-in reads a local registry that has published nothing,
+// so the tests answer the same whatever npmjs holds.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,6 +27,37 @@ const npmEnvironment = () => ({
   npm_config_cache: temporary(),
   NPM_CONFIG_LOGLEVEL: 'error',
 });
+
+/**
+ * A local registry answering every request with `status` and `body`, in a
+ * process of its own: a lookup blocks this one while npm waits for it.
+ */
+const registry = (status, body = {}) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import http from 'node:http';
+const server = http.createServer((_request, response) => {
+  response.writeHead(${status}, { 'content-type': 'application/json' });
+  response.end(${JSON.stringify(JSON.stringify(body))});
+});
+server.listen(0, '127.0.0.1', () => process.stdout.write(server.address().port + '\\n'));`,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    child.once('error', reject);
+    child.stdout.once('data', port =>
+      resolve({ child, url: `http://127.0.0.1:${String(port).trim()}` }),
+    );
+  });
+
+// The registry a check reads when a test names none: it has published
+// nothing, as npmjs had before the first release.
+const unpublished = await registry(404);
+after(() => unpublished.child.kill());
 
 /** A tree holding the three packages at `version`, as the release check reads it. */
 const fixtureRoot = ({
@@ -69,6 +102,7 @@ const check = (root, tag, environment = {}) => {
       RELEASE_REPOSITORY_ROOT: root,
       RELEASE_TAG: tag,
       RELEASE_TARBALLS: out,
+      RELEASE_NPM_REGISTRY: unpublished.url,
       ...environment,
     },
   });
@@ -272,32 +306,6 @@ describe('the release check', () => {
     });
   });
 });
-
-/**
- * A local registry answering every request with `status` and `body`, in a
- * process of its own: a lookup blocks this one while npm waits for it.
- */
-const registry = (status, body = {}) =>
-  new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        `import http from 'node:http';
-const server = http.createServer((_request, response) => {
-  response.writeHead(${status}, { 'content-type': 'application/json' });
-  response.end(${JSON.stringify(JSON.stringify(body))});
-});
-server.listen(0, '127.0.0.1', () => process.stdout.write(server.address().port + '\\n'));`,
-      ],
-      { stdio: ['ignore', 'pipe', 'inherit'] },
-    );
-    child.once('error', reject);
-    child.stdout.once('data', port =>
-      resolve({ child, url: `http://127.0.0.1:${String(port).trim()}` }),
-    );
-  });
 
 describe('registry failures', () => {
   let notFound;
