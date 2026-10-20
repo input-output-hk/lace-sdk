@@ -14,8 +14,10 @@ import {
 import { sha256 } from '@lace-lib/crypto';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import { jubjub } from '@noble/curves/misc.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { pureCircuits } from '../../src/acc/acc-module';
 import { ISSUE_GRANT_CIRCUIT } from '../../src/acc/grant-circuits';
 import {
   assertIssueRules,
@@ -42,6 +44,13 @@ const GRANTEE_PUBLIC_KEY = HexBytes.fromByteArray(granteePk.toBytes());
 
 /** The identity (0, 1), compressed: y = 1 little-endian with x even. */
 const IDENTITY_PUBLIC_KEY = `01${'00'.repeat(31)}`;
+
+const K256_GRANTEE_SECRET = 0x5eed_c0ffeen;
+
+/** The 33-byte SEC1 compressed form an OWS secp256k1 key is supplied in. */
+const K256_GRANTEE_PUBLIC_KEY = HexBytes.fromByteArray(
+  secp256k1.Point.BASE.multiply(K256_GRANTEE_SECRET).toBytes(true),
+);
 
 /** The point (0, -1) of order two, compressed. */
 const ORDER_TWO_PUBLIC_KEY =
@@ -352,7 +361,10 @@ describe('granteePoint', () => {
   it('reads the compressed key back to its affine point', () => {
     const { x, y } = granteePk.toAffine();
 
-    expect(granteePoint(spendScope.grantee)).toEqual({ x, y });
+    expect(granteePoint(spendScope.grantee)).toEqual({
+      scheme: 'jubjub-schnorr',
+      point: { x, y },
+    });
   });
 
   it('rejects a key that is not 32 bytes of lowercase hex', () => {
@@ -388,5 +400,83 @@ describe('granteePoint', () => {
         new GrantScopeInvalidError('grantee public key has small order'),
       );
     }
+  });
+});
+
+describe('granteePoint for a secp256k1 grantee', () => {
+  it('decompresses the key to the point the contract computes for its secret', () => {
+    expect(
+      granteePoint({
+        scheme: 'secp256k1-ecdsa',
+        publicKey: K256_GRANTEE_PUBLIC_KEY,
+      }),
+    ).toEqual({
+      scheme: 'secp256k1-ecdsa',
+      point: pureCircuits.compute_public_point_with_k256(K256_GRANTEE_SECRET),
+    });
+  });
+
+  it('reads both parities of the compressed key', () => {
+    const even = secp256k1.Point.BASE.multiply(2n);
+    const odd = even.negate();
+
+    for (const point of [even, odd]) {
+      const { x, y } = point.toAffine();
+      expect(
+        granteePoint({
+          scheme: 'secp256k1-ecdsa',
+          publicKey: HexBytes.fromByteArray(point.toBytes(true)),
+        }),
+      ).toEqual({
+        scheme: 'secp256k1-ecdsa',
+        point: { x, y, identity: false },
+      });
+    }
+  });
+
+  it('rejects a key that is not a 33-byte compressed point as lowercase hex', () => {
+    for (const publicKey of [
+      K256_GRANTEE_PUBLIC_KEY.slice(2),
+      `04${K256_GRANTEE_PUBLIC_KEY.slice(2)}`,
+      K256_GRANTEE_PUBLIC_KEY.toUpperCase(),
+      HexBytes.fromByteArray(
+        secp256k1.Point.BASE.multiply(K256_GRANTEE_SECRET).toBytes(false),
+      ),
+    ]) {
+      expect(() =>
+        granteePoint({ scheme: 'secp256k1-ecdsa', publicKey }),
+      ).toThrow(
+        new GrantScopeInvalidError(
+          'grantee public key must be a 33-byte compressed secp256k1 point as lowercase hex',
+        ),
+      );
+    }
+  });
+
+  it('rejects a key that is not a point on the curve', () => {
+    for (const publicKey of [
+      `02${'00'.repeat(32)}`,
+      `03${'00'.repeat(31)}05`,
+      `02${'ff'.repeat(32)}`,
+    ]) {
+      expect(() =>
+        granteePoint({ scheme: 'secp256k1-ecdsa', publicKey }),
+      ).toThrow(
+        new GrantScopeInvalidError(
+          'grantee public key is not a point on the secp256k1 curve',
+        ),
+      );
+    }
+  });
+
+  it('rejects a scheme a grant cannot name', () => {
+    expect(() =>
+      granteePoint({
+        scheme: 'p256-ecdsa',
+        publicKey: K256_GRANTEE_PUBLIC_KEY,
+      } as never),
+    ).toThrow(
+      new GrantScopeInvalidError('unsupported grantee scheme "p256-ecdsa"'),
+    );
   });
 });

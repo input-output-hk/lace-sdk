@@ -16,6 +16,13 @@ import type {
 export type AuthScheme = 'jubjub-schnorr';
 
 /**
+ * Signature scheme of the key a grant is issued to: the Jubjub Schnorr
+ * scheme, or plain secp256k1 ECDSA over the SHA-256 digest of the
+ * challenge. A grantee scheme never authorises a device.
+ */
+export type GranteeScheme = 'jubjub-schnorr' | 'secp256k1-ecdsa';
+
+/**
  * A circuit call awaiting authorisation by a device key.
  */
 export interface AuthorisationRequest {
@@ -254,13 +261,14 @@ export type GrantObjectFields = {
 /**
  * What the owner keeps on chain about a grant it issued, beside what the
  * contract stores: the slot and salt the grant was issued under, the
- * grantee key, the object fields its commitment hides and, for a read
- * grant, the read key.
+ * grantee key and its scheme, the object fields its commitment hides and,
+ * for a read grant, the read key.
  */
 export type GrantBookkeeping = {
   grantId: GrantId;
   slot: GrantSlot;
   scopeSalt: GrantScopeSalt;
+  granteeScheme: GranteeScheme;
   granteePublicKey: string;
   readPublicKey?: string;
   object: GrantObjectFields;

@@ -13,6 +13,7 @@ export const NETWORK = 'undeployed';
 export const ACCOUNT_ADDRESS = 'ab'.repeat(32);
 export const GRANT_ID = GrantId('11'.repeat(32));
 export const GRANTEE_PUBLIC_KEY = '22'.repeat(32);
+export const SECP256K1_GRANTEE_PUBLIC_KEY = `02${'22'.repeat(32)}`;
 export const SCOPE_SALT = '33'.repeat(32);
 export const COLOR = '00'.repeat(32);
 export const RECIPIENT_VALUE = '44'.repeat(32);
@@ -49,6 +50,7 @@ export const grantRecord = (
   spentWindow: { start: 0, spent: '0' },
   opening: {
     scopeSalt: GrantScopeSalt(SCOPE_SALT),
+    granteeScheme: 'jubjub-schnorr',
     granteePublicKey: GRANTEE_PUBLIC_KEY,
     origin: 'lace.io',
     color: TokenColor(COLOR),

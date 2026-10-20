@@ -6,11 +6,13 @@ import {
   GrantOriginMissingError,
   GrantRevokedError,
   GrantRosterUnsettledError,
+  GrantScopeInvalidError,
   NotAuthorisedError,
   validateGrantScope,
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 
+import { GRANTEE_WITHDRAWAL_CIRCUITS } from '../acc/grant-circuits';
 import {
   originHash,
   prepareIssueGrant,
@@ -22,6 +24,7 @@ import { readGrants } from '../acc/read-grants';
 import {
   isNotAuthorisedAbort,
   queryAccountLedger,
+  queryAccountOperations,
   readAccountLedger,
   UNKNOWN_ENTRY_ABORT,
 } from './account-call';
@@ -63,6 +66,7 @@ import type {
   GrantId,
   GrantRecord,
   GrantScopeInput,
+  GranteeScheme,
   KeySessionFlow,
   PassportDevice,
 } from '@lace-contract/passport';
@@ -447,6 +451,34 @@ const runGrantCall = async ({
 };
 
 /**
+ * Refuses a grant its grantee could never spend: one naming a scheme
+ * whose withdrawals the account was deployed without. Installing them
+ * takes a maintenance update, which a locked account can no longer sign
+ * and an unlocked one no longer holds the key for, so the issue is
+ * refused before the owner is asked to authorise it.
+ *
+ * @throws {@link GrantScopeInvalidError} when a withdrawal of the
+ * grantee's scheme is not installed on the account.
+ */
+const requireGranteeWithdrawals = async (
+  indexer: IndexerClient,
+  address: string,
+  scheme: GranteeScheme,
+): Promise<void> => {
+  const installed = new Set(await queryAccountOperations(indexer, address));
+  const missing = GRANTEE_WITHDRAWAL_CIRCUITS[scheme].filter(
+    circuit => !installed.has(circuit),
+  );
+  if (missing.length > 0) {
+    throw new GrantScopeInvalidError(
+      `the account cannot serve a ${scheme} grantee, it lacks ${missing.join(
+        ', ',
+      )}`,
+    );
+  }
+};
+
+/**
  * Issues a scoped grant to an agent key. The scope is checked against the
  * rules the contract asserts before any prompt: a shielded operation
  * needs read, a read grant needs a canonical read public key, a rolling
@@ -513,6 +545,11 @@ export const issueGrant = async (
     account.address,
     seams.passportNetwork,
   );
+  await requireGranteeWithdrawals(
+    ledger.indexer,
+    account.address,
+    scope.grantee.scheme,
+  );
   const roster = readGrants(ledger.ledgerState);
   validateGrantScope(scope, {
     nowSeconds: nowSeconds(),
@@ -546,6 +583,7 @@ export const issueGrant = async (
         withStoredGrant(stored, grantId, {
           slot,
           scopeSalt,
+          granteeScheme: scope.grantee.scheme,
           granteePublicKey: scope.grantee.publicKey,
           origin: rpId,
           object,
@@ -561,6 +599,7 @@ export const issueGrant = async (
           grantId,
           slot,
           scopeSalt,
+          granteeScheme: scope.grantee.scheme,
           granteePublicKey: scope.grantee.publicKey,
           object,
           ...(readPublicKey === undefined ? {} : { readPublicKey }),

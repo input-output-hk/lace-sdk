@@ -24,6 +24,7 @@ import type {
   AccAddress,
   DeviceReader,
   GrantObjectFields,
+  GranteeScheme,
   GrantRecipient,
   GrantRecordPart,
 } from '@lace-contract/passport';
@@ -90,8 +91,30 @@ const REGISTRATION_KEY_INFO = encoder.encode(
 const RECORD_KEY_INFO = encoder.encode('lace:passport:grant-record:v1');
 const RECORD_TAG_KEY_INFO = encoder.encode('lace:passport:grant-record-tag:v1');
 
-/** The parts of a grant record, by the byte that leads its plaintext. */
-const RECORD_PARTS = ['grant', 'object', 'view'] as const;
+/**
+ * What the byte leading a grant record part's plaintext names: the part
+ * and, for a grant, the form of the key its 32-byte grantee field holds.
+ * A jubjub key fills the field whole. A secp256k1 key, a 33-byte
+ * compressed point, keeps its x coordinate in the field and its parity
+ * prefix in the part byte.
+ */
+type RecordPartKind =
+  | { part: 'grant'; granteeScheme: GranteeScheme; keyPrefix?: number }
+  | { part: 'object' }
+  | { part: 'view' };
+
+/**
+ * The kinds of grant record part, by the byte that leads its plaintext.
+ * The jubjub grant, object and view values come first, so the records
+ * written before secp256k1 grantees read back unchanged.
+ */
+const RECORD_PART_KINDS: readonly RecordPartKind[] = [
+  { part: 'grant', granteeScheme: 'jubjub-schnorr' },
+  { part: 'object' },
+  { part: 'view' },
+  { part: 'grant', granteeScheme: 'secp256k1-ecdsa', keyPrefix: 0x02 },
+  { part: 'grant', granteeScheme: 'secp256k1-ecdsa', keyPrefix: 0x03 },
+];
 
 /**
  * A Jubjub device public key in the compressed 32-byte form a device
@@ -602,29 +625,73 @@ const decodeRecipient = (bytes: Uint8Array): GrantRecipient | null => {
   return { kind, value: HexBytes.fromByteArray(value) };
 };
 
+/** The part byte of an object or a view part, which take one value each. */
+const partByteOf = (part: 'object' | 'view'): number =>
+  RECORD_PART_KINDS.findIndex(kind => kind.part === part);
+
+/** A grant record part that carries the grant itself. */
+type GrantPart = Extract<GrantRecordPart, { part: 'grant' }>;
+
+/**
+ * A grant part's 32-byte grantee field and the part byte naming its key
+ * form.
+ */
+type EncodedGrantee = { partByte: number; field: Uint8Array };
+
+/**
+ * The grantee field of a grant part and the part byte that names how it
+ * reads back, see {@link RecordPartKind}.
+ *
+ * @throws Error when the key is not in a form the record holds: a 32-byte
+ * jubjub key, or a 33-byte compressed secp256k1 key prefixed 02 or 03.
+ */
+const encodeGrantee = (part: GrantPart): EncodedGrantee => {
+  const key = hexBytes(part.granteePublicKey);
+  const keyPrefix =
+    part.granteeScheme === 'secp256k1-ecdsa' ? key[0] : undefined;
+  const field = keyPrefix === undefined ? key : key.subarray(1);
+  const partByte = RECORD_PART_KINDS.findIndex(
+    kind =>
+      kind.part === 'grant' &&
+      kind.granteeScheme === part.granteeScheme &&
+      kind.keyPrefix === keyPrefix,
+  );
+  if (partByte < 0 || field.length !== KEY_LENGTH) {
+    throw new Error(
+      `Grant record cannot carry this '${part.granteeScheme}' grantee key`,
+    );
+  }
+  return { partByte, field };
+};
+
 /**
  * The plaintext of one grant record part, 130 bytes: the part byte and
  * the grant id, then for a grant the slot, the scope salt, the grantee
- * key and the read key (zero for none); for an object the colour, the
+ * field and the read key (zero for none); for an object the colour, the
  * recipient kind and value, and the coin bound as a big-endian 128-bit
  * integer; for a view the leading bytes of `enc_key` and the 94-byte
- * seal; zero padding after.
+ * seal; zero padding after. The part byte of a grant also names the form
+ * of its grantee key, see {@link RecordPartKind}, and a grant part whose
+ * grantee the format cannot hold is refused before anything is written.
  */
 const encodeRecordPart = (part: GrantRecordPart): Uint8Array => {
   const plaintext = new Uint8Array(RECORD_PLAINTEXT_LENGTH);
-  plaintext[0] = RECORD_PARTS.indexOf(part.part);
   plaintext.set(hexBytes(part.grantId), 1);
   const body = 1 + KEY_LENGTH;
   switch (part.part) {
-    case 'grant':
+    case 'grant': {
+      const { partByte, field } = encodeGrantee(part);
+      plaintext[0] = partByte;
       plaintext[body] = part.slot;
       plaintext.set(hexBytes(part.scopeSalt), body + 1);
-      plaintext.set(hexBytes(part.granteePublicKey), body + 1 + KEY_LENGTH);
+      plaintext.set(field, body + 1 + KEY_LENGTH);
       if (part.readPublicKey !== undefined) {
         plaintext.set(hexBytes(part.readPublicKey), body + 1 + KEY_LENGTH * 2);
       }
       return plaintext;
+    }
     case 'object':
+      plaintext[0] = partByteOf(part.part);
       plaintext.set(hexBytes(part.object.color), body);
       plaintext.set(encodeRecipient(part.object.recipient), body + KEY_LENGTH);
       plaintext.set(
@@ -633,6 +700,7 @@ const encodeRecordPart = (part: GrantRecordPart): Uint8Array => {
       );
       return plaintext;
     case 'view':
+      plaintext[0] = partByteOf(part.part);
       plaintext.set(hexBytes(part.encKeyPrefix), body);
       plaintext.set(hexBytes(part.seal), body + ENC_KEY_PREFIX_LENGTH);
       return plaintext;
@@ -661,21 +729,26 @@ const decodeObject = (body: Uint8Array): GrantObjectFields | null => {
 
 /** Reads a grant record part back, or null for a plaintext no writer produces. */
 const decodeRecordPart = (plaintext: Uint8Array): GrantRecordPart | null => {
-  const part = RECORD_PARTS[plaintext[0]];
+  const kind = RECORD_PART_KINDS.at(plaintext[0]);
+  if (!kind) return null;
   const grantId = GrantId(HexBytes.fromByteArray(plaintext.slice(1, 33)));
   const body = plaintext.subarray(1 + KEY_LENGTH);
-  switch (part) {
+  switch (kind.part) {
     case 'grant': {
+      const field = body.subarray(1 + KEY_LENGTH, 1 + KEY_LENGTH * 2);
       const readKey = body.subarray(1 + KEY_LENGTH * 2);
       return {
-        part,
+        part: kind.part,
         grantId,
         slot: GrantSlot(body[0]),
         scopeSalt: GrantScopeSalt(
           HexBytes.fromByteArray(body.subarray(1, 1 + KEY_LENGTH)),
         ),
+        granteeScheme: kind.granteeScheme,
         granteePublicKey: HexBytes.fromByteArray(
-          body.subarray(1 + KEY_LENGTH, 1 + KEY_LENGTH * 2),
+          kind.keyPrefix === undefined
+            ? field
+            : concat(Uint8Array.of(kind.keyPrefix), field),
         ),
         ...(isZero(readKey)
           ? {}
@@ -684,11 +757,11 @@ const decodeRecordPart = (plaintext: Uint8Array): GrantRecordPart | null => {
     }
     case 'object': {
       const object = decodeObject(body);
-      return object && { part, grantId, object };
+      return object && { part: kind.part, grantId, object };
     }
     case 'view':
       return {
-        part,
+        part: kind.part,
         grantId,
         encKeyPrefix: HexBytes.fromByteArray(
           body.subarray(0, ENC_KEY_PREFIX_LENGTH),
@@ -700,8 +773,6 @@ const decodeRecordPart = (plaintext: Uint8Array): GrantRecordPart | null => {
           ),
         ),
       };
-    default:
-      return null;
   }
 };
 

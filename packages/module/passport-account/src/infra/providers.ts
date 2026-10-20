@@ -148,9 +148,11 @@ const createInMemoryPrivateStateProvider = () => {
  * - zkConfigProvider downloads ZK assets through {@link loadCircuitAssets},
  *   so every byte is verified against the manifest's sha256 pins. A
  *   verifier key asked for alone is downloaded alone, so deploying an
- *   account fetches no prover key it does not prove with. Circuits the
- *   manifest does not pin (the never-installed k256 arm) are skipped when
- *   verifier keys are listed.
+ *   account fetches no prover key it does not prove with. A circuit this
+ *   module never proves, such as a secp256k1 grant withdrawal, has no
+ *   manifest entry: its verifier key asked for alone is verified against
+ *   the contract's own expected pin, and it is skipped when verifier keys
+ *   are listed.
  * - proofProvider adapts the {@link PassportProver} to the ledger's
  *   circuit-level proving interface.
  * - walletProvider delegates balancing to the {@link FeeSponsor}; the user

@@ -12,7 +12,8 @@ import {
 } from '@lace-contract/passport';
 import { HexBytes } from '@lace-lib/util';
 import { jubjub } from '@noble/curves/misc.js';
-import { describe, expect, it } from 'vitest';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { pureCircuits } from '../../src/acc/acc-module';
 import {
@@ -23,6 +24,7 @@ import {
 import {
   circuitScope,
   deriveGrantId,
+  granteePoint,
   issueGrantBinding,
   originHash,
   prepareIssueGrant,
@@ -63,6 +65,14 @@ const grantee = new JubjubDevice(55n);
 const compress = (point: JubjubPoint): string =>
   HexBytes.fromByteArray(jubjub.Point.fromAffine(point).toBytes());
 
+const K256_GRANTEE_SECRET = 0x5eed_c0ffeen;
+const k256Grantee = {
+  scheme: 'secp256k1-ecdsa' as const,
+  publicKey: HexBytes.fromByteArray(
+    secp256k1.Point.BASE.multiply(K256_GRANTEE_SECRET).toBytes(true),
+  ),
+};
+
 const spendScope: GrantScopeInput = {
   grantee: { scheme: 'jubjub-schnorr', publicKey: compress(grantee.pk) },
   operations: ['withdraw-unshielded'],
@@ -99,13 +109,21 @@ const grantRecord = (id: GrantId, active = true): GrantRecord => ({
 const idAtSlot = (slot: number): GrantId =>
   deriveGrantId({
     contractAddress: CONTRACT_ADDRESS,
-    granteePublicKey: grantee.pk,
+    granteePublicKey: { scheme: 'jubjub-schnorr', point: grantee.pk },
     originHash: ORIGIN,
     slot: GrantSlot(slot),
   });
 
 const rosterAtSlots = (slots: number[]): GrantRecord[] =>
   slots.map(slot => grantRecord(idAtSlot(slot)));
+
+const k256IdAtSlot = (slot: number): GrantId =>
+  deriveGrantId({
+    contractAddress: CONTRACT_ADDRESS,
+    granteePublicKey: granteePoint(k256Grantee),
+    originHash: ORIGIN,
+    slot: GrantSlot(slot),
+  });
 
 describe('originHash', () => {
   it.each(Object.entries(EXPECTED_ORIGIN_HASHES))(
@@ -186,6 +204,37 @@ describe('deriveGrantId', () => {
   });
 });
 
+describe('deriveGrantId for a secp256k1 grantee', () => {
+  const k256Point =
+    pureCircuits.compute_public_point_with_k256(K256_GRANTEE_SECRET);
+  const k256CircuitId = (envelope: bigint): string =>
+    HexBytes.fromByteArray(
+      pureCircuits.derive_grant_id_with_k256(
+        { bytes: CONTRACT_ADDRESS },
+        k256Point,
+        envelope,
+        ORIGIN,
+        3n,
+      ),
+    );
+
+  it('matches the contract pure circuit under the plain ECDSA envelope', () => {
+    expect(k256IdAtSlot(3)).toBe(k256CircuitId(0n));
+  });
+
+  it('is not the id of the same key under another envelope', () => {
+    expect(k256IdAtSlot(3)).not.toBe(k256CircuitId(1n));
+  });
+
+  it('is not the id a jubjub grantee derives at the same slot', () => {
+    expect(k256IdAtSlot(3)).not.toBe(idAtSlot(3));
+  });
+
+  it('differs per slot', () => {
+    expect(k256IdAtSlot(0)).not.toBe(k256IdAtSlot(1));
+  });
+});
+
 describe('prepareIssueGrant slot allocation', () => {
   const allocate = (roster: GrantRecord[]) =>
     prepareIssueGrant({
@@ -211,7 +260,7 @@ describe('prepareIssueGrant slot allocation', () => {
     const other = new JubjubDevice(56n);
     const foreign = deriveGrantId({
       contractAddress: CONTRACT_ADDRESS,
-      granteePublicKey: other.pk,
+      granteePublicKey: { scheme: 'jubjub-schnorr', point: other.pk },
       originHash: ORIGIN,
       slot: GrantSlot(0),
     });
@@ -252,6 +301,53 @@ describe('prepareIssueGrant slot allocation', () => {
     expect(allocateKey(`01${'00'.repeat(31)}`)).toThrow(
       new GrantScopeInvalidError('grantee public key has small order'),
     );
+  });
+});
+
+describe('prepareIssueGrant slot allocation for a secp256k1 grantee', () => {
+  const k256Scope: GrantScopeInput = { ...spendScope, grantee: k256Grantee };
+  const allocate = (roster: GrantRecord[], scope = k256Scope) =>
+    prepareIssueGrant({
+      contractAddress: CONTRACT_ADDRESS,
+      scope,
+      originHash: ORIGIN,
+      roster,
+    });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('allocates the first slot without an active grant and derives its k256 id', () => {
+    const roster = [0, 1, 3].map(slot => grantRecord(k256IdAtSlot(slot)));
+
+    const preparation = allocate(roster);
+
+    expect(preparation.slot).toBe(2);
+    expect(preparation.grantId).toBe(k256IdAtSlot(2));
+  });
+
+  it('does not count the grants of a jubjub grantee as taken', () => {
+    expect(allocate(rosterAtSlots([0, 1])).slot).toBe(0);
+  });
+
+  it('rejects a key that is not a point before any circuit is evaluated', () => {
+    const derive = vi.spyOn(pureCircuits, 'derive_grant_id_with_k256');
+
+    expect(() =>
+      allocate([], {
+        ...k256Scope,
+        grantee: {
+          scheme: 'secp256k1-ecdsa',
+          publicKey: `02${'00'.repeat(32)}`,
+        },
+      }),
+    ).toThrow(
+      new GrantScopeInvalidError(
+        'grantee public key is not a point on the secp256k1 curve',
+      ),
+    );
+    expect(derive).not.toHaveBeenCalled();
   });
 });
 

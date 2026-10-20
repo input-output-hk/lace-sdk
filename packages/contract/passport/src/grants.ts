@@ -1,6 +1,6 @@
 import { GrantLimitReachedError, GrantScopeInvalidError } from './errors';
 
-import type { AuthScheme } from './types';
+import type { GranteeScheme } from './types';
 import type {
   GrantId,
   GrantScopeSalt,
@@ -18,6 +18,48 @@ const DECIMAL_PATTERN = /^\d+$/;
 const BYTES32_HEX_PATTERN = /^[0-9a-f]{64}$/;
 const UINT128_MAX = (1n << 128n) - 1n;
 const BYTE_BITS = 8n;
+
+/**
+ * A 33-byte SEC1 compressed secp256k1 key as lowercase hex, prefixed
+ * 02 or 03: the form a secp256k1 grantee key takes.
+ */
+export const SECP256K1_COMPRESSED_HEX_PATTERN = /^0[23][0-9a-f]{64}$/;
+
+/** The form a grantee key takes under each scheme a grant can name. */
+const GRANTEE_KEY_FORMS: Record<
+  GranteeScheme,
+  { pattern: RegExp; description: string }
+> = {
+  'jubjub-schnorr': {
+    pattern: BYTES32_HEX_PATTERN,
+    description: '32 bytes as lowercase hex',
+  },
+  'secp256k1-ecdsa': {
+    pattern: SECP256K1_COMPRESSED_HEX_PATTERN,
+    description: 'a 33-byte compressed secp256k1 point as lowercase hex',
+  },
+};
+
+/** The grantee schemes a grant can name. */
+export const GRANTEE_SCHEMES = Object.keys(
+  GRANTEE_KEY_FORMS,
+) as readonly GranteeScheme[];
+
+/** Whether `value` is one of the {@link GRANTEE_SCHEMES}. */
+export const isGranteeScheme = (value: unknown): value is GranteeScheme =>
+  GRANTEE_SCHEMES.some(scheme => scheme === value);
+
+/**
+ * Whether `value` is a grantee key in the form `scheme` takes: a jubjub
+ * key as 32-byte lowercase hex, a secp256k1 key as the 33-byte compressed
+ * point prefixed 02 or 03. Whether a secp256k1 key is a point on the
+ * curve is checked where the key is decoded.
+ */
+export const isGranteeKey = (
+  scheme: GranteeScheme,
+  value: unknown,
+): value is string =>
+  typeof value === 'string' && GRANTEE_KEY_FORMS[scheme].pattern.test(value);
 
 /** The prime of Curve25519, the bound a canonical X25519 encoding stays under. */
 const CURVE25519_PRIME = (1n << 255n) - 19n;
@@ -64,9 +106,13 @@ export type GrantRecipient =
 
 /**
  * The key a grant is issued to: its signature scheme, and the grantee
- * public key as hex.
+ * public key as lowercase hex. A Jubjub Schnorr key is 32 bytes; a
+ * secp256k1 ECDSA key is the 33-byte SEC1 compressed point, prefixed 02
+ * or 03.
  */
-export type GrantGrantee = { scheme: AuthScheme; publicKey: string };
+export type GrantGrantee =
+  | { scheme: 'jubjub-schnorr'; publicKey: string }
+  | { scheme: 'secp256k1-ecdsa'; publicKey: string };
 
 /**
  * Rolling spend limit: no more than `cap` within any `lengthSeconds`
@@ -145,14 +191,15 @@ export type GrantSpentWindow = { start: number; spent: string };
 /**
  * What the owner keeps about a grant it issued, because the contract holds
  * only commitments to it: the salt those commitments hide under, the
- * grantee key and the relying party id the grant id was derived from, the
- * object fields the commitment hides and, for a read grant, the sealed
- * viewing secret. With the grant's slot and the limits the contract
- * stores in the clear, it is everything the grantee needs to act under
- * the grant.
+ * grantee key with its scheme, the relying party id the grant id was
+ * derived from, the object fields the commitment hides and, for a read
+ * grant, the sealed viewing secret. With the grant's slot and the limits
+ * the contract stores in the clear, it is everything the grantee needs to
+ * act under the grant.
  */
 export type GrantOpening = {
   scopeSalt: GrantScopeSalt;
+  granteeScheme: GranteeScheme;
   granteePublicKey: string;
   origin: string;
   color: TokenColor;
@@ -189,6 +236,26 @@ const requireBytes32Hex = (field: string, value: string): void => {
   if (!BYTES32_HEX_PATTERN.test(value)) {
     throw new GrantScopeInvalidError(
       `${field} must be 32 bytes as lowercase hex`,
+    );
+  }
+};
+
+/**
+ * Holds a grantee key to the encoding its scheme takes, see
+ * {@link isGranteeKey}.
+ *
+ * @throws {@link GrantScopeInvalidError} when the key is malformed for its
+ * scheme, or the scheme is not one a grant can name.
+ */
+const requireGranteeKey = ({ scheme, publicKey }: GrantGrantee): void => {
+  if (!isGranteeScheme(scheme)) {
+    throw new GrantScopeInvalidError(
+      `unsupported grantee scheme "${String(scheme)}"`,
+    );
+  }
+  if (!isGranteeKey(scheme, publicKey)) {
+    throw new GrantScopeInvalidError(
+      `grantee public key must be ${GRANTEE_KEY_FORMS[scheme].description}`,
     );
   }
 };
@@ -257,7 +324,8 @@ const parseUint128 = (field: string, value: string): bigint => {
  * @throws {@link GrantLimitReachedError} when the account already holds
  * MAX_GRANTS active grants.
  * @throws {@link GrantScopeInvalidError} when the scope breaks a rule: no
- * operation, a malformed key, recipient or caller, a malformed amount, a cap
+ * operation, an unknown grantee scheme, a grantee key malformed for its
+ * scheme, a malformed recipient or caller, a malformed amount, a cap
  * below the per-call cap, an expiry that is not a whole second in the future,
  * a rolling window, which a JavaScript caller can still pass, a read grant
  * without an rp id, or a read grant without a canonical, large-order read
@@ -275,7 +343,7 @@ export const validateGrantScope = (
     );
   }
 
-  requireBytes32Hex('grantee public key', scope.grantee.publicKey);
+  requireGranteeKey(scope.grantee);
   if (scope.recipient.kind !== 'any') {
     requireBytes32Hex('recipient value', scope.recipient.value);
   }

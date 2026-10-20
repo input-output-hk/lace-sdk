@@ -61,6 +61,7 @@ type AccountSimProps = {
   contract: InstanceType<typeof Contract>;
   state: ChargedState;
   coinPublicKey: CoinPublicKey;
+  operations?: readonly string[];
 };
 
 type CreateAccountSimOptions = {
@@ -68,6 +69,11 @@ type CreateAccountSimOptions = {
   encKey?: Uint8Array;
   /** The initial device's scalar; random by default. */
   scalar?: bigint;
+  /**
+   * The operations the contract state reports verifier keys for; every
+   * impure circuit by default. The sim runs any circuit regardless.
+   */
+  operations?: readonly string[];
 };
 
 export class AccountSim {
@@ -80,6 +86,7 @@ export class AccountSim {
   private readonly contract: InstanceType<typeof Contract>;
   private readonly circuits: Record<string, ImpureCircuit>;
   private readonly coinPublicKey: CoinPublicKey;
+  private readonly operations: readonly string[];
 
   private constructor({
     addressHex,
@@ -87,6 +94,7 @@ export class AccountSim {
     contract,
     state,
     coinPublicKey,
+    operations,
   }: AccountSimProps) {
     this.addressHex = addressHex;
     this.scalar = scalar;
@@ -100,12 +108,14 @@ export class AccountSim {
     >;
     this.state = state;
     this.coinPublicKey = coinPublicKey;
+    this.operations = operations ?? Object.keys(this.circuits);
   }
 
   /** Deploys and activates an account whose initial device is the sim's. */
   public static async create({
     encKey = crypto.getRandomValues(new Uint8Array(ENC_KEY_LENGTH)),
     scalar = randomJubjubScalar(),
+    operations,
   }: CreateAccountSimOptions = {}): Promise<AccountSim> {
     const device = new JubjubDevice(scalar);
     const contract = new Contract<PrivateState>(witnesses);
@@ -127,6 +137,7 @@ export class AccountSim {
       contract,
       state: deployed.currentContractState.data,
       coinPublicKey,
+      operations,
     });
     await sim.call('activate_initial_device_with_jubjub', device.pk, salt);
     return sim;
@@ -144,6 +155,7 @@ export class AccountSim {
       contract: this.contract,
       state: this.state,
       coinPublicKey: this.coinPublicKey,
+      operations: this.operations,
     });
   }
 
@@ -179,8 +191,11 @@ export class AccountSim {
   }
 
   /** The contract state as an indexer would serve it. */
-  public contractState(): { data: ChargedState } {
-    return { data: this.state };
+  public contractState(): {
+    data: ChargedState;
+    operations: () => string[];
+  } {
+    return { data: this.state, operations: () => [...this.operations] };
   }
 
   /** The found-contract handle shape, over every circuit of the contract. */

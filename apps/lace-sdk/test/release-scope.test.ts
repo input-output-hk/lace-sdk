@@ -720,7 +720,6 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
               PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
               CHANNEL: 'canary',
               EXPECT: expect,
-              ENFORCE: 'true',
               REQUIRE_MAIN: 'false',
               CREATE_RELEASE: 'false',
               GH_TOKEN: '',

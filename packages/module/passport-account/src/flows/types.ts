@@ -3,6 +3,7 @@ import type {
   PendingDeployment,
 } from '../acc/pending-deployment';
 import type {
+  GranteeScheme,
   GrantObjectFields,
   GrantRecord,
   PassportAccountInfo,
@@ -18,14 +19,19 @@ export type {
 /**
  * What the owner keeps about one grant it issued, because the contract
  * stores neither: the slot the grant id was derived under and the salt
- * its commitments hide under, with the grantee key and the origin the
- * id was derived from. The salt is what opens the grant for its grantee,
- * so it lives only inside the sealed record.
+ * its commitments hide under, with the grantee key, its scheme and the
+ * origin the id was derived from. The salt is what opens the grant for
+ * its grantee, so it lives only inside the sealed record.
  */
 export type StoredGrant = {
   slot: number;
   /** 32 bytes as lowercase hex. */
   scopeSalt: string;
+  /**
+   * The signature scheme of the grantee key. Absent from an entry written
+   * before the scheme was kept, which names a jubjub key.
+   */
+  granteeScheme?: GranteeScheme;
   /** The grantee public key as the scope named it. */
   granteePublicKey: string;
   /** The relying party id the grant's origin hash was computed from. */
@@ -38,6 +44,14 @@ export type StoredGrant = {
   /** The viewing capability of a read grant. Absent from a spend-only grant. */
   view?: StoredGrantView;
 };
+
+/**
+ * The scheme of a stored grant's grantee key: the one it kept, or jubjub
+ * for an entry written before the scheme was kept.
+ */
+export const storedGranteeScheme = (
+  grant: Pick<StoredGrant, 'granteeScheme'>,
+): GranteeScheme => grant.granteeScheme ?? 'jubjub-schnorr';
 
 /**
  * What the owner keeps about the viewing capability a read grant holds:

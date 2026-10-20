@@ -14,6 +14,7 @@ import { x25519 } from '@noble/curves/ed25519.js';
 import { jubjub } from '@noble/curves/misc.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { pureCircuits } from '../../src/acc/acc-module';
 import {
   APPEND_INBOX_CIRCUIT,
   ROTATE_ENC_KEY_CIRCUIT,
@@ -53,6 +54,8 @@ import { isLiveSecret, openGrantViewSeal } from '../acc/view-seal-reference';
 import {
   ACCOUNT,
   CONTRACT_ADDRESS,
+  K256_GRANTEE_SECRET,
+  k256SpendScope,
   prepareIssueGrantFlow,
   READ_PUBLIC_KEY,
   READ_SECRET,
@@ -1106,6 +1109,86 @@ describe('createPassportSignerHandlers', () => {
                 grantee: {
                   scheme: 'jubjub-schnorr',
                   publicKey: HexBytes(`01${'00'.repeat(31)}`),
+                },
+              },
+            },
+          },
+          DAPP_ORIGIN,
+        ),
+      ).rejects.toThrow(GrantScopeInvalidError);
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    it('signs the issue of a secp256k1 grant whose id derives under the k256 arm with the plain ECDSA envelope', async () => {
+      const { flow, args } = await prepareIssueGrantFlow(
+        DAPP_HOSTNAME,
+        k256SpendScope,
+      );
+      const { get, handlers } = await setupSeededInSession(flow, DAPP_ORIGIN);
+
+      expect(flow.grantId).toBe(
+        HexBytes.fromByteArray(
+          pureCircuits.derive_grant_id_with_k256(
+            { bytes: CONTRACT_ADDRESS },
+            pureCircuits.compute_public_point_with_k256(K256_GRANTEE_SECRET),
+            0n,
+            await originHash(DAPP_HOSTNAME),
+            BigInt(flow.slot),
+          ),
+        ),
+      );
+      await expect(
+        handlers.authorise(issueAuthorisation(args), DAPP_ORIGIN),
+      ).resolves.toMatchObject({ scheme: 'jubjub-schnorr' });
+      await handlers['flow-close'](FLOW_COMPLETED);
+      expect(get).toHaveBeenCalledOnce();
+    });
+
+    it('refuses a secp256k1 grant id derived for a jubjub grantee or under another envelope before any ceremony', async () => {
+      const k256 = await prepareIssueGrantFlow(DAPP_HOSTNAME, k256SpendScope);
+      const jubjub = await prepareIssueGrantFlow(DAPP_HOSTNAME);
+      const { get, handlers } = setup();
+      const mismatch = new GrantBindingMismatchError('grantId');
+      const otherEnvelopeId = HexBytes.fromByteArray(
+        pureCircuits.derive_grant_id_with_k256(
+          { bytes: CONTRACT_ADDRESS },
+          pureCircuits.compute_public_point_with_k256(K256_GRANTEE_SECRET),
+          1n,
+          await originHash(DAPP_HOSTNAME),
+          BigInt(k256.flow.slot),
+        ),
+      );
+
+      for (const flow of [
+        { ...k256.flow, grantId: jubjub.flow.grantId },
+        { ...k256.flow, grantId: otherEnvelopeId },
+        { ...jubjub.flow, grantId: k256.flow.grantId },
+        { ...jubjub.flow, scope: k256SpendScope },
+      ]) {
+        await expect(
+          handlers['flow-open']({ flow }, DAPP_ORIGIN),
+        ).rejects.toThrow(mismatch);
+      }
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    it('refuses a secp256k1 grantee key off the curve before any ceremony', async () => {
+      const { flow } = await prepareIssueGrantFlow(
+        DAPP_HOSTNAME,
+        k256SpendScope,
+      );
+      const { get, handlers } = setup();
+
+      await expect(
+        handlers['flow-open'](
+          {
+            flow: {
+              ...flow,
+              scope: {
+                ...k256SpendScope,
+                grantee: {
+                  scheme: 'secp256k1-ecdsa',
+                  publicKey: HexBytes(`02${'00'.repeat(32)}`),
                 },
               },
             },
@@ -2981,6 +3064,7 @@ describe('account key sessions', () => {
       grantId: 'ab'.repeat(32) as GrantId,
       slot: GrantSlot(0),
       scopeSalt: '22'.repeat(32) as never,
+      granteeScheme: 'jubjub-schnorr',
       granteePublicKey: spendScope.grantee.publicKey,
       object: {
         color: spendScope.color,
@@ -3016,6 +3100,7 @@ describe('account key sessions', () => {
       grantId,
       slot: flow.slot,
       scopeSalt: flow.scopeSalt,
+      granteeScheme: 'jubjub-schnorr' as const,
       granteePublicKey: spendScope.grantee.publicKey,
       object: {
         color: spendScope.color,
@@ -3071,6 +3156,7 @@ describe('account key sessions', () => {
       grantId: flow.grantId,
       slot: flow.slot,
       scopeSalt: flow.scopeSalt,
+      granteeScheme: 'jubjub-schnorr',
       granteePublicKey: spendScope.grantee.publicKey,
       object: {
         color: spendScope.color,
@@ -3148,6 +3234,117 @@ describe('account key sessions', () => {
       entries.map(entry => ByteArray.fromHex(HexBytes(entry))),
     );
     expect(opened.map(entry => entry?.kind)).toEqual(['grant', 'grant']);
+  });
+
+  it('answers a sign-in the grant records of a secp256k1 grant only when its id derives under the scheme its grant part names', async () => {
+    const { handlers, keySource } = setup();
+    const keys = await drawAccountKeys(handlers);
+    const local = createPasskeyEncryptionKey(keySource);
+    const k256 = await prepareIssueGrantFlow(DAPP_HOSTNAME, k256SpendScope);
+    const jubjub = await prepareIssueGrantFlow(DAPP_HOSTNAME);
+    const bookkeepingOf = (grantId: GrantId) => ({
+      grantId,
+      slot: k256.flow.slot,
+      scopeSalt: k256.flow.scopeSalt,
+      granteeScheme: 'secp256k1-ecdsa' as const,
+      granteePublicKey: k256SpendScope.grantee.publicKey,
+      object: {
+        color: k256SpendScope.color,
+        recipient: k256SpendScope.recipient,
+        maxCoinValue: k256SpendScope.maxCoinValue,
+      },
+    });
+    const hexOf = (entries: Uint8Array[]) =>
+      entries.map(entry => HexBytes.fromByteArray(entry));
+    const entries = [
+      ...hexOf(
+        await local.sealGrant(
+          NETWORK_ID,
+          ACCOUNT,
+          bookkeepingOf(k256.flow.grantId),
+        ),
+      ),
+      ...hexOf(
+        await local.sealGrant(
+          NETWORK_ID,
+          ACCOUNT,
+          bookkeepingOf(jubjub.flow.grantId),
+        ),
+      ),
+    ];
+
+    await handlers['flow-open']({ flow: { kind: 'sign-in' } }, DAPP_ORIGIN);
+    const shown = (await handlers['open-inbox'](
+      { networkId: NETWORK_ID, keyring: keyringOf(keys), entries },
+      DAPP_ORIGIN,
+    )) as ({
+      kind: string;
+      record?: { part: string; granteeScheme?: string };
+    } | null)[];
+    await handlers['flow-close'](FLOW_COMPLETED);
+
+    expect(shown.map(entry => entry?.record?.part ?? null)).toEqual([
+      'grant',
+      'object',
+      null,
+      null,
+    ]);
+    expect(shown[0]?.record?.granteeScheme).toBe('secp256k1-ecdsa');
+  });
+
+  it('refuses to seal bookkeeping of a secp256k1 grant that names another grantee key or the jubjub scheme', async () => {
+    const { flow, args } = await prepareIssueGrantFlow(
+      DAPP_HOSTNAME,
+      k256SpendScope,
+    );
+    const { handlers } = await setupInSession(flow, DAPP_ORIGIN);
+    const bookkeeping = {
+      grantId: flow.grantId,
+      slot: flow.slot,
+      scopeSalt: flow.scopeSalt,
+      granteeScheme: 'secp256k1-ecdsa',
+      granteePublicKey: k256SpendScope.grantee.publicKey,
+      object: {
+        color: k256SpendScope.color,
+        recipient: k256SpendScope.recipient,
+        maxCoinValue: k256SpendScope.maxCoinValue,
+      },
+    };
+    await handlers.authorise(
+      {
+        ...addDeviceAuthorisation,
+        circuit: ISSUE_GRANT_CIRCUIT,
+        args: [...args],
+      },
+      DAPP_ORIGIN,
+    );
+
+    await expect(
+      handlers['seal-grant']({
+        networkId: NETWORK_ID,
+        account: ACCOUNT,
+        grant: {
+          ...bookkeeping,
+          granteeScheme: 'jubjub-schnorr',
+          granteePublicKey: spendScope.grantee.publicKey,
+        },
+      }),
+    ).rejects.toThrow(new FlowScopeError('issue-grant', { argument: 'grant' }));
+    await expect(
+      handlers['seal-grant']({
+        networkId: NETWORK_ID,
+        account: ACCOUNT,
+        grant: { ...bookkeeping, granteeScheme: 'jubjub-schnorr' },
+      }),
+    ).rejects.toThrow(new MalformedPayloadError('grant.granteePublicKey'));
+    const entries = (await handlers['seal-grant']({
+      networkId: NETWORK_ID,
+      account: ACCOUNT,
+      grant: bookkeeping,
+    })) as string[];
+    await handlers['flow-close'](FLOW_COMPLETED);
+
+    expect(entries).toHaveLength(2);
   });
 
   it('refuses a grant seal to a flow that issues nothing', async () => {
@@ -3326,6 +3523,7 @@ describe('read grant sessions', () => {
         grantId: flow.grantId,
         slot: flow.slot,
         scopeSalt: flow.scopeSalt,
+        granteeScheme: 'jubjub-schnorr',
         granteePublicKey: readScope.grantee.publicKey,
         readPublicKey: READ_PUBLIC_KEY,
         object: {
@@ -3663,6 +3861,41 @@ describe('read grant sessions', () => {
     await handlers.authorise(
       authorisation(REVOKE_GRANT_CIRCUIT, [bytes(second.flow.grantId)]),
     );
+    await handlers['flow-close'](FLOW_COMPLETED);
+  });
+
+  it('rotates past a revoked secp256k1 read grant, re-sealing to the jubjub read grant beside it and never to the revoked one', async () => {
+    const { handlers } = setup();
+    const keys = await drawAccountKeys(handlers);
+    const first = await issueReadGrant(handlers, keys, readScope);
+    const second = await issueReadGrant(handlers, first.rotated, {
+      ...secondReadScope,
+      grantee: k256SpendScope.grantee,
+    });
+    await handlers['flow-open']({ flow: rotatingRevoke(second.flow.grantId) });
+    const rotated = await rotateFrom(handlers, second.rotated);
+
+    await expect(
+      handlers['seal-view'](
+        sealRequest(
+          keyringOf(rotated),
+          second.flow.grantId,
+          SECOND_READ_PUBLIC_KEY,
+        ),
+      ),
+    ).rejects.toThrow(
+      new FlowScopeError('revoke-grant', { argument: 'grantId' }),
+    );
+    await expect(
+      handlers['seal-view'](
+        sealRequest(keyringOf(rotated), first.flow.grantId, READ_PUBLIC_KEY),
+      ),
+    ).resolves.toMatchObject({ seal: expect.any(String) as unknown });
+    await expect(
+      handlers.authorise(
+        authorisation(REVOKE_GRANT_CIRCUIT, [bytes(second.flow.grantId)]),
+      ),
+    ).resolves.toMatchObject({ scheme: 'jubjub-schnorr' });
     await handlers['flow-close'](FLOW_COMPLETED);
   });
 
@@ -4196,6 +4429,91 @@ describe('record guards', () => {
     await expect(handlers['record-read']({}, DAPP_ORIGIN)).resolves.toEqual({
       ...record,
       grants: { [OWN_GRANT_ID]: grantOf(DAPP_HOSTNAME, 0) },
+    });
+    await handlers['flow-close'](FLOW_COMPLETED);
+  });
+
+  it('keeps a secp256k1 grant through a revocation write only when its id derives under the scheme it kept', async () => {
+    const { handlers } = setup();
+    const k256 = await prepareIssueGrantFlow(DAPP_HOSTNAME, k256SpendScope);
+    const jubjubGrantId = await grantIdOf(DAPP_HOSTNAME, 0);
+    const k256Grant = {
+      ...grantOf(DAPP_HOSTNAME, 0),
+      granteeScheme: 'secp256k1-ecdsa' as const,
+      granteePublicKey: k256SpendScope.grantee.publicKey,
+    };
+    const withGrants = (grants: PassportAccountRecord['grants']) => ({
+      record: { ...record, grants },
+    });
+    await handlers['flow-open']({ flow: CREATE_ACCOUNT }, DAPP_ORIGIN);
+    await handlers['record-write']({ record }, DAPP_ORIGIN);
+    await handlers['flow-close'](FLOW_COMPLETED);
+    await handlers['flow-open'](
+      {
+        flow: {
+          kind: 'revoke-grant',
+          grantId: jubjubGrantId,
+          account: ACCOUNT,
+        },
+      },
+      DAPP_ORIGIN,
+    );
+    const refusal = new FlowScopeError('revoke-grant', {
+      argument: 'record.grants',
+    });
+
+    await expect(
+      handlers['record-write'](
+        withGrants({ [jubjubGrantId]: k256Grant }),
+        DAPP_ORIGIN,
+      ),
+    ).rejects.toThrow(refusal);
+    await expect(
+      handlers['record-write'](
+        withGrants({
+          [k256.flow.grantId]: {
+            ...k256Grant,
+            granteeScheme: 'jubjub-schnorr',
+            granteePublicKey: spendScope.grantee.publicKey,
+          },
+        }),
+        DAPP_ORIGIN,
+      ),
+    ).rejects.toThrow(refusal);
+    await handlers['record-write'](
+      withGrants({
+        [k256.flow.grantId]: k256Grant,
+        [jubjubGrantId]: grantOf(DAPP_HOSTNAME, 0),
+      }),
+      DAPP_ORIGIN,
+    );
+    await expect(handlers['record-read']({}, DAPP_ORIGIN)).resolves.toEqual({
+      ...record,
+      grants: {
+        [k256.flow.grantId]: k256Grant,
+        [jubjubGrantId]: grantOf(DAPP_HOSTNAME, 0),
+      },
+    });
+    await handlers['record-write'](
+      withGrants({ [k256.flow.grantId]: k256Grant }),
+      DAPP_ORIGIN,
+    );
+    await expect(
+      handlers.authorise(
+        {
+          ...addDeviceAuthorisation,
+          circuit: REVOKE_GRANT_CIRCUIT,
+          args: [ByteArray.fromHex(HexBytes(jubjubGrantId))],
+        },
+        DAPP_ORIGIN,
+      ),
+    ).resolves.toMatchObject({ scheme: 'jubjub-schnorr' });
+    await handlers['flow-close'](FLOW_COMPLETED);
+
+    await handlers['flow-open']({ flow: { kind: 'sign-in' } }, DAPP_ORIGIN);
+    await expect(handlers['record-read']({}, DAPP_ORIGIN)).resolves.toEqual({
+      ...record,
+      grants: { [k256.flow.grantId]: k256Grant },
     });
     await handlers['flow-close'](FLOW_COMPLETED);
   });

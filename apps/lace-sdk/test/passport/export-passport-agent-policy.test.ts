@@ -19,6 +19,7 @@ import {
   NETWORK,
   RECIPIENT_VALUE,
   SCOPE_SALT,
+  SECP256K1_GRANTEE_PUBLIC_KEY,
   walletWith,
 } from './passport-fixtures';
 
@@ -35,11 +36,12 @@ describe('exportPassportAgentPolicy', () => {
 
     await expect(exportFor(wallet)).resolves.toEqual({
       type: 'passport-agent-policy',
-      version: 1,
+      version: 2,
       network: NETWORK,
       account: ACCOUNT_ADDRESS,
       grantId: GRANT_ID,
       slot: 2,
+      granteeScheme: 'jubjub-schnorr',
       granteePublicKey: GRANTEE_PUBLIC_KEY,
       scopeSalt: SCOPE_SALT,
       color: COLOR,
@@ -51,6 +53,25 @@ describe('exportPassportAgentPolicy', () => {
       window: null,
       operations: ['withdraw-unshielded'],
       origin: 'lace.io',
+    });
+  });
+
+  it('exports the scheme and compressed key of a secp256k1 grantee', async () => {
+    const record = grantRecord();
+    const wallet = walletWith(account, [
+      {
+        ...record,
+        opening: {
+          ...record.opening!,
+          granteeScheme: 'secp256k1-ecdsa',
+          granteePublicKey: SECP256K1_GRANTEE_PUBLIC_KEY,
+        },
+      },
+    ]);
+
+    await expect(exportFor(wallet)).resolves.toMatchObject({
+      granteeScheme: 'secp256k1-ecdsa',
+      granteePublicKey: SECP256K1_GRANTEE_PUBLIC_KEY,
     });
   });
 

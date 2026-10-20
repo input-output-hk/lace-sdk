@@ -16,12 +16,15 @@ import { sha256 } from '@lace-lib/crypto';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import { x25519 } from '@noble/curves/ed25519.js';
 import { jubjub } from '@noble/curves/misc.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   encodeDevicePublicKey,
+  openGrantRecord,
   sealDeviceEnvelope,
   sealDeviceRegistration,
+  sealGrantRecord,
 } from '../../src/acc/envelopes';
 import {
   circuitScope,
@@ -31,6 +34,8 @@ import {
 } from '../../src/acc/grants';
 import { JubjubDevice } from '../../src/acc/signer';
 import { signIn } from '../../src/flows/sign-in';
+
+import { issuedGrant } from './issued-grant';
 
 import type * as AccModule from '../../src/acc/acc-module';
 import type {
@@ -166,7 +171,7 @@ const issuedObject = {
 };
 const issuedGrantId = deriveGrantId({
   contractAddress: ByteArray.fromHex(HexBytes(accountAddress)),
-  granteePublicKey: grantee.pk,
+  granteePublicKey: { scheme: 'jubjub-schnorr', point: grantee.pk },
   originHash: await originHash(rpId),
   slot: GrantSlot(2),
 });
@@ -204,6 +209,7 @@ const issuedParts = (
     grantId: issuedGrantId,
     slot: GrantSlot(2),
     scopeSalt: issuedSalt,
+    granteeScheme: 'jubjub-schnorr',
     granteePublicKey,
     readPublicKey,
   },
@@ -219,6 +225,7 @@ const issuedParts = (
 const rebuiltGrant = {
   slot: 2,
   scopeSalt: issuedSalt,
+  granteeScheme: 'jubjub-schnorr' as const,
   granteePublicKey,
   origin: rpId,
   object: issuedObject,
@@ -468,6 +475,7 @@ describe('signIn', () => {
             issuedGrantId,
             {
               scopeSalt: issuedSalt,
+              granteeScheme: 'jubjub-schnorr',
               granteePublicKey,
               origin: rpId,
               color: TokenColor(issuedObject.color),
@@ -607,6 +615,147 @@ describe('signIn', () => {
       );
     });
 
+    describe('issued to a secp256k1 grantee', () => {
+      const k256Grantee = {
+        scheme: 'secp256k1-ecdsa' as const,
+        publicKey: HexBytes.fromByteArray(
+          secp256k1.Point.BASE.multiply(0x5eed_c0ffeen).toBytes(true),
+        ),
+      };
+      const flippedParity = `${
+        k256Grantee.publicKey.startsWith('02') ? '03' : '02'
+      }${k256Grantee.publicKey.slice(2)}`;
+
+      /**
+       * The k256 grant as the chain holds it, and its grant and object
+       * parts as this device's grant records carry them: sealed into
+       * inbox entries and opened back, as a sign-in finds them.
+       */
+      const k256Issued = async () => {
+        const issued = await issuedGrant({
+          address: accountAddress,
+          origin: rpId,
+          grantee: k256Grantee,
+          slot: 0,
+        });
+        const readerSecret = x25519.utils.randomSecretKey();
+        const account = AccAddress(accountAddress);
+        const reopened = async (part: GrantRecordPart) =>
+          openGrantRecord(
+            readerSecret,
+            account,
+            await sealGrantRecord(readerSecret, account, part),
+          );
+        const grant = await reopened({
+          part: 'grant',
+          grantId: issued.id,
+          slot: GrantSlot(0),
+          scopeSalt: GrantScopeSalt(issued.stored.scopeSalt),
+          granteeScheme: k256Grantee.scheme,
+          granteePublicKey: k256Grantee.publicKey,
+        });
+        const object = await reopened({
+          part: 'object',
+          grantId: issued.id,
+          object: issued.stored.object!,
+        });
+        mocks.readGrants.mockReturnValue([issued.onChain()]);
+        return {
+          issued,
+          parts: [grant, object] as Extract<
+            GrantRecordPart,
+            { part: 'grant' | 'object' }
+          >[],
+        };
+      };
+
+      const openingK256 = ([grant, object]: GrantRecordPart[]) =>
+        opening(
+          new Map<Uint8Array, OpenedInboxEntry>([
+            [envelope, { kind: 'grant', record: grant }],
+            [foreignEnvelope, { kind: 'grant', record: object }],
+          ]),
+        );
+
+      it('rebuilds it under its scheme from its on-chain records once the local record is lost', async () => {
+        const { issued, parts } = await k256Issued();
+        const { context, encryptionKey, accountRecords } = createContext({
+          stored: record,
+        });
+        encryptionKey.openInbox.mockImplementation(openingK256(parts));
+
+        await signIn(context);
+
+        expect(parts[0]).toMatchObject({
+          granteeScheme: 'secp256k1-ecdsa',
+          granteePublicKey: k256Grantee.publicKey,
+        });
+        expect(accountRecords.write).toHaveBeenCalledExactlyOnceWith(
+          healed({ grants: { [issued.id]: issued.stored } }),
+        );
+        expect(mocks.readGrants).toHaveBeenLastCalledWith(
+          expect.anything(),
+          new Map([[issued.id, GrantSlot(0)]]),
+          new Map([[issued.id, issued.opening]]),
+        );
+      });
+
+      it.each([
+        [
+          'the jubjub scheme over its x coordinate',
+          (grant: Extract<GrantRecordPart, { part: 'grant' }>) => ({
+            ...grant,
+            granteeScheme: 'jubjub-schnorr' as const,
+            granteePublicKey: grant.granteePublicKey.slice(2),
+          }),
+        ],
+        [
+          'the other parity of its key',
+          (grant: Extract<GrantRecordPart, { part: 'grant' }>) => ({
+            ...grant,
+            granteePublicKey: flippedParity,
+          }),
+        ],
+      ])('leaves it out when its grant part names %s', async (_case, forge) => {
+        const { parts } = await k256Issued();
+        const [grant, object] = parts as [
+          Extract<GrantRecordPart, { part: 'grant' }>,
+          GrantRecordPart,
+        ];
+        const { context, encryptionKey, accountRecords } = createContext({
+          stored: record,
+        });
+        encryptionKey.openInbox.mockImplementation(
+          openingK256([forge(grant), object]),
+        );
+
+        await signIn(context);
+
+        expect(accountRecords.write).toHaveBeenCalledExactlyOnceWith(healed());
+      });
+
+      it('leaves out a jubjub grant whose grant part claims the secp256k1 scheme', async () => {
+        const [grant, ...rest] = issuedParts();
+        const { context, encryptionKey, accountRecords } = createContext({
+          stored: record,
+        });
+        encryptionKey.openInbox.mockImplementation(
+          openingParts([
+            {
+              ...grant,
+              granteeScheme: 'secp256k1-ecdsa',
+              granteePublicKey: `02${granteePublicKey}`,
+            } as GrantRecordPart,
+            ...rest,
+          ]),
+        );
+
+        await signIn(context);
+
+        expect(accountRecords.write).toHaveBeenCalledExactlyOnceWith(healed());
+      });
+    });
+
     it('rebuilds nothing on a host with no relying party id', async () => {
       const { context, encryptionKey, accountRecords } = createContext({
         stored: record,
@@ -680,6 +829,7 @@ describe('signIn', () => {
             issuedGrantId,
             {
               scopeSalt: issuedSalt,
+              granteeScheme: 'jubjub-schnorr',
               granteePublicKey,
               origin: rpId,
               color: TokenColor(issuedObject.color),
@@ -696,7 +846,7 @@ describe('signIn', () => {
       const otherOrigin = 'other.example';
       const otherGrantId = deriveGrantId({
         contractAddress: ByteArray.fromHex(HexBytes(accountAddress)),
-        granteePublicKey: grantee.pk,
+        granteePublicKey: { scheme: 'jubjub-schnorr', point: grantee.pk },
         originHash: await originHash(otherOrigin),
         slot: GrantSlot(2),
       });

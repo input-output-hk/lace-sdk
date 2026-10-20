@@ -181,9 +181,7 @@ jobs:
   # the first npmjs publish only, its secret NPM_PUBLISH_TOKEN (publish rights
   # in the @laceio npm org); afterwards npmjs trusted publishing (OIDC) for this
   # workflow and environment replaces it. The GitHub Packages package
-  # @input-output-hk/lace-sdk must grant this repository write access; until
-  # it does, the repository variable GH_PACKAGES_PENDING=true lets a
-  # release skip that copy.
+  # @input-output-hk/lace-sdk publishes from this repository, linked here.
   # Each publish job waits for both build jobs, so a release whose checks
   # fail for any package publishes nothing and stays a draft.
   publish-sdk:

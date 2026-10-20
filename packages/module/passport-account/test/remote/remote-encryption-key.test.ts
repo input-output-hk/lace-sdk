@@ -268,6 +268,7 @@ describe('createRemoteEncryptionKey', () => {
       grantId: GrantId('ab'.repeat(32)),
       slot: GrantSlot(0),
       scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+      granteeScheme: 'jubjub-schnorr',
       granteePublicKey: 'ef'.repeat(32),
       object: {
         color: '00'.repeat(32),

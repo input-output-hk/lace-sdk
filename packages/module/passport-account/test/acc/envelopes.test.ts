@@ -68,6 +68,7 @@ const recordParts: GrantRecordPart[] = [
     grantId,
     slot: GrantSlot(255),
     scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+    granteeScheme: 'jubjub-schnorr',
     granteePublicKey: 'ef'.repeat(32),
     readPublicKey: '12'.repeat(32),
   },
@@ -76,7 +77,25 @@ const recordParts: GrantRecordPart[] = [
     grantId,
     slot: GrantSlot(0),
     scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+    granteeScheme: 'jubjub-schnorr',
     granteePublicKey: 'ef'.repeat(32),
+  },
+  {
+    part: 'grant',
+    grantId,
+    slot: GrantSlot(3),
+    scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+    granteeScheme: 'secp256k1-ecdsa',
+    granteePublicKey: `02${'ef'.repeat(32)}`,
+    readPublicKey: '12'.repeat(32),
+  },
+  {
+    part: 'grant',
+    grantId,
+    slot: GrantSlot(4),
+    scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+    granteeScheme: 'secp256k1-ecdsa',
+    granteePublicKey: `03${'ef'.repeat(32)}`,
   },
   ...(
     [
@@ -113,6 +132,89 @@ const flips = (entry: Uint8Array): Uint8Array[] =>
   });
 
 const isZero = (bytes: Uint8Array): boolean => bytes.every(byte => byte === 0);
+
+/**
+ * Seals any 130-byte plaintext as a grant record of `account` under the
+ * keys the reader secret derives, the way a record is framed, so a test
+ * can present a part no writer produces.
+ */
+const sealRawGrantRecord = async (
+  readerSecret: Uint8Array,
+  account: AccAddress,
+  plaintext: Uint8Array,
+): Promise<Uint8Array> => {
+  const accountBytes = ByteArray.fromHex(HexBytes(account));
+  const derive = async (
+    label: string,
+    algorithm: AesKeyAlgorithm | HmacImportParams,
+    usage: KeyUsage,
+  ) => {
+    const material = await crypto.subtle.importKey(
+      'raw',
+      readerSecret as Uint8Array<ArrayBuffer>,
+      'HKDF',
+      false,
+      ['deriveBits'],
+    );
+    const bits = await crypto.subtle.deriveBits(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new Uint8Array(0),
+        info: Uint8Array.from([
+          ...new TextEncoder().encode(label),
+          ...accountBytes,
+        ]),
+      },
+      material,
+      256,
+    );
+    return crypto.subtle.importKey('raw', bits, algorithm, false, [usage]);
+  };
+  const key = await derive(
+    'lace:passport:grant-record:v1',
+    { name: 'AES-GCM', length: 256 },
+    'encrypt',
+  );
+  const tagKey = await derive(
+    'lace:passport:grant-record-tag:v1',
+    { name: 'HMAC', hash: 'SHA-256' },
+    'sign',
+  );
+  const entry = new Uint8Array(INBOX_ENTRY_LENGTH);
+  entry[0] = GRANT_RECORD_TYPE;
+  entry[1] = SUITE;
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  entry.set(nonce, 34);
+  const sealed = new Uint8Array(
+    await crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv: nonce,
+        additionalData: Uint8Array.from([
+          ...entry.subarray(0, 2),
+          ...entry.subarray(34, 46),
+        ]),
+        tagLength: 128,
+      },
+      key,
+      plaintext as Uint8Array<ArrayBuffer>,
+    ),
+  );
+  entry.set(sealed.subarray(plaintext.length), 46);
+  entry.set(sealed.subarray(0, plaintext.length), 62);
+  entry.set(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        'HMAC',
+        tagKey,
+        Uint8Array.from([...entry.subarray(0, 2), ...entry.subarray(34)]),
+      ),
+    ),
+    2,
+  );
+  return entry;
+};
 
 describe('device envelopes', () => {
   it('lay out type, suite, recipient tag, ephemeral key, nonce, AEAD tag, ciphertext and zero padding in 192 bytes', async () => {
@@ -443,6 +545,85 @@ describe('grant records', () => {
     expect(first.subarray(2, 34)).not.toEqual(second.subarray(2, 34));
     expect(first.subarray(34, 46)).not.toEqual(second.subarray(34, 46));
   });
+
+  it('refuse a grant part whose grantee the record cannot hold', async () => {
+    const readerSecret = x25519.utils.randomSecretKey();
+    const grant = (
+      granteeScheme: string,
+      granteePublicKey: string,
+    ): GrantRecordPart =>
+      ({
+        ...recordParts[1],
+        granteeScheme,
+        granteePublicKey,
+      } as GrantRecordPart);
+    const refusals: [string, string][] = [
+      ['jubjub-schnorr', `02${'ef'.repeat(32)}`],
+      ['jubjub-schnorr', 'ef'.repeat(31)],
+      ['secp256k1-ecdsa', `04${'ef'.repeat(32)}`],
+      ['secp256k1-ecdsa', 'ef'.repeat(32)],
+      ['secp256k1-ecdsa', `02${'ef'.repeat(64)}`],
+      ['p256-ecdsa', `02${'ef'.repeat(32)}`],
+    ];
+
+    for (const [scheme, key] of refusals) {
+      await expect(
+        sealGrantRecord(readerSecret, ACCOUNT, grant(scheme, key)),
+      ).rejects.toThrow(
+        new Error(`Grant record cannot carry this '${scheme}' grantee key`),
+      );
+    }
+  });
+
+  it('carry a secp256k1 grantee as its x coordinate, its parity in the part byte, at the same length', async () => {
+    const readerSecret = x25519.utils.randomSecretKey();
+
+    for (const prefix of ['02', '03']) {
+      const part: GrantRecordPart = {
+        part: 'grant',
+        grantId,
+        slot: GrantSlot(9),
+        scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+        granteeScheme: 'secp256k1-ecdsa',
+        granteePublicKey: `${prefix}${'ef'.repeat(32)}`,
+      };
+
+      const entry = await sealGrantRecord(readerSecret, ACCOUNT, part);
+
+      expect(entry).toHaveLength(INBOX_ENTRY_LENGTH);
+      await expect(
+        openGrantRecord(readerSecret, ACCOUNT, entry),
+      ).resolves.toEqual(part);
+    }
+  });
+
+  it('open to null for a part byte no writer produces', async () => {
+    const readerSecret = x25519.utils.randomSecretKey();
+    const plaintext = new Uint8Array(130);
+    plaintext.set(ByteArray.fromHex(HexBytes(grantId)), 1);
+
+    for (const partByte of [5, 0xff]) {
+      plaintext[0] = partByte;
+      await expect(
+        openGrantRecord(
+          readerSecret,
+          ACCOUNT,
+          await sealRawGrantRecord(readerSecret, ACCOUNT, plaintext),
+        ),
+      ).resolves.toBeNull();
+    }
+    plaintext[0] = 0;
+    await expect(
+      openGrantRecord(
+        readerSecret,
+        ACCOUNT,
+        await sealRawGrantRecord(readerSecret, ACCOUNT, plaintext),
+      ),
+    ).resolves.toMatchObject({
+      part: 'grant',
+      granteeScheme: 'jubjub-schnorr',
+    });
+  });
 });
 
 describe('known-answer vectors', () => {
@@ -501,7 +682,7 @@ describe('known-answer vectors', () => {
     );
   });
 
-  it('seal each grant record part to the exact bytes', async () => {
+  it('seal each grant record part to the exact bytes, a jubjub grant as before secp256k1 grantees', async () => {
     fixRandomness();
     const id = GrantId('ab'.repeat(32));
     const parts: [GrantRecordPart, string][] = [
@@ -511,10 +692,45 @@ describe('known-answer vectors', () => {
           grantId: id,
           slot: GrantSlot(7),
           scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+          granteeScheme: 'jubjub-schnorr',
           granteePublicKey: 'ef'.repeat(32),
           readPublicKey: '12'.repeat(32),
         },
         'd30232efd10210fc1f34f5d3cfb9e771cb8e7e1db1a210bcc3ae12fd6493aa7e05fb222222222222222222222222f562e74fa64f1bcc5b7633d4f00dbdc2180136b9c02f2b04ec15e7bd13bfc9209100255948af63f7f1b88a410fa41feef893b269e2e3a09f217fd1e7dbc0925ee905ada4b59b78667462d11ce1d2b537d21cfd3510fb605bb1beaadc168f245ede9032877b13c876f60f341a494c106fa45ae6840c10afedf4f1c868214e2ce34e36e87e459044dff6616485974f2546c344',
+      ],
+      [
+        {
+          part: 'grant',
+          grantId: id,
+          slot: GrantSlot(7),
+          scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+          granteeScheme: 'jubjub-schnorr',
+          granteePublicKey: 'ef'.repeat(32),
+        },
+        'd302846a06213448a1686f83708630875034363bd18bfbc370f50e94fff21b46f7e7222222222222222222222222578e412dcc93420d73e5b5ac6705c95d180136b9c02f2b04ec15e7bd13bfc9209100255948af63f7f1b88a410fa41feef893b269e2e3a09f217fd1e7dbc0925ee905ada4b59b78667462d11ce1d2b537d21cfd3510fb605bb1beaadc168f245ede9032877b13c876f60f341a494c106fa45af4961e02bdffe6e3da7a335c3ef15c24fa6c578256cde4737697855d3754d156',
+      ],
+      [
+        {
+          part: 'grant',
+          grantId: id,
+          slot: GrantSlot(7),
+          scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+          granteeScheme: 'secp256k1-ecdsa',
+          granteePublicKey: `02${'ef'.repeat(32)}`,
+          readPublicKey: '12'.repeat(32),
+        },
+        'd3024b51d8f6970e2d8bde8740a1a65dbf7035748719b0348733d519482250f08251222222222222222222222222bad3d8608d5f762093520dc0cb9418ad1b0136b9c02f2b04ec15e7bd13bfc9209100255948af63f7f1b88a410fa41feef893b269e2e3a09f217fd1e7dbc0925ee905ada4b59b78667462d11ce1d2b537d21cfd3510fb605bb1beaadc168f245ede9032877b13c876f60f341a494c106fa45ae6840c10afedf4f1c868214e2ce34e36e87e459044dff6616485974f2546c344',
+      ],
+      [
+        {
+          part: 'grant',
+          grantId: id,
+          slot: GrantSlot(7),
+          scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+          granteeScheme: 'secp256k1-ecdsa',
+          granteePublicKey: `03${'ef'.repeat(32)}`,
+        },
+        'd302ad8f8fa2a7076b34ff290e7859b8cc97c6672137bde3a9e90e55e2b48be227e9222222222222222222222222bdcdeab9a8ac2f639395e263c2d845c91c0136b9c02f2b04ec15e7bd13bfc9209100255948af63f7f1b88a410fa41feef893b269e2e3a09f217fd1e7dbc0925ee905ada4b59b78667462d11ce1d2b537d21cfd3510fb605bb1beaadc168f245ede9032877b13c876f60f341a494c106fa45af4961e02bdffe6e3da7a335c3ef15c24fa6c578256cde4737697855d3754d156',
       ],
       [
         {

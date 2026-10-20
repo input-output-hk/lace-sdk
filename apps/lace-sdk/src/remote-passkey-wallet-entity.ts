@@ -35,15 +35,16 @@ export type RemotePasskeyWalletEntity = {
 };
 
 /**
- * Builds the Cardano wallet entity of the account the hosted signer holds,
- * from the account public key the user agrees to share there. It fails
+ * Builds a Cardano wallet entity from the public account key the user agrees
+ * to share through the hosted self-custodial passkey wallet. It fails
  * closed with {@link PasskeyWalletMismatchError} when that key differs from
  * `expectedPublicKey`.
  *
  * The entity is a {@link WalletType.LazyInMemory} wallet built from the
  * public account key alone:
  * no mnemonic, PRF output or encrypted root ever reaches the dApp, so there
- * is nothing secret to persist. The wallet id is derived from that key.
+ * is nothing secret to persist. Wallet keys stay in the signer's window in
+ * the user's browser. The wallet id is derived from the public key.
  *
  * Mainnet and testnet accounts are returned; consumers choose which to expose.
  *

@@ -21,10 +21,11 @@ import {
   TokenColor,
   UseCounter,
 } from '@lace-contract/passport';
-import { sha256 } from '@lace-lib/crypto';
+import { deriveSymmetricSecret, sha256 } from '@lace-lib/crypto';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import { x25519 } from '@noble/curves/ed25519.js';
 import { jubjub } from '@noble/curves/misc.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
@@ -35,10 +36,13 @@ import {
 import {
   deviceEnvelopes,
   encodeDevicePublicKey,
+  openGrantRecord,
 } from '../../src/acc/envelopes';
+import { GRANTEE_WITHDRAWAL_CIRCUITS } from '../../src/acc/grant-circuits';
 import {
   circuitScope,
   deriveGrantId,
+  granteePoint,
   originHash,
   scopeArgs,
   scopeDigest,
@@ -110,6 +114,10 @@ const nextLocalCommitment = '1a'.repeat(32);
 const remoteCommitment = '22'.repeat(32);
 const rpId = 'lace.io';
 const deviceEpoch = 4n;
+
+/** The seed of the dev encryption key the contract-sim flows seal under. */
+const simEncryptionSeed = new Uint8Array(64).fill(0x41);
+
 const network = {
   networkId: 'undeployed',
   indexerUrl: 'http://indexer.example.com/api/v3/graphql',
@@ -135,7 +143,36 @@ const remoteDevice: PassportDevice = {
   commitmentHex: remoteCommitment,
   isLocal: false,
 };
-const contractState = { data: 'charged-state' };
+/** The grantee withdrawals of both schemes, as an account deployed here holds them. */
+const INSTALLED_WITHDRAWALS = Object.values(GRANTEE_WITHDRAWAL_CIRCUITS).flat();
+/**
+ * The operations an account deployed before secp256k1 grantees holds: the
+ * deposits, the jubjub device arm and the grant circuits of a jubjub
+ * grantee.
+ */
+const JUBJUB_ONLY_OPERATIONS = [
+  'deposit_unshielded',
+  'deposit_shielded',
+  ...[
+    'activate_initial_device',
+    'withdraw_unshielded',
+    'append_inbox',
+    'withdraw_shielded',
+    'withdraw_shielded_to_contract',
+    'rotate_enc_key',
+    'add_device',
+    'remove_device',
+    'issue_grant',
+    'revoke_grant',
+    'revoke_all_grants',
+  ].map(base => `${base}_with_jubjub`),
+  ...GRANTEE_WITHDRAWAL_CIRCUITS['jubjub-schnorr'],
+];
+
+const contractState = {
+  data: 'charged-state',
+  operations: () => INSTALLED_WITHDRAWALS,
+};
 const ledgerReads = { authNonce: 0n };
 /** The decoded ledger, whose auth nonce advances on every read so chained calls settle. */
 const decodedLedgerState = {
@@ -215,7 +252,7 @@ const grantRecord = (id: GrantId, active = true): GrantRecord => ({
 const expectedGrantId = async (slot = 0): Promise<GrantId> =>
   deriveGrantId({
     contractAddress: ByteArray.fromHex(HexBytes(accountAddress)),
-    granteePublicKey: grantee.pk,
+    granteePublicKey: { scheme: 'jubjub-schnorr', point: grantee.pk },
     originHash: await originHash(rpId),
     slot: GrantSlot(slot),
   });
@@ -326,7 +363,8 @@ const createContext = ({
 };
 
 const queryContractState = vi.fn(
-  async (): Promise<{ data: unknown }> => contractState,
+  async (): Promise<{ data: unknown; operations: () => string[] }> =>
+    contractState,
 );
 
 /** The roster the chain reads as, before and after the gated call. */
@@ -370,7 +408,7 @@ describe('issueGrant', () => {
       indexerUrl: network.indexerUrl,
       indexerWsUrl: network.indexerWsUrl,
     });
-    expect(queryContractState).toHaveBeenCalledTimes(3);
+    expect(queryContractState).toHaveBeenCalledTimes(4);
     expect(queryContractState).toHaveBeenCalledWith(accountAddress);
     expect(mocks.createMidnightProviders).toHaveBeenCalledExactlyOnceWith({
       network,
@@ -401,7 +439,7 @@ describe('issueGrant', () => {
     expect(args.at(-1)).toBeInstanceOf(Uint8Array);
   });
 
-  it('writes the slot, scope salt, grantee key and origin under the id before the call, with the counter unchanged, then again with the advanced counter before the roster is read back', async () => {
+  it('writes the slot, scope salt, grantee key with its scheme and origin under the id before the call, with the counter unchanged, then again with the advanced counter before the roster is read back', async () => {
     const grantId = await expectedGrantId();
     const roster: GrantRecord[] = [];
     const order: string[] = [];
@@ -427,6 +465,7 @@ describe('issueGrant', () => {
     const bookkeeping = {
       slot: 0,
       scopeSalt: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown,
+      granteeScheme: 'jubjub-schnorr',
       granteePublicKey,
       origin: rpId,
       object: {
@@ -458,6 +497,7 @@ describe('issueGrant', () => {
           grantId,
           {
             scopeSalt: bookkeeping.scopeSalt,
+            granteeScheme: 'jubjub-schnorr',
             granteePublicKey,
             origin: rpId,
             color: TokenColor('00'.repeat(32)),
@@ -488,6 +528,7 @@ describe('issueGrant', () => {
         grantId,
         slot: GrantSlot(0),
         scopeSalt: stored?.scopeSalt,
+        granteeScheme: 'jubjub-schnorr',
         granteePublicKey,
         object: {
           color: '00'.repeat(32),
@@ -515,6 +556,41 @@ describe('issueGrant', () => {
       }),
     );
     expect(stages).toEqual(['confirming', 'recording']);
+  });
+
+  it('issues to a secp256k1 grantee under its k256 grant id and seals bookkeeping naming its scheme', async () => {
+    const k256Grantee = {
+      scheme: 'secp256k1-ecdsa' as const,
+      publicKey: HexBytes.fromByteArray(
+        secp256k1.Point.BASE.multiply(0x5eed_c0ffeen).toBytes(true),
+      ),
+    };
+    const grantId = deriveGrantId({
+      contractAddress: ByteArray.fromHex(HexBytes(accountAddress)),
+      granteePublicKey: granteePoint(k256Grantee),
+      originHash: await originHash(rpId),
+      slot: GrantSlot(0),
+    });
+    chainRoster([], [grantRecord(grantId)]);
+    const { context, encryptionKey } = createContext();
+    vi.mocked(encryptionKey.sealGrant).mockResolvedValue([]);
+
+    await expect(
+      issueGrant(
+        issueInput({ scope: { ...spendScope, grantee: k256Grantee } }),
+        context,
+      ),
+    ).resolves.toMatchObject({ grantId });
+
+    expect(encryptionKey.sealGrant).toHaveBeenCalledExactlyOnceWith(
+      network.networkId,
+      AccAddress(accountAddress),
+      expect.objectContaining({
+        grantId,
+        granteeScheme: 'secp256k1-ecdsa',
+        granteePublicKey: k256Grantee.publicKey,
+      }),
+    );
   });
 
   it('allocates the next slot past the grants the chain holds for this grantee and origin, keeping the earlier bookkeeping', async () => {
@@ -846,7 +922,7 @@ describe('issueGrant', () => {
         grants: [grantRecord(grantId)],
       });
       expect(mocks.readGrants).toHaveBeenCalledTimes(4);
-      expect(queryContractState).toHaveBeenCalledTimes(5);
+      expect(queryContractState).toHaveBeenCalledTimes(6);
     });
 
     it('rejects with GrantRosterUnsettledError once the roster never reflects the call, with the record already written', async () => {
@@ -1119,13 +1195,15 @@ describe('revokeAllGrants', () => {
 
 describe('grant flows against the contract', () => {
   /** The flows over an in-process contract, with the chain mocks replaced by the simulator. */
-  const createSimContext = async () => {
+  const createSimContext = async (
+    options?: Parameters<typeof AccountSim.create>[0],
+  ) => {
     const [accModule, gatedCall, readGrantsModule] = await Promise.all([
       vi.importActual<typeof AccModule>('../../src/acc/acc-module'),
       vi.importActual<typeof GatedCall>('../../src/acc/gated-call'),
       vi.importActual<typeof ReadGrants>('../../src/acc/read-grants'),
     ]);
-    const sim = await AccountSim.create();
+    const sim = await AccountSim.create(options);
     mocks.ledger.mockImplementation(accModule.ledger);
     mocks.readGrants.mockImplementation(readGrantsModule.readGrants);
     mocks.executeGatedCall.mockImplementation(gatedCall.executeGatedCall);
@@ -1137,7 +1215,7 @@ describe('grant flows against the contract', () => {
     };
     const harness = createContext({
       authoriser: sim.authoriser,
-      encryptionKey: devEncryptionKey(new Uint8Array(64).fill(0x41)),
+      encryptionKey: devEncryptionKey(simEncryptionSeed),
       stored: { ...record, address: sim.account, localUseCounter: '0' },
     });
     const localCommitmentAt = async (counter: bigint) =>
@@ -1213,6 +1291,99 @@ describe('grant flows against the contract', () => {
       address: sim.account,
       bindingVersion: record.bindingVersion,
       localUseCounter: '8',
+    });
+  });
+
+  it('refuses a secp256k1 grant on an account deployed with the jubjub grantee withdrawals only, before any call, and still issues a jubjub grant there', async () => {
+    const { sim, harness, input } = await createSimContext({
+      operations: JUBJUB_ONLY_OPERATIONS,
+    });
+    const { context, accountRecords } = harness;
+    const k256Grantee = {
+      scheme: 'secp256k1-ecdsa' as const,
+      publicKey: HexBytes.fromByteArray(
+        secp256k1.Point.BASE.multiply(0x5eed_c0ffeen).toBytes(true),
+      ),
+    };
+
+    await expect(
+      issueGrant(
+        {
+          ...(await input(0n)),
+          scope: { ...spendScope, grantee: k256Grantee },
+        },
+        context,
+      ),
+    ).rejects.toThrow(
+      new GrantScopeInvalidError(
+        'the account cannot serve a secp256k1-ecdsa grantee, it lacks withdraw_unshielded_with_grant_k256, withdraw_shielded_with_grant_k256, withdraw_shielded_to_contract_with_grant_k256',
+      ),
+    );
+    expect(mocks.executeGatedCall).not.toHaveBeenCalled();
+    expect(accountRecords.write).not.toHaveBeenCalled();
+    expect(sim.ledger().grants.isEmpty()).toBe(true);
+
+    const issued = await issueGrant(
+      { ...(await input(0n)), scope: spendScope },
+      context,
+    );
+    expect(issued.grants).toEqual([
+      expect.objectContaining({ id: issued.grantId, active: true }),
+    ]);
+  });
+
+  it('issues to a secp256k1 grantee through the real circuits and seals its grant records, keeping its scheme in the record', async () => {
+    const { sim, harness, input } = await createSimContext();
+    const { context, accountRecords } = harness;
+    const k256Grantee = {
+      scheme: 'secp256k1-ecdsa' as const,
+      publicKey: HexBytes.fromByteArray(
+        secp256k1.Point.BASE.multiply(0x5eed_c0ffeen).toBytes(true),
+      ),
+    };
+
+    const issued = await issueGrant(
+      { ...(await input(0n)), scope: { ...spendScope, grantee: k256Grantee } },
+      context,
+    );
+
+    expect(issued.grants).toEqual([
+      expect.objectContaining({ id: issued.grantId, slot: 0, active: true }),
+    ]);
+    expect(sim.ledger().inbox_count).toBe(2n);
+    const readerSecret = deriveSymmetricSecret(simEncryptionSeed, {
+      domain: 'lace-passport:reader:v1',
+      context: network.networkId,
+      length: 32,
+    });
+    const opened = await Promise.all(
+      [0n, 1n].map(async ordinal =>
+        openGrantRecord(
+          readerSecret,
+          AccAddress(sim.account),
+          sim.ledger().inbox.lookup(ordinal),
+        ),
+      ),
+    );
+    const grantPart = opened.find(part => part?.part === 'grant');
+    expect(grantPart).toMatchObject({
+      grantId: issued.grantId,
+      granteeScheme: 'secp256k1-ecdsa',
+      granteePublicKey: k256Grantee.publicKey,
+    });
+    expect(
+      grantPart?.part === 'grant' &&
+        ByteArray.fromHex(HexBytes(grantPart.granteePublicKey)).length,
+    ).toBe(33);
+    await expect(accountRecords.read()).resolves.toMatchObject({
+      localUseCounter: '3',
+      grants: {
+        [issued.grantId]: {
+          slot: 0,
+          granteeScheme: 'secp256k1-ecdsa',
+          granteePublicKey: k256Grantee.publicKey,
+        },
+      },
     });
   });
 

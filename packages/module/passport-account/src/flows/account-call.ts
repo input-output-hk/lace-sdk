@@ -50,6 +50,22 @@ export type AccountLedger = {
 };
 
 /**
+ * The contract state the indexer serves at `address`, which must exist.
+ *
+ * @throws {@link AccountContractMissingError} when the indexer serves no
+ * contract at the address.
+ */
+const queryAccountState = async (indexer: IndexerClient, address: string) => {
+  const state = await indexer.queryContractState(address);
+  if (!state) {
+    throw new AccountContractMissingError(
+      `No live Account Custody Contract found at ${address}.`,
+    );
+  }
+  return state;
+};
+
+/**
  * The decoded ledger state of the account at `address`, which must hold
  * a live contract.
  *
@@ -59,15 +75,20 @@ export type AccountLedger = {
 export const queryAccountLedger = async (
   indexer: IndexerClient,
   address: string,
-): Promise<Ledger> => {
-  const state = await indexer.queryContractState(address);
-  if (!state) {
-    throw new AccountContractMissingError(
-      `No live Account Custody Contract found at ${address}.`,
-    );
-  }
-  return ledger(state.data);
-};
+): Promise<Ledger> => ledger((await queryAccountState(indexer, address)).data);
+
+/**
+ * The operations the account at `address` holds verifier keys for, which
+ * are the circuits the chain will accept a call to.
+ *
+ * @throws {@link AccountContractMissingError} when the indexer serves no
+ * contract at the address.
+ */
+export const queryAccountOperations = async (
+  indexer: IndexerClient,
+  address: string,
+): Promise<readonly string[]> =>
+  (await queryAccountState(indexer, address)).operations().map(String);
 
 /**
  * Reads the account's ledger state through a fresh indexer client, which

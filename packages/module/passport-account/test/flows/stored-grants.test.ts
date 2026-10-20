@@ -1,13 +1,19 @@
 import { GrantId, GrantSlot } from '@lace-contract/passport';
+import { HexBytes } from '@lace-lib/util';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { describe, expect, it } from 'vitest';
 
+import { JubjubDevice } from '../../src/acc/signer';
 import {
   completedRecord,
   retainStoredGrants,
+  storedGrantOpenings,
   unsealedStoredReadGrants,
   withRebuiltGrants,
   withSealedViews,
 } from '../../src/flows/stored-grants';
+
+import { issuedGrant } from './issued-grant';
 
 import type { StoredGrant, StoredGrants } from '../../src/flows/types';
 import type { GrantRecord } from '@lace-contract/passport';
@@ -23,6 +29,12 @@ const grant = (origin = 'lace.io'): StoredGrant => ({
   view: { readPublicKey, seal: '9c'.repeat(94), sealedEncKey: '01'.repeat(32) },
 });
 const account = { address: 'ac'.repeat(32), bindingVersion: '0.1.0-lace.1' };
+const k256Grantee = {
+  scheme: 'secp256k1-ecdsa' as const,
+  publicKey: HexBytes.fromByteArray(
+    secp256k1.Point.BASE.multiply(0x5eed_c0ffeen).toBytes(true),
+  ),
+};
 const object = {
   color: '00'.repeat(32),
   recipient: { kind: 'user-address' as const, value: 'aa'.repeat(32) },
@@ -173,6 +185,57 @@ describe('retainStoredGrants', () => {
   it('keeps nothing when nothing is stored', async () => {
     await expect(
       retainStoredGrants(undefined, [onChain(grantId)], account.address),
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps an entry written before the scheme was kept as a jubjub grant', async () => {
+    const issued = await issuedGrant({
+      address: account.address,
+      origin: 'lace.io',
+      grantee: new JubjubDevice(23n),
+      slot: 1,
+    });
+    const { granteeScheme: _granteeScheme, ...legacy } = issued.stored;
+
+    await expect(
+      retainStoredGrants(
+        { [issued.id]: legacy },
+        [issued.onChain()],
+        account.address,
+      ),
+    ).resolves.toEqual({ [issued.id]: legacy });
+    expect(storedGrantOpenings({ [issued.id]: legacy })).toEqual(
+      new Map([[issued.id, issued.opening]]),
+    );
+  });
+
+  it('keeps a secp256k1 grant under its scheme, and drops it once the scheme it kept is not the one its id derives under', async () => {
+    const issued = await issuedGrant({
+      address: account.address,
+      origin: 'lace.io',
+      grantee: k256Grantee,
+      slot: 1,
+    });
+    const { granteeScheme: _granteeScheme, ...withoutScheme } = issued.stored;
+
+    await expect(
+      retainStoredGrants(
+        { [issued.id]: issued.stored },
+        [issued.onChain()],
+        account.address,
+      ),
+    ).resolves.toEqual({ [issued.id]: issued.stored });
+    expect(storedGrantOpenings({ [issued.id]: issued.stored })).toEqual(
+      new Map([
+        [issued.id, { ...issued.opening, granteeScheme: 'secp256k1-ecdsa' }],
+      ]),
+    );
+    await expect(
+      retainStoredGrants(
+        { [issued.id]: withoutScheme },
+        [issued.onChain()],
+        account.address,
+      ),
     ).resolves.toBeUndefined();
   });
 });

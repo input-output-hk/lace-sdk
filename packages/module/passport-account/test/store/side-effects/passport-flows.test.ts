@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../../src/augmentations';
 import { devEncryptionKey } from '../../../src/acc/dev-encryption-key';
 import { encodeDevicePublicKey } from '../../../src/acc/envelopes';
+import { GRANTEE_WITHDRAWAL_CIRCUITS } from '../../../src/acc/grant-circuits';
 import { deriveGrantId, originHash } from '../../../src/acc/grants';
 import { accManifest } from '../../../src/acc/manifest';
 import { JubjubDevice } from '../../../src/acc/signer';
@@ -41,6 +42,9 @@ import type { Action } from '@reduxjs/toolkit';
 import type { Observable } from 'rxjs';
 import type { ColdObservable } from 'rxjs/internal/testing/ColdObservable';
 import type { RunHelpers } from 'rxjs/testing';
+
+/** The grantee withdrawals of both schemes, as an account deployed here holds them. */
+const INSTALLED_WITHDRAWALS = Object.values(GRANTEE_WITHDRAWAL_CIRCUITS).flat();
 
 const mocks = vi.hoisted(() => ({
   createIndexerClient: vi.fn(),
@@ -164,7 +168,7 @@ const grantRecord = (id: GrantId, active = true): GrantRecord => ({
 /** The id the issue flow derives for the grantee's first slot under this host. */
 const issuedGrantId = deriveGrantId({
   contractAddress: ByteArray.fromHex(HexBytes(accountAddress)),
-  granteePublicKey: grantee.pk,
+  granteePublicKey: { scheme: 'jubjub-schnorr', point: grantee.pk },
   originHash: await originHash(rpId),
   slot: GrantSlot(0),
 });
@@ -218,7 +222,10 @@ const createHarness = (withStoredRecord = true, roster?: ChainRoster) => {
     getValues: vi.fn(() => of(withStoredRecord ? [record] : [])),
     setValue: vi.fn(() => of(void 0)),
   };
-  const queryContractState = vi.fn(async () => ({ data: 'charged-state' }));
+  const queryContractState = vi.fn(async () => ({
+    data: 'charged-state',
+    operations: () => INSTALLED_WITHDRAWALS,
+  }));
   mocks.createIndexerClient.mockReturnValue({
     queryContractState,
     enumerateContractActions: vi.fn(async () => []),

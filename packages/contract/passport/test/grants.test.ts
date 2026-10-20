@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 
 import { GrantLimitReachedError, GrantScopeInvalidError } from '../src/errors';
 import {
+  GRANTEE_SCHEMES,
+  isGranteeKey,
+  isGranteeScheme,
   isSealableX25519Key,
   MAX_GRANTS,
   validateGrantScope,
 } from '../src/grants';
 import { TokenColor } from '../src/value-objects';
 
-import type { GrantScopeContext, GrantScopeInput } from '../src/grants';
+import type {
+  GrantGrantee,
+  GrantScopeContext,
+  GrantScopeInput,
+} from '../src/grants';
 
 const nowSeconds = 1_800_000_000;
 const context: GrantScopeContext = { nowSeconds, grantCount: 0 };
@@ -244,6 +251,57 @@ describe('validateGrantScope', () => {
     }).toThrow(GrantScopeInvalidError);
   });
 
+  it.each([
+    ['an even', '02'],
+    ['an odd', '03'],
+  ])('accepts a secp256k1 grantee key with %s prefix', (_name, prefix) => {
+    expect(() => {
+      validateGrantScope(
+        {
+          ...spendScope,
+          grantee: {
+            scheme: 'secp256k1-ecdsa',
+            publicKey: `${prefix}${'ab'.repeat(32)}`,
+          },
+        },
+        context,
+      );
+    }).not.toThrow();
+  });
+
+  it.each<[string, GrantGrantee]>([
+    [
+      'a 32-byte secp256k1 grantee key',
+      { scheme: 'secp256k1-ecdsa', publicKey: 'ab'.repeat(32) },
+    ],
+    ...['00', '01', '04', '12', 'ff'].map((prefix): [string, GrantGrantee] => [
+      `a 33-byte secp256k1 grantee key prefixed ${prefix}`,
+      { scheme: 'secp256k1-ecdsa', publicKey: `${prefix}${'ab'.repeat(32)}` },
+    ]),
+    [
+      'an uppercase secp256k1 grantee key',
+      { scheme: 'secp256k1-ecdsa', publicKey: `02${'AB'.repeat(32)}` },
+    ],
+    [
+      'a 33-byte jubjub grantee key',
+      { scheme: 'jubjub-schnorr', publicKey: `02${'ab'.repeat(32)}` },
+    ],
+  ])('rejects %s', (_name, grantee) => {
+    expect(() => {
+      validateGrantScope({ ...spendScope, grantee }, context);
+    }).toThrow(GrantScopeInvalidError);
+  });
+
+  it('rejects a grantee scheme a grant cannot name', () => {
+    const grantee = {
+      scheme: 'p256-ecdsa',
+      publicKey: 'ab'.repeat(32),
+    } as unknown as GrantGrantee;
+    expect(() => {
+      validateGrantScope({ ...spendScope, grantee }, context);
+    }).toThrow(GrantScopeInvalidError);
+  });
+
   it('accepts a pinned recipient and a caller of 32 bytes', () => {
     expect(() => {
       validateGrantScope(
@@ -308,4 +366,44 @@ describe('isSealableX25519Key', () => {
       expect(isSealableX25519Key(key)).toBe(false);
     },
   );
+});
+
+describe('GRANTEE_SCHEMES', () => {
+  it('lists the jubjub and secp256k1 schemes', () => {
+    expect(GRANTEE_SCHEMES).toEqual(['jubjub-schnorr', 'secp256k1-ecdsa']);
+  });
+});
+
+describe('isGranteeScheme', () => {
+  it.each(GRANTEE_SCHEMES)('accepts %s', scheme => {
+    expect(isGranteeScheme(scheme)).toBe(true);
+  });
+
+  it.each(['p256-ecdsa', 'JUBJUB-SCHNORR', '', 7, undefined])(
+    'refuses %j',
+    value => {
+      expect(isGranteeScheme(value)).toBe(false);
+    },
+  );
+});
+
+describe('isGranteeKey', () => {
+  it.each([
+    ['jubjub-schnorr', 'ab'.repeat(32)],
+    ['secp256k1-ecdsa', `02${'ab'.repeat(32)}`],
+    ['secp256k1-ecdsa', `03${'ab'.repeat(32)}`],
+  ] as const)('accepts a %s key %s', (scheme, key) => {
+    expect(isGranteeKey(scheme, key)).toBe(true);
+  });
+
+  it.each([
+    ['jubjub-schnorr', `02${'ab'.repeat(32)}`],
+    ['jubjub-schnorr', 'AB'.repeat(32)],
+    ['secp256k1-ecdsa', 'ab'.repeat(32)],
+    ['secp256k1-ecdsa', `04${'ab'.repeat(32)}`],
+    ['secp256k1-ecdsa', `02${'AB'.repeat(32)}`],
+    ['secp256k1-ecdsa', 7],
+  ] as const)('refuses a %s key %j', (scheme, key) => {
+    expect(isGranteeKey(scheme, key)).toBe(false);
+  });
 });

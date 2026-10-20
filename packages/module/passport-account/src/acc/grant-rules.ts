@@ -7,17 +7,24 @@
  * nothing here evaluates the contract or the Midnight runtime, and a
  * bundle held free of both can still refuse a scope the contract would.
  */
-import { GrantScopeInvalidError } from '@lace-contract/passport';
+import {
+  GrantScopeInvalidError,
+  SECP256K1_COMPRESSED_HEX_PATTERN,
+} from '@lace-contract/passport';
 import { sha256 } from '@lace-lib/crypto';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import { jubjub } from '@noble/curves/misc.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 
 import type {
   GrantGrantee,
   GrantRecipient,
   GrantScopeInput,
 } from '@lace-contract/passport';
-import type { JubjubPoint } from '@midnight-ntwrk/compact-runtime';
+import type {
+  JubjubPoint,
+  Secp256k1Point,
+} from '@midnight-ntwrk/compact-runtime';
 
 const BYTES32_LENGTH = 32;
 const DECIMAL_PATTERN = /^\d+$/;
@@ -210,21 +217,25 @@ export const assertIssueRules = (scope: GrantCircuitScope): void => {
 };
 
 /**
- * Reads the grantee's public key from its 32-byte hex form: the
- * compressed jubjub point of the Zcash specification, the y coordinate
- * little-endian with the parity of x in its top bit. A point of small
- * order, the identity included, is refused here with the same cofactor
- * test the contract applies when the grantee spends, because issuing
- * never sees the key: without this check a doomed grant would cost the
- * passkey ceremony, a proof and a grant slot before the contract refuses
- * it. The signer reads the key the same way before it shows a grant a
- * dApp asks it to issue, and again when it re-derives the grant's id.
- *
- * @throws {@link GrantScopeInvalidError} when the hex is malformed, does
- * not decode to a point on the curve or has small order.
+ * A grantee key as the contract's circuits take it, tagged with its
+ * scheme: a jubjub point for a jubjub Schnorr grantee, a secp256k1 point
+ * for a secp256k1 ECDSA grantee.
  */
-export const granteePoint = (grantee: GrantGrantee): JubjubPoint => {
-  const bytes = bytes32('grantee public key', grantee.publicKey);
+export type GranteePoint =
+  | { scheme: 'jubjub-schnorr'; point: JubjubPoint }
+  | { scheme: 'secp256k1-ecdsa'; point: Secp256k1Point };
+
+/**
+ * Reads a jubjub grantee key from its 32-byte hex form: the compressed
+ * jubjub point of the Zcash specification, the y coordinate little-endian
+ * with the parity of x in its top bit. A point of small order, the
+ * identity included, is refused here with the same cofactor test the
+ * contract applies when the grantee spends, because issuing never sees
+ * the key: without this check a doomed grant would cost the passkey
+ * ceremony, a proof and a grant slot before the contract refuses it.
+ */
+const jubjubGranteePoint = (publicKey: string): JubjubPoint => {
+  const bytes = bytes32('grantee public key', publicKey);
   let point: ReturnType<typeof jubjub.Point.fromBytes>;
   try {
     point = jubjub.Point.fromBytes(bytes);
@@ -238,4 +249,61 @@ export const granteePoint = (grantee: GrantGrantee): JubjubPoint => {
   }
   const { x, y } = point.toAffine();
   return { x, y };
+};
+
+/**
+ * Reads a secp256k1 grantee key from its 33-byte SEC1 compressed hex
+ * form, prefixed 02 or 03. The curve has cofactor one and the compressed
+ * form cannot name the identity, so a key that decompresses to a point
+ * on the curve is one the contract can verify a signature under.
+ */
+const secp256k1GranteePoint = (publicKey: string): Secp256k1Point => {
+  if (!SECP256K1_COMPRESSED_HEX_PATTERN.test(publicKey)) {
+    throw new GrantScopeInvalidError(
+      'grantee public key must be a 33-byte compressed secp256k1 point as lowercase hex',
+    );
+  }
+  let point: ReturnType<typeof secp256k1.Point.fromBytes>;
+  try {
+    point = secp256k1.Point.fromBytes(ByteArray.fromHex(HexBytes(publicKey)));
+  } catch {
+    throw new GrantScopeInvalidError(
+      'grantee public key is not a point on the secp256k1 curve',
+    );
+  }
+  const { x, y } = point.toAffine();
+  return { x, y, identity: false };
+};
+
+/**
+ * Reads the grantee's public key into the point its scheme's circuits
+ * take, refusing a key the contract could never verify a signature
+ * under. The signer reads the key the same way before it shows a grant
+ * a dApp asks it to issue, and again when it re-derives the grant's id.
+ *
+ * @throws {@link GrantScopeInvalidError} when the hex is malformed for
+ * the scheme, does not decode to a point on the scheme's curve, has
+ * small order, or the scheme is not one a grant can name.
+ */
+export const granteePoint = (grantee: GrantGrantee): GranteePoint => {
+  switch (grantee.scheme) {
+    case 'jubjub-schnorr':
+      return {
+        scheme: grantee.scheme,
+        point: jubjubGranteePoint(grantee.publicKey),
+      };
+    case 'secp256k1-ecdsa':
+      return {
+        scheme: grantee.scheme,
+        point: secp256k1GranteePoint(grantee.publicKey),
+      };
+    default: {
+      const unhandled: never = grantee;
+      throw new GrantScopeInvalidError(
+        `unsupported grantee scheme "${String(
+          (unhandled as { scheme: unknown }).scheme,
+        )}"`,
+      );
+    }
+  }
 };

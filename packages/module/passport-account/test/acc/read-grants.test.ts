@@ -118,6 +118,7 @@ describe('readGrants', () => {
     const { grantId, scopeSalt } = await issue(sim);
     const opening = {
       scopeSalt,
+      granteeScheme: 'jubjub-schnorr' as const,
       granteePublicKey: 'ab'.repeat(32),
       origin: 'lace.io',
       color: COLOR,

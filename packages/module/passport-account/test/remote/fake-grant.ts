@@ -1,6 +1,7 @@
 import { AccAddress, TokenColor } from '@lace-contract/passport';
 import { HexBytes } from '@lace-lib/util';
 import { jubjub } from '@noble/curves/misc.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 
 import {
   issueGrantBinding,
@@ -41,6 +42,20 @@ export const spendScope: GrantScopeInput = {
   perCallCap: '300',
   cap: '450',
   expiresAt: null,
+};
+
+/** The fixed secret of a secp256k1 ECDSA grantee, as a wallet account holds it. */
+export const K256_GRANTEE_SECRET = 0x5eed_c0ffeen;
+
+/** The 33-byte SEC1 compressed form a secp256k1 grantee key is supplied in. */
+export const K256_GRANTEE_PUBLIC_KEY = HexBytes.fromByteArray(
+  secp256k1.Point.BASE.multiply(K256_GRANTEE_SECRET).toBytes(true),
+);
+
+/** The spend scope issued to a secp256k1 ECDSA grantee instead. */
+export const k256SpendScope: GrantScopeInput = {
+  ...spendScope,
+  grantee: { scheme: 'secp256k1-ecdsa', publicKey: K256_GRANTEE_PUBLIC_KEY },
 };
 
 /** RFC 7748 section 6.1, Bob's key pair: a grantee's read key for a read grant. */

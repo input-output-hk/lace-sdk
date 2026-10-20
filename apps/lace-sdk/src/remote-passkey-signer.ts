@@ -18,8 +18,8 @@ export type CreateRemotePasskeySignerProps = {
 };
 
 /**
- * One connection to the hosted Lace signer page and the Cardano signing a dApp
- * does through it.
+ * One connection to the hosted Lace self-custodial passkey wallet in the user's
+ * browser, and the Cardano signing a dApp does through it.
  */
 export type RemotePasskeySigner = Pick<
   SignerClient,
@@ -42,8 +42,10 @@ export type RemotePasskeySigner = Pick<
  *
  * It composes {@link createSignerClient} with the remote Cardano vault
  * module, so a dApp gets one connection to the Lace signer page instead of
- * building its own key source. The passkey stays with the signer page; the
- * dApp receives public keys and signatures only.
+ * building its own key source. The hosted signer is a self-custodial wallet:
+ * wallet keys are derived and used in its window in the user's browser, and
+ * the passkey stays in the user's authenticator. The dApp receives public
+ * keys and signatures only.
  *
  * `open` must run synchronously inside the user's click handler: browsers
  * refuse a popup opened after an await. Call `connect` right after `open`

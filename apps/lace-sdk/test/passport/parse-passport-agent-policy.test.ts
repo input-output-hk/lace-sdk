@@ -12,6 +12,7 @@ import {
   grantRecord,
   GRANT_ID,
   NETWORK,
+  SECP256K1_GRANTEE_PUBLIC_KEY,
   walletWith,
 } from './passport-fixtures';
 
@@ -37,6 +38,17 @@ describe('parsePassportAgentPolicy', () => {
   it('round trips an exported policy, as an object and as JSON text', () => {
     expect(parse(policy)).toEqual(policy);
     expect(parse(JSON.stringify(policy))).toEqual(policy);
+  });
+
+  it('round trips a policy for a secp256k1 grantee', () => {
+    const k256 = {
+      ...policy,
+      granteeScheme: 'secp256k1-ecdsa',
+      granteePublicKey: SECP256K1_GRANTEE_PUBLIC_KEY,
+    };
+
+    expect(parse(k256)).toEqual(k256);
+    expect(parse(JSON.stringify(k256))).toEqual(k256);
   });
 
   it('round trips a policy that never expires and one pinned to no recipient', () => {
@@ -105,11 +117,45 @@ describe('parsePassportAgentPolicy', () => {
     expect(refusalOf({ ...policy, type: 'other' })).toMatchObject({
       field: 'type',
     });
-    expect(refusalOf({ ...policy, version: 2 })).toMatchObject({
+    const { granteeScheme: _scheme, ...v1 } = policy;
+    expect(refusalOf({ ...v1, version: 1 })).toMatchObject({
+      field: 'version',
+      reason: 'unsupported version',
+    });
+    expect(refusalOf({ ...policy, version: 3 })).toMatchObject({
       field: 'version',
       reason: 'unsupported version',
     });
   });
+
+  it.each([
+    ['a missing scheme', undefined],
+    ['an unknown scheme', 'p256-ecdsa'],
+    ['a scheme that is not text', 7],
+  ])('refuses %s', (_name, granteeScheme) => {
+    const { granteeScheme: _scheme, ...without } = policy;
+    const input =
+      granteeScheme === undefined ? without : { ...policy, granteeScheme };
+
+    expect(refusalOf(input)).toMatchObject({ field: 'granteeScheme' });
+  });
+
+  it.each([
+    ['jubjub-schnorr', 'a compressed point', SECP256K1_GRANTEE_PUBLIC_KEY],
+    ['jubjub-schnorr', 'upper-case hex', 'AB'.repeat(32)],
+    ['secp256k1-ecdsa', 'a 32-byte key', '22'.repeat(32)],
+    ['secp256k1-ecdsa', 'an uncompressed prefix', `04${'22'.repeat(32)}`],
+    ['secp256k1-ecdsa', 'a prefix of 01', `01${'22'.repeat(32)}`],
+    ['secp256k1-ecdsa', 'upper-case hex', `02${'AB'.repeat(32)}`],
+    ['secp256k1-ecdsa', 'a key of 34 bytes', `02${'22'.repeat(33)}`],
+  ])(
+    'refuses a %s key that is %s',
+    (granteeScheme, _name, granteePublicKey) => {
+      expect(
+        refusalOf({ ...policy, granteeScheme, granteePublicKey }),
+      ).toMatchObject({ field: 'granteePublicKey' });
+    },
+  );
 
   it('refuses a missing field and an extra field', () => {
     const { origin: _origin, ...missing } = policy;

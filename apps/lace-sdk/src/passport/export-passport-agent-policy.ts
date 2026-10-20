@@ -11,6 +11,7 @@ import type {
   GrantId,
   GrantOperation,
   GrantRecipient,
+  GranteeScheme,
   passportSelectors,
 } from '@lace-contract/passport';
 
@@ -24,17 +25,17 @@ export type WalletWithPassport = {
 };
 
 /** The version of the policy this SDK writes and reads. */
-export const PASSPORT_AGENT_POLICY_VERSION = 1;
+export const PASSPORT_AGENT_POLICY_VERSION = 2;
 
 /**
  * What an agent needs to act under one grant, as JSON: where the grant is
- * (network, account, grant id, slot), who it is for (the grantee key and
- * the relying party id `origin` its id was derived from), the limits it
- * carries, the scope salt and object fields the contract keeps only as
- * commitments and, for a read grant, `view`, the account's viewing
- * secret sealed towards the agent's read key. Integers are decimal
- * strings, keys, salts and colours are lower-case hex, and the seal is
- * base64url.
+ * (network, account, grant id, slot), who it is for (the grantee key, its
+ * `granteeScheme` and the relying party id `origin` its id was derived
+ * from), the limits it carries, the scope salt and object fields the
+ * contract keeps only as commitments and, for a read grant, `view`, the
+ * account's viewing secret sealed towards the agent's read key. Integers
+ * are decimal strings, keys, salts and colours are lower-case hex, and the
+ * seal is base64url.
  *
  * The limits are a snapshot of the grant when it was exported. `window` is
  * always null, since the contract accepts no rolling window. `view`
@@ -55,6 +56,12 @@ export type PassportAgentPolicy = {
   account: string;
   grantId: string;
   slot: number;
+  /** The signature scheme the grantee signs with, see {@link GranteeScheme}. */
+  granteeScheme: GranteeScheme;
+  /**
+   * The grantee key as lower-case hex: 32 bytes for `jubjub-schnorr`, the
+   * 33-byte compressed point for `secp256k1-ecdsa`.
+   */
   granteePublicKey: string;
   scopeSalt: string;
   /** The token colour the grant may withdraw. */
@@ -173,6 +180,7 @@ export const exportPassportAgentPolicy = async (
     account: account.address,
     grantId: grant.id,
     slot: grant.slot,
+    granteeScheme: opening.granteeScheme,
     granteePublicKey: opening.granteePublicKey,
     scopeSalt: opening.scopeSalt,
     color: opening.color,

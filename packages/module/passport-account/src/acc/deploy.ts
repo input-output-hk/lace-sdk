@@ -17,6 +17,7 @@ import {
   expectedVk,
   pureCircuits,
 } from './acc-module';
+import { GRANTEE_WITHDRAWAL_CIRCUITS } from './grant-circuits';
 import { JubjubDevice } from './signer';
 import {
   assertVerifierKeyHeader,
@@ -62,25 +63,25 @@ const GRANT_LIFECYCLE_BASES = [
   'revoke_all_grants',
 ] as const;
 
-/** The withdrawals a grantee may run under a grant from a jubjub owner. */
-const GRANT_WITHDRAWAL_BASES = [
-  'withdraw_unshielded',
-  'withdraw_shielded',
-  'withdraw_shielded_to_contract',
-] as const;
-
-/** The scoped grant circuits of the jubjub arm. */
+/**
+ * The scoped grant circuits: the lifecycle a jubjub device authorises,
+ * then the withdrawals of a jubjub grantee and of a secp256k1 grantee.
+ */
 const GRANT_CIRCUITS = [
   ...GRANT_LIFECYCLE_BASES.map(base => `${base}_with_jubjub`),
-  ...GRANT_WITHDRAWAL_BASES.map(base => `${base}_with_grant_jubjub`),
+  ...GRANTEE_WITHDRAWAL_CIRCUITS['jubjub-schnorr'],
+  ...GRANTEE_WITHDRAWAL_CIRCUITS['secp256k1-ecdsa'],
 ];
 
 /**
  * The complete operation set this module deploys, in installation order:
- * the deposits, the jubjub device arm and the jubjub grant circuits. The
- * compiled contract also carries k256 and P-256 arms and the recovery
- * circuits; none of their verifier keys are installed, so on an account
- * deployed here only jubjub devices can ever authorise.
+ * the deposits, the jubjub device arm and the grant circuits. The device
+ * arm is jubjub only: the compiled contract also carries k256 and P-256
+ * device arms, their grant lifecycles and the recovery circuits, and none
+ * of their verifier keys are installed, so on an account deployed here
+ * only jubjub devices can ever authorise. A grant may name a jubjub or a
+ * secp256k1 grantee, so the withdrawals of both grantee arms are
+ * installed.
  */
 const DEPLOYED_OPERATIONS = [
   ...SHARED_CIRCUITS,
@@ -608,8 +609,9 @@ const toDeployedState = ({
 
 /**
  * Deploys a fresh Account Custody Contract carrying the deposits, the
- * jubjub device arm and the jubjub grant circuits, and returns its
- * address, the boot salt, and the activation call.
+ * jubjub device arm and the grant circuits, including the secp256k1
+ * grantee withdrawals, and returns its address, the boot salt, and the
+ * activation call.
  *
  * The constructor cannot insert the initial device entry (the contract
  * address does not exist yet inside it), so it stores a salted boot

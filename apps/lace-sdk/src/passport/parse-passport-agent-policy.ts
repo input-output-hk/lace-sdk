@@ -2,7 +2,10 @@ import {
   AccAddress,
   GrantId,
   GrantScopeSalt,
+  GRANTEE_SCHEMES,
   GrantSlot,
+  isGranteeKey,
+  isGranteeScheme,
   TokenColor,
 } from '@lace-contract/passport';
 import { CustomError } from 'ts-custom-error';
@@ -10,7 +13,11 @@ import { CustomError } from 'ts-custom-error';
 import { PASSPORT_AGENT_POLICY_VERSION } from './export-passport-agent-policy';
 
 import type { PassportAgentPolicy } from './export-passport-agent-policy';
-import type { GrantOperation, GrantRecipient } from '@lace-contract/passport';
+import type {
+  GrantOperation,
+  GrantRecipient,
+  GranteeScheme,
+} from '@lace-contract/passport';
 
 /**
  * A Passport agent policy is malformed or is for another network. `field`
@@ -51,6 +58,7 @@ const FIELDS: readonly (keyof PassportAgentPolicy)[] = [
   'account',
   'grantId',
   'slot',
+  'granteeScheme',
   'granteePublicKey',
   'scopeSalt',
   'color',
@@ -79,6 +87,12 @@ const OPERATIONS: readonly GrantOperation[] = [
   'withdraw-unshielded',
 ];
 
+/** Why a grantee key was refused, by the scheme it was read under. */
+const GRANTEE_KEY_REFUSALS: Record<GranteeScheme, string> = {
+  'jubjub-schnorr': 'must be 32 bytes as lower-case hex',
+  'secp256k1-ecdsa': 'must be a 33-byte compressed point as lower-case hex',
+};
+
 const BYTES32_HEX_PATTERN = /^[0-9a-f]{64}$/;
 const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)$/;
 const UINT128_MAX = 2n ** 128n - 1n;
@@ -103,6 +117,20 @@ const readHex32 = (value: unknown, field: string): string =>
   typeof value === 'string' && BYTES32_HEX_PATTERN.test(value)
     ? value
     : invalid('must be 32 bytes as lower-case hex', field);
+
+const readGranteeScheme = (value: unknown): GranteeScheme =>
+  isGranteeScheme(value)
+    ? value
+    : invalid(`must be ${GRANTEE_SCHEMES.join(' or ')}`, 'granteeScheme');
+
+/**
+ * The grantee key as its scheme writes it: 32 bytes for a jubjub key, the
+ * 33-byte compressed point with a 02 or 03 prefix for a secp256k1 key.
+ */
+const readGranteePublicKey = (value: unknown, scheme: GranteeScheme): string =>
+  isGranteeKey(scheme, value)
+    ? value
+    : invalid(GRANTEE_KEY_REFUSALS[scheme], 'granteePublicKey');
 
 const readAmount = (value: unknown, field: string): string => {
   if (
@@ -237,15 +265,17 @@ const readSlot = (value: unknown): GrantSlot => {
  * agent reads its policy with it before it acts under the grant.
  *
  * It refuses any shape but the one `exportPassportAgentPolicy` writes:
- * another type or any version but 1, a missing or extra field, a policy for
- * another network, a key, salt, colour or recipient that is not 32 bytes of
- * lower-case hex, an amount that is not a canonical decimal string within
- * 128 bits, a per-call cap above the cap, a slot outside 0 to 255, an
- * expiry that is not a positive whole number of seconds or null, a
- * `window` that is not null, a list of operations that is empty, repeats
- * one or names an unknown one, and a `view` that is not the canonical
- * base64url of a GrantViewSeal v1; `view` is the one field a policy may
- * leave out.
+ * another type or any version but 2, a missing or extra field, a policy for
+ * another network, a `granteeScheme` other than jubjub-schnorr or
+ * secp256k1-ecdsa, a grantee key that is not 32 bytes of lower-case hex for
+ * the first or a 33-byte compressed point with a 02 or 03 prefix for the
+ * second, a salt, colour or recipient that is not 32 bytes of lower-case
+ * hex, an amount that is not a canonical decimal string within 128 bits, a
+ * per-call cap above the cap, a slot outside 0 to 255, an expiry that is
+ * not a positive whole number of seconds or null, a `window` that is not
+ * null, a list of operations that is empty, repeats one or names an
+ * unknown one, and a `view` that is not the canonical base64url of a
+ * GrantViewSeal v1; `view` is the one field a policy may leave out.
  *
  * It does not prove that the grant exists or still works, and does not
  * check the grantee: the agent compares the policy's key with its own.
@@ -259,6 +289,12 @@ export const parsePassportAgentPolicy = (
 ): PassportParsedAgentPolicy => {
   const policy = parseJson(input);
   if (!isRecord(policy)) return invalid('must be an object', 'policy');
+  if (policy.type !== 'passport-agent-policy') {
+    return invalid('is not a Passport agent policy', 'type');
+  }
+  if (policy.version !== PASSPORT_AGENT_POLICY_VERSION) {
+    return invalid('unsupported version', 'version');
+  }
   const unexpected = Object.keys(policy).find(
     key =>
       !FIELDS.some(field => field === key) &&
@@ -269,15 +305,10 @@ export const parsePassportAgentPolicy = (
   }
   const missing = FIELDS.find(field => !(field in policy));
   if (missing !== undefined) return invalid('is missing', missing);
-  if (policy.type !== 'passport-agent-policy') {
-    return invalid('is not a Passport agent policy', 'type');
-  }
-  if (policy.version !== PASSPORT_AGENT_POLICY_VERSION) {
-    return invalid('unsupported version', 'version');
-  }
   if (policy.network !== network) {
     return invalid(`is not the network ${network}`, 'network');
   }
+  const granteeScheme = readGranteeScheme(policy.granteeScheme);
   const perCallCap = readAmount(policy.perCallCap, 'perCallCap');
   const cap = readAmount(policy.cap, 'cap');
   if (BigInt(perCallCap) > BigInt(cap)) {
@@ -290,7 +321,11 @@ export const parsePassportAgentPolicy = (
     account: AccAddress(readText(policy.account, 'account')),
     grantId: readGrantId(policy.grantId),
     slot: readSlot(policy.slot),
-    granteePublicKey: readHex32(policy.granteePublicKey, 'granteePublicKey'),
+    granteeScheme,
+    granteePublicKey: readGranteePublicKey(
+      policy.granteePublicKey,
+      granteeScheme,
+    ),
     scopeSalt: GrantScopeSalt(readHex32(policy.scopeSalt, 'scopeSalt')),
     color: TokenColor(readHex32(policy.color, 'color')),
     recipient: readRecipient(policy.recipient),

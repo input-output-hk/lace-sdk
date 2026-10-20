@@ -149,15 +149,15 @@ plaintext bit, not a secret, that tells an unfinished creation from a
 completed account without opening the record, so creating an account over
 a completed record is refused before any ceremony. Once a grant is issued
 the record also keeps, per grant, the slot its id was derived under and
-the scope salt its commitments hide under, with the grantee key and the
-origin, because the contract stores neither: the slot is what lists the
-grant with its position and the salt is what opens the grant for its
-grantee. They stay inside the ciphertext; nothing about a grant is marked
-on the envelope. The same bookkeeping also lives on chain, in grant
-records only this device opens on that account, so a lost record costs
-nothing a sign-in cannot rebuild; the roster of devices the account keys
-are sealed to is never kept in the record, a rotation reads it from the
-chain each time.
+the scope salt its commitments hide under, with the grantee key, its
+scheme and the origin, because the contract stores neither: the slot is
+what lists the grant with its position and the salt is what opens the
+grant for its grantee. They stay inside the ciphertext; nothing about a
+grant is marked on the envelope. The same bookkeeping also lives on chain,
+in grant records only this device opens on that account, so a lost record
+costs nothing a sign-in cannot rebuild; the roster of devices the account
+keys are sealed to is never kept in the record, a rotation reads it from
+the chain each time.
 
 ### Key material
 
@@ -603,19 +603,22 @@ repeat per transaction.
 #### Deployed circuits
 
 The compiled contract carries three authorisation arms (jubjub, k256 and
-P-256), scoped grants and recovery. This module installs sixteen operations:
-the two permissionless deposits, the eight jubjub device circuits, and the
-six jubjub grant circuits (issuing a grant, revoking one, revoking all, and
-the three withdrawals a grantee may run under a grant). No other arm's keys
-are installed, so on an account created here only jubjub devices can ever
-authorise. Every verifier key is downloaded from the artefact bundle and
-checked against the sha256 pin the vendored contract carries for it before
-it is placed on chain; a key whose digest or header disagrees fails before
-any transaction is built.
+P-256), scoped grants and recovery. This module installs nineteen
+operations: the two permissionless deposits, the eight jubjub device
+circuits, the six jubjub grant circuits (issuing a grant, revoking one,
+revoking all, and the three withdrawals a jubjub grantee may run under a
+grant) and the three k256 grant withdrawals a secp256k1 ECDSA grantee runs
+instead. The device arm is jubjub only: no k256 or P-256 device, activation
+or grant lifecycle keys are installed, so on an account created here only
+jubjub devices can ever authorise, while a grant they issue may name a
+jubjub or a secp256k1 ECDSA grantee. Every verifier key is downloaded from
+the artefact bundle and checked against the sha256 pin the vendored
+contract carries for it before it is placed on chain; a key whose digest or
+header disagrees fails before any transaction is built.
 
 #### Deployment waves
 
-The sixteen verifier keys exceed what one transaction may carry: the node
+The nineteen verifier keys exceed what one transaction may carry: the node
 refuses a transaction carrying more than about 15,000 verifier bytes for
 exhausting the block limits. The deployment is therefore planned as waves
 under a 15,000 byte budget, packed greedily in roster order from the
@@ -671,7 +674,10 @@ retry with that choice resumes it. A build whose pinned verifier keys
 differ from the recorded digest, or a record that names none, is refused
 with `creation-artefact-mismatch`: finishing it would install verifier
 keys of two builds on one account, which no proof of either satisfies.
-Only a build pinning the recorded keys could resume it.
+Only a build pinning the recorded keys could resume it. The digest covers
+the operation roster as well as the keys, so a creation interrupted under
+the sixteen-operation roster that preceded secp256k1 grantees is refused
+this way by any build that installs nineteen.
 
 Over the hosted signer a create request from another site than the one
 that started the creation is refused with `account-creation-pending`; it
@@ -856,26 +862,30 @@ much per call and in total, until when, and to which recipient, with an
 optional pin to the contract allowed to invoke it. The contract checks
 every limit on each call the grantee makes; building and submitting those
 calls is the agent's side, which this module does not implement. Why Lace
-adopts the contract's scoped grants on the jubjub arm, and what it holds
-back, is recorded in
+adopts the contract's scoped grants on the jubjub arm, whose grantees may
+also be secp256k1 ECDSA keys, and what it holds back, is recorded in
 [ADR 69](../../../docs/adr/69-passport-account-scoped-grants.md). The
 owner issues a grant through `issueGrant`, revokes one through
 `revokeGrant` and every one at once through `revokeAllGrants`; each is a
 gated call like a device change, authorised by the local device inside one
 key session and reported through the same flow state. The grant id is
 derived from the account, the grantee key, the hash of the host's relying
-party id and a slot, and the scope the device signs over is a salted
-digest, so the contract learns the limits as commitments; the slot and the
-salt stay in the sealed account record, which is what lets the roster list
-the grant with its position and later open it for the grantee. Because a
-grant that lands without its salt could never be opened, an issue writes
-that bookkeeping to the record before it submits the call and again, with
-the advanced use counter, once the call is accepted, and once the grant
-shows active appends it to the inbox as grant records sealed under a key
-only this device derives, so a sign-in after the record is lost rebuilds
-it from chain; a call that never
-lands leaves a stale entry, which the next sign-in prunes against the
-chain and a later issue over the same id overwrites. Sign-in and the
+party id and a slot (a secp256k1 grant also binds its signature envelope,
+which Lace always issues as 0), and the scope the device signs over is a
+salted digest, so the contract learns the limits as commitments; the slot
+and the salt stay in the sealed account record, which is what lets the
+roster list the grant with its position and later open it for the grantee.
+Because a grant that lands without its salt could never be opened, an
+issue writes that bookkeeping to the record before it submits the call and
+again, with the advanced use counter, once the call is accepted, and once
+the grant shows active appends it to the inbox as grant records sealed
+under a key only this device derives, so a sign-in after the record is
+lost rebuilds it from chain. A grant record holds a 32-byte grantee key
+field: a jubjub key fills it, and a secp256k1 key keeps its x coordinate
+there and its parity in the byte that names the record part, so the
+rebuilt grant carries its scheme and its full compressed key. A call that
+never lands leaves a stale entry, which the next sign-in prunes against
+the chain and a later issue over the same id overwrites. Sign-in and the
 startup restore read the roster back from the contract's grants map, so a
 grant issued elsewhere, or revoked elsewhere, shows after a reload; a
 revoked grant stays listed as inactive until the slot is reused or every
@@ -885,9 +895,13 @@ roster does not list with `grant-not-found`; a grant revoked elsewhere
 between that check and the call surfaces as the same error from the
 contract's abort. The module holds an account to sixteen active grants
 (`MAX_GRANTS`), a limit the contract itself does not set. Every grant
-names at least one operation: the contract would accept a read-only
-grant, but the shared scope validation refuses one with
-`grant-scope-invalid`.
+names at least one operation: the contract would accept a read-only grant,
+but the shared scope validation refuses one with `grant-scope-invalid`.
+An issue also reads which operations the account holds and refuses, with
+`grant-scope-invalid` before any prompt, a grantee whose scheme's
+withdrawals are missing: an account deployed with the sixteen-operation
+roster that preceded secp256k1 grantees can never gain the k256 grant
+withdrawals, so a secp256k1 grant on it would land and never spend.
 
 A grant may also `read`: it then delivers the account's viewing secret to
 the grantee, which the contract asks for before it admits a shielded
@@ -1195,13 +1209,14 @@ a transaction through the indexer's `transactions` query by hash.
   exists, so if every device holding the passkey is lost the account
   cannot be recovered. A recoverable account (the MIP recovery / BUSS
   path) passes real recovery material and is later work.
-- **One authorisation arm.** Only jubjub verifier keys are installed: the
-  device circuits and the grant circuits of that arm. The compiled contract
-  also carries k256 and P-256 arms and the recovery circuits, but their
-  keys are not deployed. Installing one later needs a maintenance update:
-  a locked account retired its authority, and the module drops an
-  unlocked account's authority key once the creation completes, so in
-  practice it means a new account.
+- **One authorisation arm.** Only the jubjub device arm is installed: its
+  device circuits and grant lifecycle circuits. Grantees may be jubjub or
+  secp256k1 ECDSA keys, the latter spending through the three k256 grant
+  withdrawal circuits, but no k256 or P-256 device arm, no P-256 grantee
+  withdrawal and no recovery circuit is deployed. Installing one later
+  needs a maintenance update: a locked account retired its authority, and
+  the module drops an unlocked account's authority key once the creation
+  completes, so in practice it means a new account.
 - **Grants spend on the agent's side.** The module issues, revokes, lists
   and exports grants; it builds no grantee withdrawal. No rolling window
   can be set, since the contract reserves the window bounds.
@@ -1285,9 +1300,9 @@ provenance: the repository, the commit, the compiler, language and runtime
 versions the compile reported, and the byte size and sha256 of the circuit
 IR, prover key and verifier key of every circuit in the contract. The
 inventory covers every circuit across the jubjub, k256 and P-256 arms
-even though the module installs the jubjub arm only, so a hosted bundle can
-be checked as a whole, and the jubjub pins in `accManifest` are a subset of
-it.
+even though the module installs only the jubjub device arm and the k256
+grant withdrawals, so a hosted bundle can be checked as a whole, and the
+jubjub pins in `accManifest` are a subset of it.
 
 The artefact bundle itself is not committed: prover keys run to hundreds
 of megabytes each. It is hosted under the `artefactUrl` a consumer passes

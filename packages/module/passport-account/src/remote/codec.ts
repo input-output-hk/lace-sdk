@@ -4,6 +4,8 @@ import {
   GrantId,
   GrantScopeSalt,
   GrantSlot,
+  isGranteeKey,
+  isGranteeScheme,
   TokenColor,
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
@@ -14,6 +16,7 @@ import {
   MAX_INBOX_ENTRIES_PER_REQUEST,
 } from '../acc/inbox';
 import { GRANT_VIEW_SEAL_LENGTH } from '../acc/view-seal';
+import { storedGranteeScheme } from '../flows/types';
 
 import type {
   PassportAccountRecord,
@@ -31,6 +34,7 @@ import type {
   Authorisation,
   DeviceDelivery,
   DeviceReader,
+  GranteeScheme,
   GrantBookkeeping,
   GrantOperation,
   GrantRecipient,
@@ -455,30 +459,45 @@ const decodeSeconds = (value: unknown, field: string): number => {
   return value as number;
 };
 
+/** Reads the scheme of a grantee key, admitted only as one a grant can name. */
+const decodeGranteeScheme = (value: unknown, field: string): GranteeScheme => {
+  if (!isGranteeScheme(value)) throw new MalformedPayloadError(field);
+  return value;
+};
+
+/** Reads a grantee key in the form its scheme takes, see {@link isGranteeKey}. */
+const decodeGranteeKey = (
+  scheme: GranteeScheme,
+  value: unknown,
+  field: string,
+): string => {
+  if (!isGranteeKey(scheme, value)) throw new MalformedPayloadError(field);
+  return value;
+};
+
+/** Reads a grant scope's grantee: its scheme and its key in that form. */
 const decodeGrantee = (
   value: unknown,
   field: string,
 ): GrantScopeInput['grantee'] => {
   if (!isRecord(value)) throw new MalformedPayloadError(field);
-  if (value.scheme !== 'jubjub-schnorr') {
-    throw new MalformedPayloadError(`${field}.scheme`);
-  }
+  const scheme = decodeGranteeScheme(value.scheme, `${field}.scheme`);
   return {
-    scheme: value.scheme,
-    publicKey: decodeHex32(value.publicKey, `${field}.publicKey`),
+    scheme,
+    publicKey: decodeGranteeKey(scheme, value.publicKey, `${field}.publicKey`),
   };
 };
 
 /**
  * The scope an issue-grant flow asks the user to grant, admitted only in
- * the shape the module types it: a jubjub grantee key, known operations,
- * the token colour, recipient and caller as 32-byte lowercase hex,
- * amounts as decimal strings and times as whole seconds, and the read
- * public key of a read grant as 32-byte lowercase hex. A scope that
- * names a rolling window is refused, since the contract reserves its
- * bounds and the module never asks for one. The optional
- * fields are kept only when present, so the scope re-derives the same
- * digest on either end of the channel.
+ * the shape the module types it: a grantee key in the form its scheme
+ * takes, known operations, the token colour, recipient and caller as
+ * 32-byte lowercase hex, amounts as decimal strings and times as whole
+ * seconds, and the read public key of a read grant as 32-byte lowercase
+ * hex. A scope that names a rolling window is refused, since the
+ * contract reserves its bounds and the module never asks for one. The
+ * optional fields are kept only when present, so the scope re-derives
+ * the same digest on either end of the channel.
  */
 export const decodeGrantScope = (
   value: unknown,
@@ -567,19 +586,65 @@ const decodeStoredGrantView = (
 };
 
 /**
+ * Reads the grantee scheme and key a grant's fields carry, the key in
+ * the form its scheme takes. Fields written before the scheme was kept
+ * carry none, and read as a jubjub grantee, see
+ * {@link storedGranteeScheme}, so their key is held to 32-byte hex.
+ */
+const decodeGranteeFields = (
+  value: Record<string, unknown>,
+  field: string,
+): Pick<GrantBookkeeping, 'granteePublicKey' | 'granteeScheme'> => {
+  const granteeScheme = storedGranteeScheme(
+    value.granteeScheme === undefined
+      ? {}
+      : {
+          granteeScheme: decodeGranteeScheme(
+            value.granteeScheme,
+            `${field}.granteeScheme`,
+          ),
+        },
+  );
+  return {
+    granteeScheme,
+    granteePublicKey: decodeGranteeKey(
+      granteeScheme,
+      value.granteePublicKey,
+      `${field}.granteePublicKey`,
+    ),
+  };
+};
+
+/**
+ * A stored grant's grantee scheme and key, admitted only in the forms
+ * the flows write: a jubjub key as 32-byte lowercase hex, kept without a
+ * scheme by an entry written before the scheme was kept, and a
+ * secp256k1 key as the 33-byte compressed point prefixed 02 or 03. An
+ * entry kept without a scheme is read back without one.
+ */
+const decodeStoredGrantee = (
+  value: Record<string, unknown>,
+  field: string,
+): Pick<StoredGrant, 'granteePublicKey' | 'granteeScheme'> => {
+  const grantee = decodeGranteeFields(value, field);
+  return value.granteeScheme === undefined
+    ? { granteePublicKey: grantee.granteePublicKey }
+    : grantee;
+};
+
+/**
  * What the record keeps about one grant this client issued, each field
  * admitted only in the shape the flows wrote it: the slot within the
- * contract's bounds, the salt and the grantee key as 32-byte lowercase
- * hex, the object fields when the entry kept them, and the viewing
- * capability of a read grant.
+ * contract's bounds, the salt as 32-byte lowercase hex, the grantee key
+ * in the form its scheme takes, the object fields when the entry kept
+ * them, and the viewing capability of a read grant.
  */
 const decodeStoredGrant = (value: unknown, field: string): StoredGrant => {
   if (!isRecord(value)) throw new MalformedPayloadError(field);
-  const granteeField = `${field}.granteePublicKey`;
   return {
     slot: decodeSlot(value.slot, `${field}.slot`),
     scopeSalt: decodeScopeSalt(value.scopeSalt, `${field}.scopeSalt`),
-    granteePublicKey: decodeHex32(value.granteePublicKey, granteeField),
+    ...decodeStoredGrantee(value, field),
     origin: decodeString(value.origin, `${field}.origin`),
     ...(value.object === undefined
       ? {}
@@ -828,7 +893,12 @@ export const decodeViewDelivery = (
   };
 };
 
-/** The fields of a grant's bookkeeping other than its object fields. */
+/**
+ * The fields of a grant's bookkeeping other than its object fields. An
+ * SDK or signer from before the grantee scheme was carried sends none,
+ * and its grant reads as the jubjub grant it is, with the scheme filled
+ * in.
+ */
 const decodeGrantFields = (
   value: Record<string, unknown>,
   field: string,
@@ -836,10 +906,7 @@ const decodeGrantFields = (
   grantId: decodeGrantId(value.grantId, `${field}.grantId`),
   slot: decodeSlot(value.slot, `${field}.slot`),
   scopeSalt: decodeScopeSalt(value.scopeSalt, `${field}.scopeSalt`),
-  granteePublicKey: decodeHex32(
-    value.granteePublicKey,
-    `${field}.granteePublicKey`,
-  ),
+  ...decodeGranteeFields(value, field),
   ...(value.readPublicKey === undefined
     ? {}
     : {
@@ -852,8 +919,9 @@ const decodeGrantFields = (
 
 /**
  * Reads a grant's bookkeeping, each field in the shape the flows write
- * it: the id, salt, grantee key and read key as 32-byte lowercase hex,
- * the slot within the contract's bounds and the object fields.
+ * it: the id, salt and read key as 32-byte lowercase hex, the grantee
+ * key in the form its scheme takes, a jubjub key when no scheme is
+ * carried, the slot within the contract's bounds and the object fields.
  */
 export const decodeGrantBookkeeping = (
   value: unknown,

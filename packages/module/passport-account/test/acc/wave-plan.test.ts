@@ -9,6 +9,7 @@ import type { DeployWave } from '../../src/acc/wave-plan';
 const JUBJUB_KEY_BYTES = 2313;
 const DEPOSIT_UNSHIELDED_KEY_BYTES = 1353;
 const DEPOSIT_SHIELDED_KEY_BYTES = 2121;
+const K256_GRANT_KEY_BYTES = 2745;
 
 const DEVICE_CIRCUITS = [
   'activate_initial_device',
@@ -28,6 +29,9 @@ const GRANT_CIRCUITS = [
   'withdraw_unshielded_with_grant_jubjub',
   'withdraw_shielded_with_grant_jubjub',
   'withdraw_shielded_to_contract_with_grant_jubjub',
+  'withdraw_unshielded_with_grant_k256',
+  'withdraw_shielded_with_grant_k256',
+  'withdraw_shielded_to_contract_with_grant_k256',
 ];
 
 const ROSTER = [
@@ -40,6 +44,7 @@ const ROSTER = [
 const sizeOf = (operation: string): number => {
   if (operation === 'deposit_unshielded') return DEPOSIT_UNSHIELDED_KEY_BYTES;
   if (operation === 'deposit_shielded') return DEPOSIT_SHIELDED_KEY_BYTES;
+  if (operation.endsWith('_with_grant_k256')) return K256_GRANT_KEY_BYTES;
   return JUBJUB_KEY_BYTES;
 };
 
@@ -49,28 +54,30 @@ const operationsOf = (waves: DeployWave[]): string[][] =>
   waves.map(wave => wave.operations);
 
 describe('planDeployWaves', () => {
-  it('packs the 16 operation roster into three waves under the 15,000 byte budget', () => {
+  it('packs the 19 operation roster into four waves under the 15,000 byte budget', () => {
     const waves = planDeployWaves(ROSTER, sizes, { retireAuthority: false });
 
     expect(waves.map(wave => wave.kind)).toEqual([
       'deploy',
       'maintenance',
       'maintenance',
+      'maintenance',
     ]);
     expect(operationsOf(waves)).toEqual([
       ROSTER.slice(0, 6),
       ROSTER.slice(6, 12),
-      ROSTER.slice(12),
+      ROSTER.slice(12, 18),
+      ROSTER.slice(18),
     ]);
     expect(waves.map(wave => wave.verifierBytes)).toEqual([
-      12_726, 13_878, 9252,
+      12_726, 13_878, 14_742, 2745,
     ]);
     for (const wave of waves) {
       expect(wave.verifierBytes).toBeLessThanOrEqual(15_000);
     }
     expect(waves.flatMap(wave => wave.operations)).toEqual(ROSTER);
     expect(waves.reduce((total, wave) => total + wave.verifierBytes, 0)).toBe(
-      35_856,
+      44_091,
     );
   });
 
@@ -91,6 +98,7 @@ describe('planDeployWaves', () => {
     const waves = planDeployWaves(ROSTER, sizes, { retireAuthority: true });
 
     expect(waves.map(wave => wave.retiresAuthority)).toEqual([
+      false,
       false,
       false,
       true,
@@ -197,10 +205,12 @@ describe('planResumeWaves', () => {
     expect(waves.map(wave => wave.kind)).toEqual([
       'maintenance',
       'maintenance',
+      'maintenance',
     ]);
     expect(operationsOf(waves)).toEqual([
       ROSTER.slice(6, 12),
-      ROSTER.slice(12),
+      ROSTER.slice(12, 18),
+      ROSTER.slice(18),
     ]);
     expect(waves.some(wave => wave.retiresAuthority)).toBe(false);
   });
@@ -214,8 +224,11 @@ describe('planResumeWaves', () => {
       retireAuthority: true,
     });
 
-    expect(operationsOf(waves)).toEqual([ROSTER.slice(12)]);
-    expect(waves[0].retiresAuthority).toBe(true);
+    expect(operationsOf(waves)).toEqual([
+      ROSTER.slice(12, 18),
+      ROSTER.slice(18),
+    ]);
+    expect(waves.map(wave => wave.retiresAuthority)).toEqual([false, true]);
   });
 
   it('ignores the order and extras of the installed set', () => {
@@ -284,7 +297,7 @@ describe('planResumeWaves', () => {
       }),
     ).toThrow(
       new AuthorityRetiredError(
-        `The maintenance authority is retired and 4 operations are not installed: ${ROSTER.slice(
+        `The maintenance authority is retired and 7 operations are not installed: ${ROSTER.slice(
           12,
         ).join(', ')}`,
       ),

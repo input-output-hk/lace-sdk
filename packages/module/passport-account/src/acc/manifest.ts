@@ -30,6 +30,7 @@ export type AccPureCircuitName =
   | 'derive_boot_commitment_with_jubjub'
   | 'derive_device_entry_with_jubjub'
   | 'derive_grant_id_with_jubjub'
+  | 'derive_grant_id_with_k256'
   | 'derive_grant_object_commit'
   | 'derive_grant_scope_digest';
 
@@ -181,6 +182,7 @@ export const accManifest: AccManifest = {
     'derive_boot_commitment_with_jubjub',
     'derive_device_entry_with_jubjub',
     'derive_grant_id_with_jubjub',
+    'derive_grant_id_with_k256',
     'derive_grant_object_commit',
     'derive_grant_scope_digest',
   ],

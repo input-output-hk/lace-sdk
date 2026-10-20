@@ -14,6 +14,8 @@ import {
   originHash,
 } from '../acc/grants';
 
+import { storedGranteeScheme } from './types';
+
 import type { SealedViews } from './rotation';
 import type {
   PassportAccountRecord,
@@ -24,6 +26,7 @@ import type {
 } from './types';
 import type { GrantOpenings, GrantSlots } from '../acc/read-grants';
 import type {
+  GranteeScheme,
   GrantRecord,
   GrantRecordPart,
   PassportAccountInfo,
@@ -60,6 +63,7 @@ export const storedGrantOpenings = (
               GrantId(id),
               {
                 scopeSalt: GrantScopeSalt(grant.scopeSalt),
+                granteeScheme: storedGranteeScheme(grant),
                 granteePublicKey: grant.granteePublicKey,
                 origin: grant.origin,
                 color: TokenColor(grant.object.color),
@@ -223,6 +227,7 @@ const partsByGrant = (
 type GrantOpeningFields = {
   slot: number;
   scopeSalt: string;
+  granteeScheme: GranteeScheme;
   granteePublicKey: string;
   origin: string;
   object: StoredGrantObject;
@@ -232,13 +237,13 @@ type GrantOpeningFields = {
 /**
  * Whether a grant's bookkeeping opens its on-chain commitments under the
  * account at `address`: the id derives from the account, the grantee
- * key, the origin and the slot, the object commitment from the salt and
- * the object fields, and the read key hashes to the one the contract
- * holds, or is absent for a grant that does not read. Anyone can append
- * any bytes to the inbox, and another client of the account issuing to
- * the same grantee from the same origin lands on the same id with its
- * own salt, so this check, not where the bookkeeping came from, is what
- * makes it trusted.
+ * key under its scheme, the origin and the slot, the object commitment
+ * from the salt and the object fields, and the read key hashes to the
+ * one the contract holds, or is absent for a grant that does not read.
+ * Anyone can append any bytes to the inbox, and another client of the
+ * account issuing to the same grantee from the same origin lands on the
+ * same id with its own salt, so this check, not where the bookkeeping
+ * came from, is what makes it trusted.
  */
 const opensOnChain = async (
   record: GrantRecord,
@@ -246,20 +251,18 @@ const opensOnChain = async (
   address: string,
 ): Promise<boolean> => {
   try {
+    const grantee = {
+      scheme: fields.granteeScheme,
+      publicKey: fields.granteePublicKey,
+    };
     const grantId = deriveGrantId({
       contractAddress: ByteArray.fromHex(HexBytes(address)),
-      granteePublicKey: granteePoint({
-        scheme: 'jubjub-schnorr',
-        publicKey: fields.granteePublicKey,
-      }),
+      granteePublicKey: granteePoint(grantee),
       originHash: await originHash(fields.origin),
       slot: GrantSlot(fields.slot),
     });
     const encoded = circuitScope({
-      grantee: {
-        scheme: 'jubjub-schnorr',
-        publicKey: fields.granteePublicKey,
-      },
+      grantee,
       operations: [],
       color: TokenColor(fields.object.color),
       recipient: fields.object.recipient,
@@ -310,6 +313,7 @@ export const retainStoredGrants = async (
       record,
       {
         ...grant,
+        granteeScheme: storedGranteeScheme(grant),
         object: grant.object,
         ...(grant.view === undefined
           ? {}
@@ -354,6 +358,7 @@ export const rebuildStoredGrants = async (
     rebuilt[record.id] = {
       slot: grant.slot,
       scopeSalt: grant.scopeSalt,
+      granteeScheme: grant.granteeScheme,
       granteePublicKey: grant.granteePublicKey,
       origin: scope.origin,
       object: object.object,

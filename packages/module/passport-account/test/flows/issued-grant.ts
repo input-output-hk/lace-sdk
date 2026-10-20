@@ -5,18 +5,20 @@ import { jubjub } from '@noble/curves/misc.js';
 import {
   circuitScope,
   deriveGrantId,
+  granteePoint,
   grantObjectCommit,
   originHash,
 } from '../../src/acc/grants';
 
 import type { JubjubDevice } from '../../src/acc/signer';
 import type { StoredGrant } from '../../src/flows/types';
-import type { GrantRecord } from '@lace-contract/passport';
+import type { GrantGrantee, GrantRecord } from '@lace-contract/passport';
 
 type IssuedGrantProps = {
   address: string;
   origin: string;
-  grantee: JubjubDevice;
+  /** A jubjub device, or a grantee named by its scheme and key. */
+  grantee: GrantGrantee | JubjubDevice;
   slot: number;
   scopeSalt?: string;
   /** The grantee's read public key, for a grant that reads. */
@@ -36,12 +38,19 @@ export const issuedGrant = async ({
   scopeSalt = '07'.repeat(32),
   readPublicKey,
 }: IssuedGrantProps) => {
-  const granteePublicKey = HexBytes.fromByteArray(
-    jubjub.Point.fromAffine(grantee.pk).toBytes(),
-  );
+  const named: GrantGrantee =
+    'scheme' in grantee
+      ? grantee
+      : {
+          scheme: 'jubjub-schnorr',
+          publicKey: HexBytes.fromByteArray(
+            jubjub.Point.fromAffine(grantee.pk).toBytes(),
+          ),
+        };
+  const { scheme: granteeScheme, publicKey: granteePublicKey } = named;
   const id = deriveGrantId({
     contractAddress: ByteArray.fromHex(HexBytes(address)),
-    granteePublicKey: grantee.pk,
+    granteePublicKey: granteePoint(named),
     originHash: await originHash(origin),
     slot: GrantSlot(slot),
   });
@@ -51,7 +60,7 @@ export const issuedGrant = async ({
     maxCoinValue: '300',
   };
   const encoded = circuitScope({
-    grantee: { scheme: 'jubjub-schnorr', publicKey: granteePublicKey },
+    grantee: named,
     operations: [],
     color: TokenColor(object.color),
     recipient: object.recipient,
@@ -88,6 +97,7 @@ export const issuedGrant = async ({
   const stored: StoredGrant = {
     slot,
     scopeSalt,
+    granteeScheme,
     granteePublicKey,
     origin,
     object,
@@ -99,6 +109,7 @@ export const issuedGrant = async ({
     onChain,
     opening: {
       scopeSalt,
+      granteeScheme,
       granteePublicKey,
       origin,
       color: TokenColor(object.color),

@@ -1,6 +1,6 @@
 # @laceio/sdk
 
-A headless TypeScript SDK for self-custodial wallets in the form your app needs (recovery phrases, your own key material, passkeys or the hosted signer), reactive state observables, transaction building, signing and submission, and wallet modules on one engine, with more added over time. The documentation, the API reference and a Playground are on the developer site, <https://sdk.lace.io>.
+A headless TypeScript SDK for self-custody wallets, reactive state observables, transaction building, signing and submission, and wallet modules on one engine. Build wallets with recovery phrases, user-controlled key material or passkeys. In a browser app, wallet keys stay in the user's browser. The hosted signer is a self-custody passkey wallet running in a separate browser window; your app receives only public keys and signatures. The documentation, the API reference and a Playground are on the developer site, <https://sdk.lace.io>.
 
 ## Installation
 

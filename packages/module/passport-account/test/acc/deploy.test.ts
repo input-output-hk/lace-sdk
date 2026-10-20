@@ -26,6 +26,7 @@ import type {
 const JUBJUB_KEY_BYTES = 2313;
 const DEPOSIT_UNSHIELDED_KEY_BYTES = 1353;
 const DEPOSIT_SHIELDED_KEY_BYTES = 2121;
+const K256_GRANT_KEY_BYTES = 2745;
 const VERIFIER_BYTE_BUDGET = 15_000;
 const VERIFIER_KEY_HEADER = 'midnight:verifier-key[v7]:';
 
@@ -46,6 +47,9 @@ const ledgerMocks = vi.hoisted(() => {
     'withdraw_unshielded_with_grant_jubjub',
     'withdraw_shielded_with_grant_jubjub',
     'withdraw_shielded_to_contract_with_grant_jubjub',
+    'withdraw_unshielded_with_grant_k256',
+    'withdraw_shielded_with_grant_k256',
+    'withdraw_shielded_to_contract_with_grant_k256',
   ];
   const allOperations = new Set([
     'deposit_unshielded',
@@ -309,6 +313,7 @@ vi.mock('../../src/acc/acc-module', async importOriginal => ({
 const sizeOf = (operation: string): number => {
   if (operation === 'deposit_unshielded') return DEPOSIT_UNSHIELDED_KEY_BYTES;
   if (operation === 'deposit_shielded') return DEPOSIT_SHIELDED_KEY_BYTES;
+  if (operation.endsWith('_with_grant_k256')) return K256_GRANT_KEY_BYTES;
   return JUBJUB_KEY_BYTES;
 };
 
@@ -377,10 +382,14 @@ const DEPLOYED_OPERATIONS = [
   'withdraw_unshielded_with_grant_jubjub',
   'withdraw_shielded_with_grant_jubjub',
   'withdraw_shielded_to_contract_with_grant_jubjub',
+  'withdraw_unshielded_with_grant_k256',
+  'withdraw_shielded_with_grant_k256',
+  'withdraw_shielded_to_contract_with_grant_k256',
 ];
 const DEPLOY_WAVE = DEPLOYED_OPERATIONS.slice(0, 6);
 const SECOND_WAVE = DEPLOYED_OPERATIONS.slice(6, 12);
-const THIRD_WAVE = DEPLOYED_OPERATIONS.slice(12);
+const THIRD_WAVE = DEPLOYED_OPERATIONS.slice(12, 18);
+const FOURTH_WAVE = DEPLOYED_OPERATIONS.slice(18);
 
 /** The sha256 over each roster operation and its pinned verifier key digest. */
 const VERIFIER_KEYS_DIGEST = HexBytes.fromByteArray(
@@ -440,7 +449,7 @@ describe('deployAccount', () => {
     ledgerMocks.MaintenanceUpdate.instances.length = 0;
   });
 
-  it('deploys the budgeted prefix of the roster and installs the rest in two maintenance waves', async () => {
+  it('deploys the budgeted prefix of the roster and installs the rest in three maintenance waves', async () => {
     await deployAccount(deployProps);
 
     expect(ledgerMocks.ContractDeploy.instances).toHaveLength(1);
@@ -452,21 +461,34 @@ describe('deployAccount', () => {
     );
 
     const updates = ledgerMocks.MaintenanceUpdate.instances;
-    expect(updates.map(insertedOperations)).toEqual([SECOND_WAVE, THIRD_WAVE]);
+    expect(updates.map(insertedOperations)).toEqual([
+      SECOND_WAVE,
+      THIRD_WAVE,
+      FOURTH_WAVE,
+    ]);
     expect(updates.every(update => update.address === 'deployed-address')).toBe(
       true,
     );
-    for (const operations of [DEPLOY_WAVE, SECOND_WAVE, THIRD_WAVE]) {
+    for (const operations of [
+      DEPLOY_WAVE,
+      SECOND_WAVE,
+      THIRD_WAVE,
+      FOURTH_WAVE,
+    ]) {
       expect(verifierBytesOf(operations)).toBeLessThanOrEqual(
         VERIFIER_BYTE_BUDGET,
       );
     }
     expect([...ledgerMocks.chain.operations]).toEqual(DEPLOYED_OPERATIONS);
     expect(
-      [...ledgerMocks.chain.operations].some(name => name.includes('k256')),
-    ).toBe(false);
+      [...ledgerMocks.chain.operations].filter(name => name.includes('k256')),
+    ).toEqual([
+      'withdraw_unshielded_with_grant_k256',
+      'withdraw_shielded_with_grant_k256',
+      'withdraw_shielded_to_contract_with_grant_k256',
+    ]);
 
-    expect(contractsMocks.submitTx).toHaveBeenCalledTimes(3);
+    expect(contractsMocks.submitTx).toHaveBeenCalledTimes(4);
     expect(contractsMocks.submitTx).toHaveBeenNthCalledWith(1, providers, {
       unprovenTx: {
         networkId: 'test-network',
@@ -482,7 +504,7 @@ describe('deployAccount', () => {
         intent: { kind: 'maintenance-intent', update: updates[0] },
       },
     });
-    expect(ledgerMocks.Intent.new).toHaveBeenCalledTimes(3);
+    expect(ledgerMocks.Intent.new).toHaveBeenCalledTimes(4);
     expect(ledgerMocks.Intent.new).toHaveBeenCalledWith(expect.any(Date));
   });
 
@@ -526,9 +548,9 @@ describe('deployAccount', () => {
     await deployAccount(deployProps);
 
     const updates = ledgerMocks.MaintenanceUpdate.instances;
-    expect(updates.map(update => update.counter)).toEqual([0n, 1n]);
+    expect(updates.map(update => update.counter)).toEqual([0n, 1n, 2n]);
     expect(queryContractState).toHaveBeenCalledWith('deployed-address');
-    expect(ledgerMocks.signData).toHaveBeenCalledTimes(2);
+    expect(ledgerMocks.signData).toHaveBeenCalledTimes(3);
     for (const update of updates) {
       expect(ledgerMocks.signData).toHaveBeenCalledWith(
         authorityKey,
@@ -563,11 +585,11 @@ describe('deployAccount', () => {
 
     await deployAccount(deployProps);
 
-    expect(sleep).toHaveBeenCalledTimes(4);
+    expect(sleep).toHaveBeenCalledTimes(6);
     expect(sleep).toHaveBeenCalledWith(2000);
     expect(
       ledgerMocks.MaintenanceUpdate.instances.map(update => update.counter),
-    ).toEqual([0n, 1n]);
+    ).toEqual([0n, 1n, 2n]);
   });
 
   it('waits for the indexer to serve the deployed contract before the first wave', async () => {
@@ -581,8 +603,8 @@ describe('deployAccount', () => {
     expect(sleep).toHaveBeenCalledWith(2000);
     expect(
       ledgerMocks.MaintenanceUpdate.instances.map(update => update.counter),
-    ).toEqual([0n, 1n]);
-    expect(contractsMocks.submitTx).toHaveBeenCalledTimes(3);
+    ).toEqual([0n, 1n, 2n]);
+    expect(contractsMocks.submitTx).toHaveBeenCalledTimes(4);
   });
 
   it('throws when the deployed contract never appears in the indexer', async () => {
@@ -602,17 +624,18 @@ describe('deployAccount', () => {
     await deployAccount({ ...deployProps, lockAccount: true });
 
     const updates = ledgerMocks.MaintenanceUpdate.instances;
-    expect(updates).toHaveLength(2);
+    expect(updates).toHaveLength(3);
     expect(retirements(updates[0])).toEqual([]);
-    const [retire] = retirements(updates[1]);
-    expect(updates[1].updates.at(-1)).toBe(retire);
+    expect(retirements(updates[1])).toEqual([]);
+    const [retire] = retirements(updates[2]);
+    expect(updates[2].updates.at(-1)).toBe(retire);
     expect(retire.authority).toBeInstanceOf(
       ledgerMocks.ContractMaintenanceAuthority,
     );
     expect(retire.authority.committee).toEqual([]);
     expect(retire.authority.threshold).toBe(1);
-    expect(retire.authority.counter).toBe(2n);
-    expect(insertedOperations(updates[1])).toEqual(THIRD_WAVE);
+    expect(retire.authority.counter).toBe(3n);
+    expect(insertedOperations(updates[2])).toEqual(FOURTH_WAVE);
     expect(ledgerMocks.chain.authority.committee).toEqual([]);
   });
 
@@ -702,7 +725,7 @@ describe('deployAccount', () => {
 
   it('finds the deployed contract with the same compiled contract and private state once every wave is in', async () => {
     contractsMocks.findDeployedContract.mockImplementationOnce(async () => {
-      expect(contractsMocks.submitTx).toHaveBeenCalledTimes(3);
+      expect(contractsMocks.submitTx).toHaveBeenCalledTimes(4);
       return { callTx: { activate_initial_device_with_jubjub: vi.fn() } };
     });
 
@@ -765,7 +788,7 @@ describe('deployAccount', () => {
 
     await expect(
       deployAccount({ ...deployProps, lockAccount: true }),
-    ).rejects.toThrow('Verifier key wave 1 of 2 failed: "FailFallible"');
+    ).rejects.toThrow('Verifier key wave 1 of 3 failed: "FailFallible"');
     expect(contractsMocks.findDeployedContract).not.toHaveBeenCalled();
   });
 
@@ -841,10 +864,14 @@ describe('resumeAccountDeployment', () => {
 
     expect(contractsMocks.createUnprovenDeployTx).not.toHaveBeenCalled();
     const updates = ledgerMocks.MaintenanceUpdate.instances;
-    expect(updates.map(insertedOperations)).toEqual([SECOND_WAVE, THIRD_WAVE]);
-    expect(updates.map(update => update.counter)).toEqual([0n, 1n]);
+    expect(updates.map(insertedOperations)).toEqual([
+      SECOND_WAVE,
+      THIRD_WAVE,
+      FOURTH_WAVE,
+    ]);
+    expect(updates.map(update => update.counter)).toEqual([0n, 1n, 2n]);
     expect([...ledgerMocks.chain.operations]).toEqual(DEPLOYED_OPERATIONS);
-    expect(contractsMocks.submitTx).toHaveBeenCalledTimes(2);
+    expect(contractsMocks.submitTx).toHaveBeenCalledTimes(3);
 
     expect(account.address).toBe('deployed-address');
     expect(account.salt).toEqual(new Uint8Array(32).fill(7));
@@ -867,7 +894,7 @@ describe('resumeAccountDeployment', () => {
       pending: { ...pendingDeployment, authorityKey: recordedKey },
     });
 
-    expect(ledgerMocks.signData).toHaveBeenCalledTimes(2);
+    expect(ledgerMocks.signData).toHaveBeenCalledTimes(3);
     for (const [key] of ledgerMocks.signData.mock.calls) {
       expect(key).toBe(recordedKey);
     }
@@ -893,10 +920,10 @@ describe('resumeAccountDeployment', () => {
     });
 
     const updates = ledgerMocks.MaintenanceUpdate.instances;
-    expect(updates).toHaveLength(1);
-    expect(insertedOperations(updates[0])).toEqual(THIRD_WAVE);
-    expect(updates[0].counter).toBe(1n);
-    expect(retirements(updates[0])[0].authority.counter).toBe(2n);
+    expect(updates.map(insertedOperations)).toEqual([THIRD_WAVE, FOURTH_WAVE]);
+    expect(updates.map(update => update.counter)).toEqual([1n, 2n]);
+    expect(retirements(updates[0])).toEqual([]);
+    expect(retirements(updates[1])[0].authority.counter).toBe(3n);
   });
 
   it('retires the authority alone when every operation is in but the lock is still due', async () => {
@@ -1039,7 +1066,7 @@ describe('resumeAccountDeployment', () => {
     });
 
     await expect(resumeAccountDeployment(resumeProps)).rejects.toThrow(
-      'Verifier key wave 1 of 2 failed: "FailEntirely"',
+      'Verifier key wave 1 of 3 failed: "FailEntirely"',
     );
   });
 });

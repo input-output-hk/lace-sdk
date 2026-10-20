@@ -17,7 +17,10 @@ import {
   deviceEnvelopes,
   encodeDevicePublicKey,
 } from '../../src/acc/envelopes';
-import { ISSUE_GRANT_CIRCUIT } from '../../src/acc/grant-circuits';
+import {
+  GRANTEE_WITHDRAWAL_CIRCUITS,
+  ISSUE_GRANT_CIRCUIT,
+} from '../../src/acc/grant-circuits';
 import {
   deriveGrantId,
   granteePoint,
@@ -37,7 +40,11 @@ import { createPassportSignerHandlers } from '../../src/remote/signer-handlers';
 import { toAccountRecords } from '../../src/store/account-record';
 import { isSealedRecord } from '../../src/store/envelope';
 
-import { prepareIssueGrantFlow, spendScope } from './fake-grant';
+import {
+  k256SpendScope,
+  prepareIssueGrantFlow,
+  spendScope,
+} from './fake-grant';
 import {
   cancellation,
   createFakePasskey,
@@ -60,6 +67,7 @@ import type { SignerRequest, SignerRequestHandlers } from '@lace-lib/passkey';
 const mocks = vi.hoisted(() => ({
   readAccountLedger: vi.fn(),
   queryAccountLedger: vi.fn(),
+  queryAccountOperations: vi.fn(),
   submitAccountCall: vi.fn(),
   readGrants: vi.fn(),
 }));
@@ -68,6 +76,7 @@ vi.mock('../../src/flows/account-call', async importOriginal => ({
   ...(await importOriginal<typeof AccountCall>()),
   readAccountLedger: mocks.readAccountLedger,
   queryAccountLedger: mocks.queryAccountLedger,
+  queryAccountOperations: mocks.queryAccountOperations,
   submitAccountCall: mocks.submitAccountCall,
 }));
 vi.mock('../../src/acc/read-grants', () => ({
@@ -81,6 +90,9 @@ const CONTRACT_ADDRESS = Uint8Array.from(
 const ACCOUNT = AccAddress(HexBytes.fromByteArray(CONTRACT_ADDRESS));
 const NEW_ENTRY = new Uint8Array(32).fill(0x5a);
 const NETWORK_ID = 'undeployed';
+
+/** The grantee withdrawals of both schemes, as an account deployed here holds them. */
+const INSTALLED_WITHDRAWALS = Object.values(GRANTEE_WITHDRAWAL_CIRCUITS).flat();
 
 const addDeviceRequest: AuthorisationRequest = {
   account: ACCOUNT,
@@ -642,114 +654,127 @@ describe('the issue-grant flow over the signer protocol', () => {
     );
   };
 
-  it('opens the session with the descriptor the signer re-derives, signs the issue it approved and appends the bookkeeping it sealed', async () => {
-    const {
-      get,
-      authoriser,
-      encryptionKey,
-      records,
-      localAuthoriser,
-      onRequest,
-    } = await connect();
-    await authoriser.withKeySession!(
-      async () => firstValueFrom(records.write(record)),
-      { kind: 'create-account', lockAccount: true },
-    );
-    get.mockClear();
-    onRequest.mockClear();
-    mocks.readAccountLedger.mockResolvedValue(accountLedger);
-    mocks.readGrants.mockReturnValue([]);
-    const authorisations: {
-      circuit: string;
-      authorisation: Authorisation;
-    }[] = [];
-    submitThroughSeams(authorisations);
-    const context: FlowContext = {
-      seams: {
-        passportAuthoriser: authoriser,
-        passportEncryptionKey: encryptionKey,
-        passportSponsor: { balanceAndSign: vi.fn() },
-        passportProver: { prove: vi.fn(), check: vi.fn() },
-        passportNetwork: network,
-      },
-      accountRecords: toAccountRecords(records),
-      onProgress: vi.fn(),
-      rpId,
-    };
-
-    const issued = await issueGrant(
-      {
-        account: {
-          address: ACCOUNT,
-          bindingVersion: record.bindingVersion,
-          status: 'ready',
-          networkId: 'undeployed',
+  it.each([
+    ['a jubjub', spendScope],
+    ['a secp256k1', k256SpendScope],
+  ])(
+    'opens the session with the descriptor the signer re-derives for %s grantee, signs the issue it approved and appends the bookkeeping it sealed',
+    async (_grantee, scope) => {
+      const {
+        get,
+        authoriser,
+        encryptionKey,
+        records,
+        localAuthoriser,
+        onRequest,
+      } = await connect();
+      await authoriser.withKeySession!(
+        async () => firstValueFrom(records.write(record)),
+        { kind: 'create-account', lockAccount: true },
+      );
+      get.mockClear();
+      onRequest.mockClear();
+      mocks.readAccountLedger.mockResolvedValue(accountLedger);
+      mocks.queryAccountOperations.mockResolvedValue(INSTALLED_WITHDRAWALS);
+      mocks.readGrants.mockReturnValue([]);
+      const authorisations: {
+        circuit: string;
+        authorisation: Authorisation;
+      }[] = [];
+      submitThroughSeams(authorisations);
+      const context: FlowContext = {
+        seams: {
+          passportAuthoriser: authoriser,
+          passportEncryptionKey: encryptionKey,
+          passportSponsor: { balanceAndSign: vi.fn() },
+          passportProver: { prove: vi.fn(), check: vi.fn() },
+          passportNetwork: network,
         },
-        devices: [],
-        localUseCounter: record.localUseCounter,
-        scope: spendScope,
-      },
-      context,
-    );
+        accountRecords: toAccountRecords(records),
+        onProgress: vi.fn(),
+        rpId,
+      };
 
-    const grantId = deriveGrantId({
-      contractAddress: CONTRACT_ADDRESS,
-      granteePublicKey: granteePoint(spendScope.grantee),
-      originHash: await originHash(rpId),
-      slot: GrantSlot(0),
-    });
-    expect(issued).toMatchObject({
-      grantId,
-      grants: [activeGrant(grantId)],
-      localUseCounter: '6',
-    });
-    expect(authorisations.map(({ circuit }) => circuit)).toEqual([
-      ISSUE_GRANT_CIRCUIT,
-      'append_inbox_with_jubjub',
-      'append_inbox_with_jubjub',
-    ]);
-    expect(get).toHaveBeenCalledOnce();
-    const [{ args }] = mocks.submitAccountCall.mock.calls[0] as [
-      SubmitAccountCallProps,
-    ];
-    const salt = args.at(-1) as Uint8Array;
-    const binding = issueGrantBinding(args);
-    expect(onRequest).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        kind: 'flow-open',
-        payload: {
-          flow: {
-            kind: 'issue-grant',
-            grantId,
-            scope: spendScope,
-            account: ACCOUNT,
+      const issued = await issueGrant(
+        {
+          account: {
+            address: ACCOUNT,
+            bindingVersion: record.bindingVersion,
+            status: 'ready',
+            networkId: 'undeployed',
+          },
+          devices: [],
+          localUseCounter: record.localUseCounter,
+          scope,
+        },
+        context,
+      );
+
+      const grantId = deriveGrantId({
+        contractAddress: CONTRACT_ADDRESS,
+        granteePublicKey: granteePoint(scope.grantee),
+        originHash: await originHash(rpId),
+        slot: GrantSlot(0),
+      });
+      expect(issued).toMatchObject({
+        grantId,
+        grants: [activeGrant(grantId)],
+        localUseCounter: '6',
+      });
+      expect(authorisations.map(({ circuit }) => circuit)).toEqual([
+        ISSUE_GRANT_CIRCUIT,
+        'append_inbox_with_jubjub',
+        'append_inbox_with_jubjub',
+      ]);
+      expect(get).toHaveBeenCalledOnce();
+      const [{ args }] = mocks.submitAccountCall.mock.calls[0] as [
+        SubmitAccountCallProps,
+      ];
+      const salt = args.at(-1) as Uint8Array;
+      const binding = issueGrantBinding(args);
+      expect(onRequest).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          kind: 'flow-open',
+          payload: {
+            flow: {
+              kind: 'issue-grant',
+              grantId,
+              scope,
+              account: ACCOUNT,
+              slot: 0,
+              scopeSalt: encodeBytes(salt),
+              scopeDigest: encodeBytes(binding.scopeDigest),
+            },
+          },
+        }),
+        DAPP_ORIGIN,
+      );
+      const [{ authorisation }] = authorisations;
+      expect(authorisation.pk).toEqual(await localAuthoriser.devicePublicKey());
+      const builder = jubjubChallenges.issueGrant(
+        { contractAddress: CONTRACT_ADDRESS, authNonce: 7n },
+        authorisation.pk,
+        binding,
+      );
+      expect(
+        bytesToBigIntLE(builder(authorisation.sigR, authorisation.grindNonce)),
+      ).toBeLessThan(JUBJUB_R);
+      const stored = await authoriser.withKeySession!(
+        async () => firstValueFrom(records.read()),
+        SIGN_IN,
+      );
+      expect(stored).toMatchObject({
+        localUseCounter: '6',
+        grants: {
+          [grantId]: {
             slot: 0,
             scopeSalt: encodeBytes(salt),
-            scopeDigest: encodeBytes(binding.scopeDigest),
+            granteeScheme: scope.grantee.scheme,
+            granteePublicKey: scope.grantee.publicKey,
+            origin: rpId,
           },
         },
-      }),
-      DAPP_ORIGIN,
-    );
-    const [{ authorisation }] = authorisations;
-    expect(authorisation.pk).toEqual(await localAuthoriser.devicePublicKey());
-    const builder = jubjubChallenges.issueGrant(
-      { contractAddress: CONTRACT_ADDRESS, authNonce: 7n },
-      authorisation.pk,
-      binding,
-    );
-    expect(
-      bytesToBigIntLE(builder(authorisation.sigR, authorisation.grindNonce)),
-    ).toBeLessThan(JUBJUB_R);
-    const stored = await authoriser.withKeySession!(
-      async () => firstValueFrom(records.read()),
-      SIGN_IN,
-    );
-    expect(stored).toMatchObject({
-      localUseCounter: '6',
-      grants: {
-        [grantId]: { slot: 0, scopeSalt: encodeBytes(salt), origin: rpId },
-      },
-    });
-  });
+      });
+    },
+  );
 });

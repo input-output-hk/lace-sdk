@@ -45,7 +45,11 @@ import {
   MalformedPayloadError,
 } from '../../src/remote/codec';
 
-import { spendScope } from './fake-grant';
+import {
+  K256_GRANTEE_PUBLIC_KEY,
+  k256SpendScope,
+  spendScope,
+} from './fake-grant';
 
 import type {
   Authorisation,
@@ -176,11 +180,17 @@ describe('codec', () => {
     );
   });
 
-  it('refuses an authorisation of another scheme or with a missing field', () => {
+  it('refuses an authorisation of another scheme, a grantee scheme included, or with a missing field', () => {
     const encoded = encodeAuthorisation(authorisation);
 
     expect(() =>
       decodeAuthorisation({ ...encoded, scheme: 'ed25519' }, 'authorisation'),
+    ).toThrow(new MalformedPayloadError('authorisation.scheme'));
+    expect(() =>
+      decodeAuthorisation(
+        { ...encoded, scheme: 'secp256k1-ecdsa' },
+        'authorisation',
+      ),
     ).toThrow(new MalformedPayloadError('authorisation.scheme'));
     expect(() =>
       decodeAuthorisation({ ...encoded, sigS: undefined }, 'authorisation'),
@@ -342,6 +352,53 @@ describe('codec', () => {
     expect(() =>
       decodeRecord(withGrant({ origin: undefined }), 'record'),
     ).toThrow(new MalformedPayloadError(`record.grants.${grantId}.origin`));
+  });
+
+  it('carries the grantee scheme a stored grant kept, with its key in the form the scheme takes', () => {
+    const grant = {
+      slot: 3,
+      scopeSalt: '07'.repeat(32),
+      granteePublicKey: 'cd'.repeat(32),
+      origin: 'lace.io',
+    };
+    const grantId = 'ab'.repeat(32);
+    const keyField = `record.grants.${grantId}.granteePublicKey`;
+    const withGrantee = (granteeScheme: unknown, granteePublicKey: string) => ({
+      ...record,
+      grants: { [grantId]: { ...grant, granteeScheme, granteePublicKey } },
+    });
+
+    for (const granted of [
+      withGrantee('jubjub-schnorr', 'cd'.repeat(32)),
+      withGrantee('secp256k1-ecdsa', `02${'cd'.repeat(32)}`),
+      withGrantee('secp256k1-ecdsa', `03${'cd'.repeat(32)}`),
+    ]) {
+      expect(decodeRecord(granted, 'record')).toEqual(granted);
+    }
+    expect(
+      decodeRecord({ ...record, grants: { [grantId]: grant } }, 'record')
+        ?.grants?.[grantId],
+    ).not.toHaveProperty('granteeScheme');
+    expect(() =>
+      decodeRecord(withGrantee('secp256k1-ecdsa', 'cd'.repeat(32)), 'record'),
+    ).toThrow(new MalformedPayloadError(keyField));
+    expect(() =>
+      decodeRecord(
+        withGrantee('secp256k1-ecdsa', `04${'cd'.repeat(32)}`),
+        'record',
+      ),
+    ).toThrow(new MalformedPayloadError(keyField));
+    expect(() =>
+      decodeRecord(
+        withGrantee('jubjub-schnorr', `02${'cd'.repeat(32)}`),
+        'record',
+      ),
+    ).toThrow(new MalformedPayloadError(keyField));
+    expect(() =>
+      decodeRecord(withGrantee('p256-ecdsa', 'cd'.repeat(32)), 'record'),
+    ).toThrow(
+      new MalformedPayloadError(`record.grants.${grantId}.granteeScheme`),
+    );
   });
 
   it('carries the viewing capability a stored read grant keeps, only when present', () => {
@@ -590,6 +647,7 @@ describe('codec', () => {
 
     it('reads a scope in the shape the module types it, optional fields only when present', () => {
       expect(decodeGrantScope(spendScope, 'scope')).toEqual(spendScope);
+      expect(decodeGrantScope(k256SpendScope, 'scope')).toEqual(k256SpendScope);
       expect(decodeGrantScope(fullScope, 'scope')).toEqual(fullScope);
       const withReadKey = { ...fullScope, readPublicKey: 'ab'.repeat(32) };
       expect(decodeGrantScope(withReadKey, 'scope')).toEqual(withReadKey);
@@ -613,6 +671,48 @@ describe('codec', () => {
         'a grantee key in uppercase',
         { grantee: { scheme: 'jubjub-schnorr', publicKey: 'AB'.repeat(32) } },
         'scope.grantee.publicKey',
+      ],
+      [
+        'a jubjub grantee key of 33 bytes',
+        {
+          grantee: {
+            scheme: 'jubjub-schnorr',
+            publicKey: K256_GRANTEE_PUBLIC_KEY,
+          },
+        },
+        'scope.grantee.publicKey',
+      ],
+      [
+        'a secp256k1 grantee key of 32 bytes',
+        { grantee: { scheme: 'secp256k1-ecdsa', publicKey: 'ab'.repeat(32) } },
+        'scope.grantee.publicKey',
+      ],
+      [
+        'an uncompressed secp256k1 grantee key',
+        {
+          grantee: {
+            scheme: 'secp256k1-ecdsa',
+            publicKey: `04${'ab'.repeat(64)}`,
+          },
+        },
+        'scope.grantee.publicKey',
+      ],
+      [
+        'a secp256k1 grantee key in uppercase',
+        {
+          grantee: {
+            scheme: 'secp256k1-ecdsa',
+            publicKey: K256_GRANTEE_PUBLIC_KEY.toUpperCase(),
+          },
+        },
+        'scope.grantee.publicKey',
+      ],
+      [
+        'a P-256 grantee',
+        {
+          grantee: { scheme: 'p256-ecdsa', publicKey: K256_GRANTEE_PUBLIC_KEY },
+        },
+        'scope.grantee.scheme',
       ],
       [
         'operations that are not a list',
@@ -717,8 +817,20 @@ describe('inbox codec', () => {
           grantId: GrantId('ab'.repeat(32)),
           slot: GrantSlot(2),
           scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+          granteeScheme: 'jubjub-schnorr',
           granteePublicKey: 'ef'.repeat(32),
           readPublicKey: '56'.repeat(32),
+        },
+      },
+      {
+        kind: 'grant',
+        record: {
+          part: 'grant',
+          grantId: GrantId('ba'.repeat(32)),
+          slot: GrantSlot(3),
+          scopeSalt: GrantScopeSalt('dc'.repeat(32)),
+          granteeScheme: 'secp256k1-ecdsa',
+          granteePublicKey: K256_GRANTEE_PUBLIC_KEY,
         },
       },
       {
@@ -750,6 +862,42 @@ describe('inbox codec', () => {
         'opened',
       ),
     ).toEqual(opened);
+  });
+
+  it('reads an opened grant part that carries no grantee scheme as a jubjub grant', () => {
+    const part = {
+      part: 'grant',
+      grantId: 'ab'.repeat(32),
+      slot: 2,
+      scopeSalt: 'cd'.repeat(32),
+      granteePublicKey: 'ef'.repeat(32),
+    };
+
+    expect(
+      decodeOpenedEntries([{ kind: 'grant', record: part }], 'opened'),
+    ).toEqual([
+      {
+        kind: 'grant',
+        record: {
+          ...part,
+          grantId: GrantId(part.grantId),
+          slot: GrantSlot(part.slot),
+          scopeSalt: GrantScopeSalt(part.scopeSalt),
+          granteeScheme: 'jubjub-schnorr',
+        },
+      },
+    ]);
+    expect(() =>
+      decodeOpenedEntries(
+        [
+          {
+            kind: 'grant',
+            record: { ...part, granteePublicKey: K256_GRANTEE_PUBLIC_KEY },
+          },
+        ],
+        'opened',
+      ),
+    ).toThrow(new MalformedPayloadError('opened[0].record.granteePublicKey'));
   });
 
   it.each<[string, unknown]>([
@@ -1036,6 +1184,7 @@ describe('account key codec', () => {
       grantId: GrantId('ab'.repeat(32)),
       slot: GrantSlot(1),
       scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+      granteeScheme: 'jubjub-schnorr',
       granteePublicKey: 'ef'.repeat(32),
       readPublicKey: '12'.repeat(32),
       object: {
@@ -1057,5 +1206,76 @@ describe('account key codec', () => {
     expect(() =>
       decodeGrantBookkeeping({ ...grant, readPublicKey: '12' }, 'grant'),
     ).toThrow(new MalformedPayloadError('grant.readPublicKey'));
+  });
+
+  it('reads a grant bookkeeping of either grantee scheme, its key in the form the scheme takes', () => {
+    const grant = {
+      grantId: GrantId('ab'.repeat(32)),
+      slot: GrantSlot(1),
+      scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+      granteePublicKey: 'ef'.repeat(32),
+      object: {
+        color: '00'.repeat(32),
+        recipient: { kind: 'any' },
+        maxCoinValue: '50',
+      },
+    };
+    const k256Grant = {
+      ...grant,
+      granteeScheme: 'secp256k1-ecdsa',
+      granteePublicKey: K256_GRANTEE_PUBLIC_KEY,
+    };
+    const keyField = new MalformedPayloadError('grant.granteePublicKey');
+
+    expect(decodeGrantBookkeeping(k256Grant, 'grant')).toEqual(k256Grant);
+    expect(() =>
+      decodeGrantBookkeeping(
+        { ...grant, granteeScheme: 'p256-ecdsa' },
+        'grant',
+      ),
+    ).toThrow(new MalformedPayloadError('grant.granteeScheme'));
+    expect(() =>
+      decodeGrantBookkeeping(
+        { ...grant, granteeScheme: 'secp256k1-ecdsa' },
+        'grant',
+      ),
+    ).toThrow(keyField);
+    expect(() =>
+      decodeGrantBookkeeping(
+        { ...k256Grant, granteeScheme: 'jubjub-schnorr' },
+        'grant',
+      ),
+    ).toThrow(keyField);
+    expect(() =>
+      decodeGrantBookkeeping(
+        { ...k256Grant, granteePublicKey: `04${'ef'.repeat(32)}` },
+        'grant',
+      ),
+    ).toThrow(keyField);
+  });
+
+  it('reads a grant bookkeeping that carries no grantee scheme as a jubjub grant', () => {
+    const grant = {
+      grantId: GrantId('ab'.repeat(32)),
+      slot: GrantSlot(1),
+      scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+      granteePublicKey: 'ef'.repeat(32),
+      object: {
+        color: '00'.repeat(32),
+        recipient: { kind: 'any' },
+        maxCoinValue: '50',
+      },
+    };
+
+    expect(decodeGrantBookkeeping(grant, 'grant')).toEqual({
+      ...grant,
+      granteeScheme: 'jubjub-schnorr',
+    });
+    expect(() =>
+      decodeGrantBookkeeping(
+        { ...grant, granteePublicKey: K256_GRANTEE_PUBLIC_KEY },
+        'grant',
+      ),
+    ).toThrow(new MalformedPayloadError('grant.granteePublicKey'));
   });
 });

@@ -589,6 +589,7 @@ describe('encryptionKeyOver', () => {
       grantId: GrantId('ab'.repeat(32)),
       slot: GrantSlot(3),
       scopeSalt: GrantScopeSalt('cd'.repeat(32)),
+      granteeScheme: 'jubjub-schnorr',
       granteePublicKey: 'ef'.repeat(32),
       readPublicKey: '12'.repeat(32),
       object: {

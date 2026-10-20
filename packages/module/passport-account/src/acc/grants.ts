@@ -1,6 +1,7 @@
 import {
   GrantId,
   GrantLimitReachedError,
+  GrantScopeInvalidError,
   GrantScopeSalt,
   GrantSlot,
 } from '@lace-contract/passport';
@@ -20,14 +21,13 @@ import {
 } from './grant-rules';
 
 import type { IssueGrantBinding } from './challenges';
-import type { GrantCircuitScope } from './grant-rules';
+import type { GrantCircuitScope, GranteePoint } from './grant-rules';
 import type { AccProvingCircuitName } from './manifest';
 import type {
   GrantGrantee,
   GrantRecord,
   GrantScopeInput,
 } from '@lace-contract/passport';
-import type { JubjubPoint } from '@midnight-ntwrk/compact-runtime';
 
 export { assertIssueRules, circuitScope, granteePoint } from './grant-rules';
 export type { GrantCircuitScope } from './grant-rules';
@@ -38,6 +38,13 @@ const ORIGIN_TAG_LENGTH = 32;
 const SCOPE_SALT_LENGTH = 32;
 const GRANT_SLOT_COUNT = 256;
 const SCOPE_ARG_COUNT = 16;
+
+/**
+ * The signature envelope a secp256k1 grant is bound to: plain ECDSA over
+ * the SHA-256 digest of the challenge, the only envelope the contract
+ * admits for a spend grant.
+ */
+const K256_GRANT_ENVELOPE = 0n;
 
 /**
  * The optional immediate caller pin as the contract's `Maybe<ContractAddress>`
@@ -144,9 +151,13 @@ export const originHash = async (clientId: string): Promise<Uint8Array> => {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', preimage));
 };
 
+/** A grant id from the bytes a derivation circuit returns. */
+const grantIdOf = (id: Uint8Array): GrantId =>
+  GrantId(HexBytes.fromByteArray(id));
+
 export type DeriveGrantIdProps = {
   contractAddress: Uint8Array;
-  granteePublicKey: JubjubPoint;
+  granteePublicKey: GranteePoint;
   originHash: Uint8Array;
   slot: GrantSlot;
 };
@@ -154,24 +165,47 @@ export type DeriveGrantIdProps = {
 /**
  * The identity of a grant: the contract's own commitment to the account,
  * the grantee key, the origin hash and the slot, which keys the record in
- * the grants map.
+ * the grants map. Each grantee scheme has its own derivation, and a
+ * secp256k1 grant also binds its signature envelope, so the same key
+ * bytes never name the same grant under two schemes or two envelopes.
  */
 export const deriveGrantId = ({
   contractAddress,
   granteePublicKey,
   originHash: origin,
   slot,
-}: DeriveGrantIdProps): GrantId =>
-  GrantId(
-    HexBytes.fromByteArray(
-      pureCircuits.derive_grant_id_with_jubjub(
-        { bytes: contractAddress },
-        granteePublicKey,
-        origin,
-        BigInt(slot),
-      ),
-    ),
-  );
+}: DeriveGrantIdProps): GrantId => {
+  const self = { bytes: contractAddress };
+  switch (granteePublicKey.scheme) {
+    case 'jubjub-schnorr':
+      return grantIdOf(
+        pureCircuits.derive_grant_id_with_jubjub(
+          self,
+          granteePublicKey.point,
+          origin,
+          BigInt(slot),
+        ),
+      );
+    case 'secp256k1-ecdsa':
+      return grantIdOf(
+        pureCircuits.derive_grant_id_with_k256(
+          self,
+          granteePublicKey.point,
+          K256_GRANT_ENVELOPE,
+          origin,
+          BigInt(slot),
+        ),
+      );
+    default: {
+      const unhandled: never = granteePublicKey;
+      throw new GrantScopeInvalidError(
+        `unsupported grantee scheme "${String(
+          (unhandled as { scheme: unknown }).scheme,
+        )}"`,
+      );
+    }
+  }
+};
 
 type FreeSlotProps = {
   contractAddress: Uint8Array;

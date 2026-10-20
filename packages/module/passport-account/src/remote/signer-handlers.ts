@@ -38,6 +38,7 @@ import {
   createPasskeyLiveEnvelopeFinder,
 } from '../ceremony/encryption-key';
 import { createPasskeyAuthoriser } from '../ceremony/passkey';
+import { storedGranteeScheme } from '../flows/types';
 import {
   createAccountRecordStore,
   toAccountRecords,
@@ -380,9 +381,10 @@ const originHost = (dappOrigin: string): string => new URL(dappOrigin).hostname;
 /**
  * Re-derives what an issue-grant descriptor claims before any ceremony:
  * the scope digest from the carried scope and salt, and the grant id
- * from the account, the grantee key, the observed dApp origin and the
- * slot. The scope is held to the contract's issue rules first, so the
- * signer never signs over a scope the contract would refuse.
+ * from the account, the grantee key under its scheme, the observed dApp
+ * origin and the slot. The scope is held to the contract's issue rules
+ * first, so the signer never signs over a scope the contract would
+ * refuse.
  *
  * @throws {@link GrantOriginMissingError} when no dApp origin reached
  * the handler.
@@ -519,8 +521,8 @@ const bindFlow = async (
 
 /**
  * Whether a grant's bookkeeping is the one the issue descriptor names: the
- * id, slot, salt and grantee key, the read key of a read grant and none
- * otherwise, and the object fields of the approved scope.
+ * id, slot, salt and grantee key with its scheme, the read key of a read
+ * grant and none otherwise, and the object fields of the approved scope.
  */
 const isApprovedBookkeeping = (
   flow: IssueGrantFlow,
@@ -529,6 +531,7 @@ const isApprovedBookkeeping = (
   grant.grantId === flow.grantId &&
   grant.slot === flow.slot &&
   grant.scopeSalt === flow.scopeSalt &&
+  grant.granteeScheme === flow.scope.grantee.scheme &&
   grant.granteePublicKey === flow.scope.grantee.publicKey &&
   grant.readPublicKey === flow.scope.readPublicKey &&
   grant.object.color === flow.scope.color &&
@@ -646,10 +649,10 @@ const unboundRemoval = async (
 
 /**
  * The grant record parts a sign-in may see: those of grants whose id
- * derives from the account, the grantee key and slot a grant part names
- * and the hostname of the dApp origin asking, and the object and view
- * parts of those grants, so a dApp reads back only the bookkeeping of
- * grants issued under its own origin.
+ * derives from the account, the grantee key under its scheme and the slot
+ * a grant part names and the hostname of the dApp origin asking, and the
+ * object and view parts of those grants, so a dApp reads back only the
+ * bookkeeping of grants issued under its own origin.
  */
 const grantsOfOrigin = async (
   opened: readonly (OpenedInboxEntry | null)[],
@@ -662,12 +665,12 @@ const grantsOfOrigin = async (
   const origin = await derivation.originHash(originHost(dappOrigin));
   for (const entry of opened) {
     if (entry?.kind !== 'grant' || entry.record.part !== 'grant') continue;
-    const { grantId, granteePublicKey, slot } = entry.record;
+    const { grantId, granteeScheme, granteePublicKey, slot } = entry.record;
     try {
       const derived = derivation.deriveGrantId({
         contractAddress: ByteArray.fromHex(HexBytes(account)),
         granteePublicKey: derivation.granteePoint({
-          scheme: 'jubjub-schnorr',
+          scheme: granteeScheme,
           publicKey: granteePublicKey,
         }),
         originHash: origin,
@@ -746,8 +749,9 @@ const shownRecord = (
 
 /**
  * Whether every grant id derives from the account, the entry's grantee
- * key and slot and the hostname, so the id is one this origin issued.
- * The grant derivation is loaded only when a write carries grants.
+ * key under its scheme, its slot and the hostname, so the id is one this
+ * origin issued. The grant derivation is loaded only when a write carries
+ * grants.
  */
 const derivesOwnGrantIds = async (
   account: string,
@@ -756,17 +760,17 @@ const derivesOwnGrantIds = async (
 ): Promise<boolean> => {
   const derivation = await loadGrantDerivation();
   const origin = await derivation.originHash(host);
-  return grants.every(([id, { granteePublicKey, slot }]) => {
+  return grants.every(([id, grant]) => {
     try {
       return (
         derivation.deriveGrantId({
           contractAddress: ByteArray.fromHex(HexBytes(account)),
           granteePublicKey: derivation.granteePoint({
-            scheme: 'jubjub-schnorr',
-            publicKey: granteePublicKey,
+            scheme: storedGranteeScheme(grant),
+            publicKey: grant.granteePublicKey,
           }),
           originHash: origin,
-          slot: GrantSlot(slot),
+          slot: GrantSlot(grant.slot),
         }) === id
       );
     } catch {
@@ -1387,8 +1391,8 @@ export const createPassportSignerHandlers = ({
    * origin. A write is refused when it carries an entry kept under
    * another origin, an id another origin's entry is stored under, which
    * would replace that entry since grant ids are public on chain, or an
-   * id that does not derive from the account, the entry's grantee key and
-   * slot and the asking hostname.
+   * id that does not derive from the account, the entry's grantee key
+   * under its scheme, its slot and the asking hostname.
    */
   const mergedGrants = async (
     held: HeldKeySession,
