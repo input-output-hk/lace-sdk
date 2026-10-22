@@ -5,10 +5,12 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  FAMILY,
   nextRelease,
   nextStableVersion,
   readFamilyExports,
 } from '../scripts/next-version';
+import { CARDANO_APPS } from '../scripts/reach.mjs';
 import {
   readExports,
   type DeclaredExport,
@@ -902,5 +904,43 @@ describe('overrides and the canary floor', () => {
         'lace-sdk@9.0.0-canary.0 is not the version this commit takes',
       ),
     ]);
+  });
+});
+
+describe('the release family', () => {
+  // The workflows build the Nx projects tagged release:lace-sdk; the scripts
+  // version, compare and reach their own list. A package in one and not the
+  // other would be built and never versioned, or versioned and never built.
+  const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
+  const taggedRoots = () =>
+    ['apps', 'packages']
+      .flatMap(top =>
+        fs
+          .readdirSync(path.join(repositoryRoot, top), {
+            recursive: true,
+            encoding: 'utf8',
+          })
+          .filter(
+            file =>
+              path.basename(file) === 'project.json' &&
+              !file.includes('node_modules'),
+          )
+          .map(file => path.join(top, file)),
+      )
+      .filter(file => {
+        const project = JSON.parse(
+          fs.readFileSync(path.join(repositoryRoot, file), 'utf8'),
+        ) as { tags?: string[] };
+        return project.tags?.includes('release:lace-sdk') === true;
+      })
+      .map(file => path.dirname(file))
+      .sort();
+
+  it("is the Nx projects tagged release:lace-sdk, in the scripts' lists too", () => {
+    const roots = taggedRoots();
+    expect(roots).toEqual(FAMILY.map(member => member.directory).sort());
+    expect(roots.filter(root => root !== 'apps/lace-sdk')).toEqual(
+      [...CARDANO_APPS].sort(),
+    );
   });
 });

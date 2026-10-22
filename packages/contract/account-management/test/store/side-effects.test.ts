@@ -47,6 +47,7 @@ import {
   createWalletCreationSideEffect,
 } from '../../src/store/side-effects';
 
+import type { Authenticate } from '@lace-contract/authentication-prompt';
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { InMemoryWalletIntegration } from '@lace-contract/in-memory';
 import type { SecureStore } from '@lace-contract/secure-store';
@@ -58,11 +59,12 @@ import type {
   WalletIdentity,
 } from '@lace-contract/wallet-repo';
 import type { ByBlockchainName } from '@lace-lib/util-store';
+import type { Mock } from 'vitest';
 
 type BlockchainSpecific = { some: string };
 
 const createMockIntegrations = (
-  addAccountsMock: ReturnType<typeof vi.fn>,
+  addAccountsMock: Mock,
 ): InMemoryWalletIntegration[] => [
   {
     blockchainName: 'Cardano',
@@ -94,9 +96,9 @@ describe('createInMemoryWalletAddAccountSideEffect', () => {
     message: 'authentication-prompt.message.add-account' as TranslationKey,
   };
 
-  let authenticate: ReturnType<typeof vi.fn>;
-  let accessAuthSecret: ReturnType<typeof vi.fn>;
-  let addAccountMock: ReturnType<typeof vi.fn>;
+  let authenticate: Mock<Authenticate>;
+  let accessAuthSecret: Mock;
+  let addAccountMock: Mock;
 
   const baseWallet: InMemoryWallet<BlockchainSpecific> = {
     walletId,
@@ -2201,7 +2203,7 @@ describe('createRemoveAccountSideEffect', () => {
     message: 'authentication-prompt.message.remove-account' as TranslationKey,
   };
 
-  let authenticate: ReturnType<typeof vi.fn>;
+  let authenticate: Mock<Authenticate>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -2665,7 +2667,7 @@ describe('createRemoveWalletSideEffect', () => {
     message: 'authentication-prompt.message.remove-account' as TranslationKey,
   };
 
-  let authenticate: ReturnType<typeof vi.fn>;
+  let authenticate: Mock<Authenticate>;
 
   const makeWallet = () =>
     ({
@@ -3074,9 +3076,9 @@ describe('createWalletCreationSideEffect', () => {
   const walletName = 'New Wallet';
   const blockchains = ['Cardano'] as ['Cardano'];
 
-  let authenticate: ReturnType<typeof vi.fn>;
-  let accessAuthSecret: ReturnType<typeof vi.fn>;
-  let initializeWalletMock: ReturnType<typeof vi.fn>;
+  let authenticate: Mock<Authenticate>;
+  let accessAuthSecret: Mock;
+  let initializeWalletMock: Mock;
 
   const existingWallet: InMemoryWallet<BlockchainSpecific> = {
     walletId: WalletId('existing'),

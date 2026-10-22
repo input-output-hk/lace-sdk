@@ -1,59 +1,29 @@
 import { createSlotTimeCalc } from '@cardano-sdk/core';
 import { markParameterizedSelector } from '@lace-contract/module';
-import { walletsSelectors } from '@lace-contract/wallet-repo';
 import { createSelector } from '@reduxjs/toolkit';
 
-import { isCardanoCustodyAccount } from '../custody/account';
-import { classifyCardanoCustodyAccount } from '../custody/account-state';
-import { classifyCardanoCustodyGrants } from '../custody/grant-status';
-import { verifyCardanoCustodyAccountIdentity } from '../custody/identity';
-import { CardanoNetworkId } from '../value-objects';
+import { selectCardanoCustodyAccounts } from '../../extensions/custody-account-ids';
+import { CardanoNetworkId } from '../../value-objects';
+import { classifyCardanoCustodyAccount } from '../account-state';
+import { classifyCardanoCustodyGrants } from '../grant-status';
+import { verifyCardanoCustodyAccountIdentity } from '../identity';
 
-import type { CardanoContextCoreSelectors } from './core-selectors';
-import type { CardanoCustodyAccount } from '../custody/account';
-import type { CardanoCustodyAccountState } from '../custody/account-state';
-import type { CardanoCustodyGrantWithStatus } from '../custody/grant-status';
+import type { CardanoContextCoreSelectors } from '../../extensions/core-selectors';
 import type {
   RequiredProtocolParameters,
   RewardAccountDetails,
-} from '../types';
+} from '../../types';
+import type { CardanoCustodyAccount } from '../account';
+import type { CardanoCustodyAccountState } from '../account-state';
+import type { CardanoCustodyGrantWithStatus } from '../grant-status';
 import type { Cardano } from '@cardano-sdk/core';
-import type { AccountId, AnyAccount } from '@lace-contract/wallet-repo';
-
-const haveSameAccounts = (
-  a: readonly CardanoCustodyAccount[],
-  b: readonly CardanoCustodyAccount[],
-): boolean =>
-  a.length === b.length && a.every((account, index) => account === b[index]);
+import type { AccountId } from '@lace-contract/wallet-repo';
 
 /**
- * Every Cardano custody account in the repository, on every network. Keeps
- * its reference until a custody account changes, so the selectors built on
- * it do not recompute on unrelated wallet updates.
- */
-const selectCardanoCustodyAccounts = createSelector(
-  walletsSelectors.wallets.selectAll,
-  (wallets): CardanoCustodyAccount[] =>
-    wallets.flatMap(wallet =>
-      (wallet.accounts as AnyAccount[]).filter(isCardanoCustodyAccount),
-    ),
-  { memoizeOptions: { resultEqualityCheck: haveSameAccounts } },
-);
-
-/**
- * The ids of the Cardano custody accounts, whose UTxOs only the custody
- * builders may spend.
- */
-export const selectCustodyAccountIds = createSelector(
-  selectCardanoCustodyAccounts,
-  (accounts): ReadonlySet<string> =>
-    new Set(accounts.map(({ accountId }) => accountId)),
-);
-
-/**
- * The custody account selectors of the Cardano context:
- * `selectCardanoCustodyAccountState`, `selectSettledCardanoCustodyAccountState`
- * and `selectCardanoCustodyGrantStatuses`, built on the core selectors.
+ * The custody account selectors: `selectCardanoCustodyAccountState`,
+ * `selectSettledCardanoCustodyAccountState` and
+ * `selectCardanoCustodyGrantStatuses`, built on the Cardano context's core
+ * selectors.
  */
 export const createCardanoCustodySelectors = (
   core: CardanoContextCoreSelectors,

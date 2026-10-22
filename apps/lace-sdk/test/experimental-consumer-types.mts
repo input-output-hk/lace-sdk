@@ -192,12 +192,29 @@ const custodyWallet = await createLaceWallet({
     m.featureDev,
     m.storageInMemory,
     m.blockchainCardano,
+    m.blockchainCardanoCustody,
     m.cardanoProviderBlockfrost,
     m.cryptoCardanoSdk,
   ] as const,
   environment: 'development',
   config: {},
 });
+const walletWithoutCustody = await createLaceWallet({
+  modules: [
+    m.featureDev,
+    m.storageInMemory,
+    m.blockchainCardano,
+    m.cardanoProviderBlockfrost,
+    m.cryptoCardanoSdk,
+  ] as const,
+  environment: 'development',
+  config: {},
+});
+observeCardanoCustodyAccountState(
+  // @ts-expect-error A wallet created without m.blockchainCardanoCustody has no custody store.
+  walletWithoutCustody,
+  '' as Parameters<typeof observeCardanoCustodyAccountState>[1],
+);
 const consumerSponsor: CardanoCustodySponsor = {
   lease: async () => sponsor.lease(),
   signLeased: async (_leaseId, transaction) => HexBlob(transaction),

@@ -9,7 +9,7 @@ import { ACCOUNT_VALIDATOR_HASH } from '@lace-lib/cardano-custody';
 import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';
 
-import { cardanoContextActions } from '../../src';
+import { cardanoCustodyActions } from '../../src';
 import {
   custodyAddress as address,
   custodyCreatorKeyHash,
@@ -26,7 +26,7 @@ import type {
   CardanoCustodyCreatorIndexProbeResult,
 } from '../../src';
 
-const { cardanoContext: actions } = cardanoContextActions;
+const { cardanoCustody: actions } = cardanoCustodyActions;
 
 const utxo: Cardano.Utxo = [
   { txId: Cardano.TransactionId('11'.repeat(32)), index: 0, address },
@@ -55,7 +55,7 @@ describe('custody build actions', () => {
     };
     const { type, payload } = actions.buildCustodyTransaction(request);
 
-    expect(type).toBe('cardanoContext/buildCustodyTransaction');
+    expect(type).toBe('cardanoCustody/buildCustodyTransaction');
     expect(payload.requestId).toBe('create-1');
     expect(Serializable.from(throughJson(payload.request))).toEqual(request);
   });
@@ -111,7 +111,7 @@ describe('custody build actions', () => {
       result,
     });
 
-    expect(type).toBe('cardanoContext/buildCustodyTransactionCompleted');
+    expect(type).toBe('cardanoCustody/buildCustodyTransactionCompleted');
     expect(payload.requestId).toBe('create-1');
     expect(Serializable.from(throughJson(payload.result))).toEqual(result);
   });
@@ -140,7 +140,7 @@ describe('custody build actions', () => {
       error,
     });
 
-    expect(type).toBe('cardanoContext/buildCustodyTransactionFailed');
+    expect(type).toBe('cardanoCustody/buildCustodyTransactionFailed');
     expect(payload.requestId).toBe('create-1');
     expect(Serializable.from(throughJson(payload.error))).toEqual(error);
   });
@@ -172,16 +172,16 @@ describe('custody build actions', () => {
       error,
     });
 
-    expect(probed.type).toBe('cardanoContext/probeCustodyCreatorIndex');
+    expect(probed.type).toBe('cardanoCustody/probeCustodyCreatorIndex');
     expect(throughJson(probed.payload)).toEqual(request);
     expect(completed.type).toBe(
-      'cardanoContext/probeCustodyCreatorIndexCompleted',
+      'cardanoCustody/probeCustodyCreatorIndexCompleted',
     );
     expect(throughJson(completed.payload)).toEqual({
       requestId: 'probe-1',
       result,
     });
-    expect(failed.type).toBe('cardanoContext/probeCustodyCreatorIndexFailed');
+    expect(failed.type).toBe('cardanoCustody/probeCustodyCreatorIndexFailed');
     expect(throughJson(failed.payload)).toEqual({
       requestId: 'probe-1',
       error,

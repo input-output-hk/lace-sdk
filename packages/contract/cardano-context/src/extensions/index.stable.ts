@@ -1,8 +1,6 @@
 // The stable SDK build resolves this file in place of index.ts: the stable SDK
 // carries none of the features the canary build adds, so every hook is empty.
 // The exports and their types match index.ts.
-import type { CardanoContextCoreSelectors } from './core-selectors';
-import type { SideEffect } from '../contract';
 import type { CardanoPaymentAddress } from '../types';
 import type { CardanoWalletAccount } from '../util';
 import type { Cardano } from '@cardano-sdk/core';
@@ -56,21 +54,13 @@ export const extensionActions = {};
 /** The selectors the features add to the store: none. */
 export const extensionSelectors = {};
 
-/** The action creators the features add to the Cardano context's scope: none. */
-export const extensionCardanoContextActions = {};
-
-/** The selectors the features add to the Cardano context's scope: none. */
-export const createExtensionCardanoContextSelectors = (
-  _core: CardanoContextCoreSelectors,
-) => ({});
-
 const NO_ACCOUNT_IDS: ReadonlySet<string> = new Set();
 
 /** The ids of the accounts whose UTxOs only their own builders spend: none. */
 export const selectAccountIdsExcludedFromSpending = (): ReadonlySet<string> =>
   NO_ACCOUNT_IDS;
 
-/** The side effect that tracks the tokens of an account kind a feature adds: none. */
-export const extensionAccountTokens = (
+/** Whether a feature's own store tracks the account's tokens: never. */
+export const isExtensionTokenAccount = (
   _account: CardanoWalletAccount,
-): SideEffect | undefined => undefined;
+): boolean => false;

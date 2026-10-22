@@ -75,9 +75,13 @@ const bitcoinSourcesIn = files =>
   });
 
 // The experimental sources, by where the bundle's `//#region` comments say
-// they come from: the root and Cardano entries reach none of them.
+// they come from: the root and Cardano entries reach none of them. Custody's
+// are the SDK helpers, its store (actions, selectors and the account tokens
+// side effect) and its module's build and probe side effects.
 const EXPERIMENTAL_SOURCE =
-  /^\/\/#region (?:src\/(?:custody|passport)\/|\S*packages\/(?:module\/passport-account|contract\/passport)\/)\S*$/m;
+  /^\/\/#region (?:src\/(?:custody|passport)\/|\S*packages\/(?:module\/passport-account|contract\/passport)\/|\S*packages\/contract\/cardano-context\/src\/custody\/(?:contract|build-actions|store\/)|\S*packages\/module\/blockchain-cardano\/src\/(?:custody-|store\/custody\/(?:init|build-side-effect|creator-index-probe-side-effect)\.))\S*$/m;
+// Custody's action types: a file that names one carries custody's store.
+const CUSTODY_ACTION_TYPE = /["']cardanoCustody\//;
 const experimentalSourcesIn = files =>
   files.flatMap(file => {
     const match = EXPERIMENTAL_SOURCE.exec(
@@ -94,6 +98,18 @@ assert.deepEqual(
   [],
   'The root or Cardano entry reaches experimental code',
 );
+for (const file of [
+  'index.js',
+  'index.cjs',
+  'cardano.js',
+  'cardano.cjs',
+].flatMap(reachableFiles)) {
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(packageDirectory, 'dist', file), 'utf8'),
+    CUSTODY_ACTION_TYPE,
+    `${file}, which the root or Cardano entry loads, carries custody's store`,
+  );
+}
 
 const cardanoFiles = ['cardano.js', 'cardano.cjs'].flatMap(reachableFiles);
 assert(cardanoFiles.length > 2, 'The Cardano entry imports no output files');
@@ -151,6 +167,16 @@ if (CHANNEL === 'stable') {
       source,
       /createCardanoCustodyAccount/,
       `${entryName} must carry the custody API`,
+    );
+    assert.match(
+      source,
+      CUSTODY_ACTION_TYPE,
+      `${entryName} must carry custody's store`,
+    );
+    assert.match(
+      source,
+      /^\/\/#region \S*packages\/module\/blockchain-cardano\/src\/store\/custody\/build-side-effect\.ts$/m,
+      `${entryName} must carry custody's side effects`,
     );
   }
 }

@@ -26,6 +26,7 @@ export {
   CardanoCustodyLogicNotRegisteredError,
   CardanoCustodyLogicNotServedError,
   CardanoCustodyLogicRewardBalanceError,
+  CardanoCustodyModuleNotLoadedError,
   CardanoCustodyNetworkNotReadyError,
   CardanoCustodyOperationExpiredError,
   CardanoCustodyOperationInProgressError,
@@ -179,7 +180,9 @@ export type {
 export type {
   ActivitiesObservables,
   CardanoContextActionObservables,
+  CardanoCustodyActionObservables,
   CardanoCustodyDispatch,
+  CardanoCustodyObservables,
   WalletsObservables,
   WalletWithCardanoCustody,
 } from './cardano-custody-wallet';

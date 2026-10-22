@@ -20,7 +20,7 @@ import type {
  */
 export const cardanoCustodyBuildActions = {
   buildCustodyTransaction: createAction(
-    'cardanoContext/buildCustodyTransaction',
+    'cardanoCustody/buildCustodyTransaction',
     (request: CardanoCustodyBuildRequest) => ({
       payload: {
         requestId: request.requestId,
@@ -29,7 +29,7 @@ export const cardanoCustodyBuildActions = {
     }),
   ),
   buildCustodyTransactionCompleted: createAction(
-    'cardanoContext/buildCustodyTransactionCompleted',
+    'cardanoCustody/buildCustodyTransactionCompleted',
     ({
       requestId,
       result,
@@ -39,7 +39,7 @@ export const cardanoCustodyBuildActions = {
     }) => ({ payload: { requestId, result: Serializable.to(result) } }),
   ),
   buildCustodyTransactionFailed: createAction(
-    'cardanoContext/buildCustodyTransactionFailed',
+    'cardanoCustody/buildCustodyTransactionFailed',
     ({
       requestId,
       error,
@@ -54,14 +54,14 @@ export const cardanoCustodyBuildActions = {
    */
   probeCustodyCreatorIndex:
     createAction<CardanoCustodyCreatorIndexProbeRequest>(
-      'cardanoContext/probeCustodyCreatorIndex',
+      'cardanoCustody/probeCustodyCreatorIndex',
     ),
   probeCustodyCreatorIndexCompleted: createAction<{
     requestId: string;
     result: CardanoCustodyCreatorIndexProbeResult;
-  }>('cardanoContext/probeCustodyCreatorIndexCompleted'),
+  }>('cardanoCustody/probeCustodyCreatorIndexCompleted'),
   probeCustodyCreatorIndexFailed: createAction<{
     requestId: string;
     error: CardanoCustodyCreatorIndexProbeError;
-  }>('cardanoContext/probeCustodyCreatorIndexFailed'),
+  }>('cardanoCustody/probeCustodyCreatorIndexFailed'),
 };

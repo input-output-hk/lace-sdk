@@ -22,9 +22,7 @@ import {
   ownPendingOutputs,
 } from '../apply-in-flight-utxo-adjustments';
 import {
-  createExtensionCardanoContextSelectors,
   extensionActions,
-  extensionCardanoContextActions,
   extensionReducers,
   extensionSelectors,
   selectAccountIdsExcludedFromSpending,
@@ -1557,7 +1555,6 @@ export const cardanoContextActions = {
       txId: CardanoTxId;
       error: string;
     }>('cardanoContext/submitTxFailed'),
-    ...extensionCardanoContextActions,
   },
   ...collateralFlowActions,
   ...composerFlowActions,
@@ -1596,14 +1593,6 @@ export const cardanoContextSelectors = {
     selectSecurityScanState,
     selectNeedsSecurityRescan,
     selectActiveNetworkHasSyncFailure,
-    ...createExtensionCardanoContextSelectors({
-      selectAccountUtxos,
-      selectAccountUtxosWithInFlight,
-      selectAllNetworkInfo: slice.selectors.selectAllNetworkInfo,
-      selectEraSummaries,
-      selectRewardAccountDetails,
-      selectTip,
-    }),
   },
   ...collateralFlowSelectors,
   ...composerFlowSelectors,

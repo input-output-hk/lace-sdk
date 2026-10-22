@@ -1,5 +1,7 @@
 import { distinctUntilChanged, map } from 'rxjs';
 
+import { custodyStateObservables } from './cardano-custody-wallet';
+
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
 import type { Cardano } from '@cardano-sdk/core';
 import type { CardanoCustodyAccountState } from '@lace-contract/cardano-context';
@@ -46,7 +48,7 @@ const withDepositAddress = (
 
 /**
  * A custody account's state as the wallet syncs it, from
- * `wallet.stateObservables.cardanoContext.selectCardanoCustodyAccountState$`.
+ * `wallet.stateObservables.cardanoCustody.selectCardanoCustodyAccountState$`.
  * It reads the in-flight view, so a submitted operation's outputs replace
  * the UTxOs it spends at once.
  *
@@ -91,7 +93,7 @@ export const observeCardanoCustodyAccountState = (
   wallet: Pick<WalletWithCardanoCustody, 'stateObservables'>,
   accountId: AccountId,
 ): Observable<CardanoCustodyObservedAccountState | undefined> =>
-  wallet.stateObservables.cardanoContext.selectCardanoCustodyAccountState$.pipe(
+  custodyStateObservables(wallet).selectCardanoCustodyAccountState$.pipe(
     map(stateOf => stateOf(accountId)),
     distinctUntilChanged(),
     map(state => state && withDepositAddress(state)),

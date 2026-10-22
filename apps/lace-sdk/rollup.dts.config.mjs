@@ -6,6 +6,10 @@ import dts from 'rollup-plugin-dts';
 import ts from 'typescript';
 
 import { channelEntryNames, entrySource } from './scripts/entries.mjs';
+import {
+  cardanoSubpathOf,
+  useLaceioCardano,
+} from './scripts/laceio-cardano.mjs';
 import { reachedWorkspaceFiles, compilerOptions } from './scripts/reach.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -298,26 +302,25 @@ rewriteInternalImportsOnDisk();
 for (const entry of entries) injectAugmentationImports(entry);
 
 // The declarations carry the types they take from these packages, so the SDK
-// does not depend on them. Installing either one installs chacha, whose
-// optional native addon chacha-native does not compile on Node.js 24.
-const INLINED_TYPE_PACKAGES = [
-  '@cardano-sdk/key-management',
-  '@cardano-sdk/tx-construction',
-  '@midnight-ntwrk/dapp-connector-api',
-];
+// does not depend on them.
+const INLINED_TYPE_PACKAGES = ['@midnight-ntwrk/dapp-connector-api'];
 
 const isInlinedTypePackage = source =>
   INLINED_TYPE_PACKAGES.some(
     name => source === name || source.startsWith(`${name}/`),
   );
 
-// Every other npm package (rxjs, @reduxjs/toolkit, @cardano-sdk/core, etc.) is external.
+// Every other npm package (rxjs, @reduxjs/toolkit, @laceio/cardano, etc.) is
+// external; the @cardano-sdk packages the domain layer publishes import its
+// subpaths (scripts/laceio-cardano.mjs).
 // All .dts-work/ files have been rewritten to relative paths — no internal specifiers remain.
 const external = source => {
   // Relative and absolute paths are always internal
   if (source.startsWith('.') || source.startsWith('/')) return false;
-  // dts() resolves the inlined packages only when they are not external here
-  return !isInlinedTypePackage(source);
+  // dts() resolves the inlined packages only when they are not external here,
+  // and useLaceioCardano redirects the Cardano packages, which rollup asks
+  // only for a source this does not already mark external.
+  return !isInlinedTypePackage(source) && !cardanoSubpathOf(source);
 };
 
 /**
@@ -581,6 +584,7 @@ export default entries.map(entry => {
     input,
     output: { file: `dist/${entry}.d.ts`, format: 'es' },
     plugins: [
+      useLaceioCardano,
       dropUnloadedAugmentations,
       resolveJsonImports,
       dts({

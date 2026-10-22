@@ -34,4 +34,9 @@ export default defineConfig({
   target: 'es2022',
   clean: true,
   external: id => isBareSpecifier(id) && !isPortedPackage(id),
+  // The ported code uses Node's Buffer global, which a browser does not
+  // define, and some of it at module load. Each module that reads it imports
+  // it instead, from the declared `buffer` package, which Node resolves to
+  // its built-in module and a browser bundler to the npm package.
+  inputOptions: { transform: { inject: { Buffer: ['buffer', 'Buffer'] } } },
 });

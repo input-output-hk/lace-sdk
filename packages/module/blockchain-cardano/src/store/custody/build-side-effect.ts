@@ -7,7 +7,7 @@ import { CustodyBuildFailure, messageOf } from './build-failure';
 import { makeCustodyCreatorIndexProbing } from './creator-index-probe-side-effect';
 
 import type { CustodyAccountSnapshot } from './custody-account';
-import type { SideEffect } from '../../contracts';
+import type { CustodySideEffect } from '../../custody-contracts';
 import type {
   CardanoCustodyBuildError,
   CardanoCustodyBuildRequest,
@@ -44,10 +44,10 @@ const failureOf = (
 };
 
 export const makeCustodyTransactionBuilding =
-  (): SideEffect =>
+  (): CustodySideEffect =>
   (
-    { cardanoContext: { buildCustodyTransaction$ } },
-    { cardanoContext, wallets },
+    { cardanoCustody: { buildCustodyTransaction$ } },
+    { cardanoContext, cardanoCustody, wallets },
     { cardanoProvider, actions, logger },
   ) => {
     const snapshot = async (
@@ -55,7 +55,7 @@ export const makeCustodyTransactionBuilding =
     ): Promise<CustodyAccountSnapshot> => {
       const [allWallets, accountStateOf, settledUtxos] = await Promise.all([
         firstValueFrom(wallets.selectAll$),
-        firstValueFrom(cardanoContext.selectCardanoCustodyAccountState$),
+        firstValueFrom(cardanoCustody.selectCardanoCustodyAccountState$),
         firstValueFrom(cardanoContext.selectAccountUtxos$),
       ]);
       return {
@@ -96,11 +96,11 @@ export const makeCustodyTransactionBuilding =
         from(build(request)).pipe(
           map(outcome =>
             outcome.ok
-              ? actions.cardanoContext.buildCustodyTransactionCompleted({
+              ? actions.cardanoCustody.buildCustodyTransactionCompleted({
                   requestId,
                   result: outcome.result,
                 })
-              : actions.cardanoContext.buildCustodyTransactionFailed({
+              : actions.cardanoCustody.buildCustodyTransactionFailed({
                   requestId,
                   error: outcome.error,
                 }),
@@ -110,7 +110,7 @@ export const makeCustodyTransactionBuilding =
     );
   };
 
-export const custodyTransactionSideEffects: SideEffect[] = [
+export const custodyTransactionSideEffects: CustodySideEffect[] = [
   makeCustodyTransactionBuilding(),
   makeCustodyCreatorIndexProbing(),
 ];

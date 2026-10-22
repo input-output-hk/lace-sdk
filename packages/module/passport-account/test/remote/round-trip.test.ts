@@ -261,7 +261,7 @@ const localAccountKeys = async (
 
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
-  vi.restoreAllMocks();
+  vi.resetAllMocks();
 });
 
 describe('Passport seams over the signer protocol', () => {

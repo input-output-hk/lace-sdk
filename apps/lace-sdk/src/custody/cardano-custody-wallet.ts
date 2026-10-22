@@ -15,6 +15,7 @@ import {
 
 import {
   CardanoCustodyInvalidOperationError,
+  CardanoCustodyModuleNotLoadedError,
   CardanoCustodyNetworkNotReadyError,
 } from './cardano-custody-errors';
 
@@ -27,6 +28,8 @@ import type {
   CardanoCustodyBuildRequest,
   CardanoCustodyCreatorIndexProbeRequest,
   cardanoContextActions,
+  cardanoCustodyActions,
+  cardanoCustodySelectors,
 } from '@lace-contract/cardano-context';
 import type {
   ActionObservables,
@@ -45,11 +48,29 @@ import type { Observable } from 'rxjs';
 /**
  * The Cardano actions of a wallet with the Cardano modules loaded, as
  * observables: `wallet.actionObservables.cardanoContext`. Each `<action>$`
- * emits every dispatch of that action, such as the outcome of a custody build.
+ * emits every dispatch of that action, such as the outcome of a submission.
  */
 export type CardanoContextActionObservables = ActionObservables<
   typeof cardanoContextActions
 >['cardanoContext'];
+
+/**
+ * The custody account actions of a wallet with `m.blockchainCardanoCustody`
+ * loaded, as observables: `wallet.actionObservables.cardanoCustody`. Each
+ * `<action>$` emits every dispatch of that action, such as the outcome of a
+ * custody build.
+ */
+export type CardanoCustodyActionObservables = ActionObservables<
+  typeof cardanoCustodyActions
+>['cardanoCustody'];
+
+/**
+ * The custody account selectors of a wallet with `m.blockchainCardanoCustody`
+ * loaded, as observables: `wallet.stateObservables.cardanoCustody`.
+ */
+export type CardanoCustodyObservables = StateObservables<
+  typeof cardanoCustodySelectors
+>['cardanoCustody'];
 
 /**
  * The wallet's wallets and accounts as observables:
@@ -76,11 +97,11 @@ export type ActivitiesObservables = StateObservables<
  */
 export type CardanoCustodyDispatch = {
   (
-    key: 'cardanoContext.buildCustodyTransaction',
+    key: 'cardanoCustody.buildCustodyTransaction',
     request: CardanoCustodyBuildRequest,
   ): void;
   (
-    key: 'cardanoContext.probeCustodyCreatorIndex',
+    key: 'cardanoCustody.probeCustodyCreatorIndex',
     request: CardanoCustodyCreatorIndexProbeRequest,
   ): void;
   (key: 'cardanoContext.submitTx', props: { serializedTx: HexBytes }): void;
@@ -103,21 +124,25 @@ export type CardanoCustodyDispatch = {
 
 /**
  * Structural requirement: the wallet must have been created with the Cardano
- * modules loaded (`blockchainCardano` and a Cardano provider), which build,
- * sync and submit custody transactions.
+ * modules loaded (`blockchainCardano` and a Cardano provider), which sync and
+ * submit custody transactions, and `blockchainCardanoCustody`, which builds
+ * them.
  */
 export type WalletWithCardanoCustody = {
   stateObservables: {
     cardanoContext: Pick<
       CardanoContextObservables,
       | 'selectAccountUtxos$'
-      | 'selectCardanoCustodyAccountState$'
-      | 'selectCardanoCustodyGrantStatuses$'
       | 'selectChainId$'
       | 'selectEraSummaries$'
-      | 'selectSettledCardanoCustodyAccountState$'
       | 'selectTip$'
       | 'selectTransactionHistoryGroupedByAccount$'
+    >;
+    cardanoCustody: Pick<
+      CardanoCustodyObservables,
+      | 'selectCardanoCustodyAccountState$'
+      | 'selectCardanoCustodyGrantStatuses$'
+      | 'selectSettledCardanoCustodyAccountState$'
     >;
     wallets: Pick<WalletsObservables, 'selectAll$'>;
     activities: Pick<
@@ -128,15 +153,49 @@ export type WalletWithCardanoCustody = {
   actionObservables: {
     cardanoContext: Pick<
       CardanoContextActionObservables,
+      'submitTxCompleted$' | 'submitTxFailed$'
+    >;
+    cardanoCustody: Pick<
+      CardanoCustodyActionObservables,
       | 'buildCustodyTransactionCompleted$'
       | 'buildCustodyTransactionFailed$'
       | 'probeCustodyCreatorIndexCompleted$'
       | 'probeCustodyCreatorIndexFailed$'
-      | 'submitTxCompleted$'
-      | 'submitTxFailed$'
     >;
   };
   dispatch: CardanoCustodyDispatch;
+};
+
+/**
+ * The wallet's custody selectors, as observables.
+ *
+ * @throws {@link CardanoCustodyModuleNotLoadedError} When the wallet was
+ * created without `m.blockchainCardanoCustody`, whatever its type says.
+ */
+export const custodyStateObservables = (
+  wallet: Pick<WalletWithCardanoCustody, 'stateObservables'>,
+): WalletWithCardanoCustody['stateObservables']['cardanoCustody'] => {
+  const { cardanoCustody } = wallet.stateObservables as Partial<
+    WalletWithCardanoCustody['stateObservables']
+  >;
+  if (!cardanoCustody) throw new CardanoCustodyModuleNotLoadedError();
+  return cardanoCustody;
+};
+
+/**
+ * The wallet's custody actions, as observables.
+ *
+ * @throws {@link CardanoCustodyModuleNotLoadedError} When the wallet was
+ * created without `m.blockchainCardanoCustody`, whatever its type says.
+ */
+export const custodyActionObservables = (
+  wallet: Pick<WalletWithCardanoCustody, 'actionObservables'>,
+): WalletWithCardanoCustody['actionObservables']['cardanoCustody'] => {
+  const { cardanoCustody } = wallet.actionObservables as Partial<
+    WalletWithCardanoCustody['actionObservables']
+  >;
+  if (!cardanoCustody) throw new CardanoCustodyModuleNotLoadedError();
+  return cardanoCustody;
 };
 
 /**
@@ -245,7 +304,7 @@ export const readCardanoCustodyAccountState = async (
 ): Promise<CardanoCustodyAccountState | undefined> =>
   (
     await firstValueFrom(
-      wallet.stateObservables.cardanoContext.selectCardanoCustodyAccountState$,
+      custodyStateObservables(wallet).selectCardanoCustodyAccountState$,
     )
   )(accountId);
 
@@ -299,7 +358,6 @@ export const readConfirmedCardanoCustodyAccountState = async (
 ): Promise<CardanoCustodyAccountState | undefined> =>
   (
     await firstValueFrom(
-      wallet.stateObservables.cardanoContext
-        .selectSettledCardanoCustodyAccountState$,
+      custodyStateObservables(wallet).selectSettledCardanoCustodyAccountState$,
     )
   )(account.accountId);

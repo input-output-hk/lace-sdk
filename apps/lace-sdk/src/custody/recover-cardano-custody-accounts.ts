@@ -17,7 +17,10 @@ import {
   CardanoCustodyInvalidOperationError,
   CardanoCustodyUnsupportedVersionError,
 } from './cardano-custody-errors';
-import { readCardanoChainId } from './cardano-custody-wallet';
+import {
+  custodyActionObservables,
+  readCardanoChainId,
+} from './cardano-custody-wallet';
 import { custodyBuildErrorOf } from './request-cardano-custody-build';
 
 import type { CardanoCustodyDeviceKey } from './cardano-custody-device';
@@ -121,7 +124,7 @@ const probeCreatorIndex = async (
   const {
     probeCustodyCreatorIndexCompleted$,
     probeCustodyCreatorIndexFailed$,
-  } = wallet.actionObservables.cardanoContext;
+  } = custodyActionObservables(wallet);
   // Subscribed before dispatching: a module may answer synchronously.
   const outcome = firstValueFrom(
     merge(
@@ -139,7 +142,7 @@ const probeCreatorIndex = async (
       ),
     ).pipe(timeout(PROBE_TIMEOUT_MS)),
   );
-  wallet.dispatch('cardanoContext.probeCustodyCreatorIndex', {
+  wallet.dispatch('cardanoCustody.probeCustodyCreatorIndex', {
     ...probe,
     requestId,
   });

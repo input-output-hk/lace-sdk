@@ -15,7 +15,7 @@
     "chacha": "2.1.0",
     "get-random-values": "2.1.0",
     "lodash": "^4.17.21",
-    "pbkdf2": "3.1.5",
+    "pbkdf2": "3.1.7",
     "rxjs": "^7.8.1",
     "ts-custom-error": "^3.3.1",
     "ts-log": "^2.2.7"

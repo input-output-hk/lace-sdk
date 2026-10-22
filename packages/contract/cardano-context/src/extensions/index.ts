@@ -9,7 +9,6 @@ import { ActivityType } from '@lace-contract/activities';
 
 import { isCardanoCustodyAccount } from '../custody/account';
 import { isCardanoCustodyAccountTokenOf } from '../custody/account-token';
-import { cardanoCustodyBuildActions } from '../custody/build-actions';
 import { FEATURE_FLAG_CNIGHT_DESIGNATION } from '../night-designation-feature-flag';
 import { classifyTxAsNightDesignation } from '../store/helpers/night-designation-script-addresses';
 import {
@@ -23,19 +22,13 @@ import {
   nightDesignationIndexSelectors,
 } from '../store/night-designation-index';
 
-import { computeCustodyAccountTokens } from './custody-account-tokens';
+import { selectCustodyAccountIds } from './custody-account-ids';
 import { isOwnCustodyAccountToken } from './custody-account-tokens-of-addresses';
-import {
-  createCardanoCustodySelectors,
-  selectCustodyAccountIds,
-} from './custody-selectors';
 
 import type { CardanoNightDesignationActivityMetadata } from '../augmentations';
-import type { SideEffect } from '../contract';
 import type { CardanoCustodyActivityMetadata } from '../custody/pending-operation';
 import type { CardanoCustodyAccountProps } from '../types';
 import type { CardanoWalletAccount } from '../util';
-import type { CardanoContextCoreSelectors } from './core-selectors';
 import type { Cardano } from '@cardano-sdk/core';
 import type { FeatureFlag } from '@lace-contract/feature';
 
@@ -117,24 +110,16 @@ export const extensionSelectors = {
   ...nightDesignationIndexSelectors,
 };
 
-/** The action creators the features add to the Cardano context's scope. */
-export const extensionCardanoContextActions = cardanoCustodyBuildActions;
-
-/** The selectors the features add to the Cardano context's scope. */
-export const createExtensionCardanoContextSelectors = (
-  core: CardanoContextCoreSelectors,
-) => createCardanoCustodySelectors(core);
-
 /**
  * The ids of the accounts whose UTxOs only their own builders may spend:
  * custody accounts, whose UTxOs the custody script locks.
  */
 export const selectAccountIdsExcludedFromSpending = selectCustodyAccountIds;
 
-/** The side effect that tracks the tokens of an account kind a feature adds. */
-export const extensionAccountTokens = (
+/**
+ * Whether a feature's own store tracks the account's tokens: a custody
+ * account's, which the custody store derives from its account state.
+ */
+export const isExtensionTokenAccount = (
   account: CardanoWalletAccount,
-): SideEffect | undefined =>
-  isCardanoCustodyAccount(account)
-    ? computeCustodyAccountTokens(account)
-    : undefined;
+): boolean => isCardanoCustodyAccount(account);

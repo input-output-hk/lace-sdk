@@ -18,6 +18,8 @@
  * ```bash
  * node scripts/next-version.ts --channel stable --baseline <root> [--next <root>]
  * node scripts/next-version.ts --expect lace-sdk@0.2.0 --baseline <root>
+ * node scripts/next-version.ts --channel canary --baseline <root> \
+ *   --canary-previous <tag> --canary-baseline <root> --canary-next <root>
  * ```
  *
  * `--next` and `--baseline` are trees holding each package's stable build
@@ -31,6 +33,13 @@
  * problem: an export removed or changed without being `@deprecated` in the
  * previous release, a version already released, or a canary before the first
  * stable release.
+ *
+ * A canary's own changes are in its canary build, which the stable diff never
+ * reads. With `--canary-previous`, the result also compares the canary builds
+ * in `--canary-next` and `--canary-baseline` (the same layout) for the notes:
+ * this commit's with the release the canary's changes count from, the
+ * previous canary or, with none since the latest stable release, that
+ * release's canary build. The version still comes from the stable diff.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -236,8 +245,22 @@ export interface NextRelease extends StableVersion {
   tag: string;
   /** The previous stable release's tag, or null before the first. */
   previous: string | null;
+  /** A canary's own changes, for its notes: its canary build's diff. */
+  canary?: CanaryChanges;
   problems: string[];
   warnings: string[];
+}
+
+/**
+ * The change between two canary builds: this commit's, and that of the
+ * release a canary's changes count from (`previous`), the previous canary
+ * or, with none since, the latest stable release.
+ */
+export interface CanaryChanges {
+  previous: string;
+  added: string[];
+  removed: string[];
+  changed: string[];
 }
 
 /**
@@ -369,6 +392,19 @@ export const summarise = (release: NextRelease): string => {
   } else {
     lines.push(`${release.added.length} stable exports.`, '');
   }
+  if (release.canary) {
+    const { canary } = release;
+    lines.push(
+      `The canary build, compared with \`${canary.previous}\`'s:`,
+      '',
+      '| Exports | Count | Names |',
+      '| --- | --- | --- |',
+      `| Added | ${canary.added.length} | ${list(canary.added)} |`,
+      `| Removed | ${canary.removed.length} | ${list(canary.removed)} |`,
+      `| Changed | ${canary.changed.length} | ${list(canary.changed)} |`,
+      '',
+    );
+  }
   for (const problem of release.problems) lines.push(`- ❌ ${problem}`);
   for (const warning of release.warnings) lines.push(`- ⚠️ ${warning}`);
   return lines.join('\n') + '\n';
@@ -383,6 +419,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       expect: { type: 'string' },
       baseline: { type: 'string' },
       next: { type: 'string', default: repositoryRoot },
+      'canary-previous': { type: 'string' },
+      'canary-baseline': { type: 'string' },
+      'canary-next': { type: 'string' },
       out: { type: 'string' },
       summary: { type: 'string' },
     },
@@ -424,19 +463,43 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       `${values.baseline} holds no stable build of ${previous.tag}: every export would read as added`,
     );
   }
-  const release = nextRelease({
-    channel,
-    releases,
-    previous,
-    expect,
-    stable: nextStableVersion({
-      previousVersion: previous?.base,
-      previous: baseline,
-      next,
-      overrides: readFamilyOverrides(repositoryRoot),
-      major: readReleaseConfig(packageDirectory).major,
+  const canaryPrevious = values['canary-previous'];
+  const canaryBuild = (root: string | undefined, option: string) => {
+    if (!root) {
+      throw new Error(`--canary-previous needs --${option}`);
+    }
+    const exports = readFamilyExports(root);
+    if (exports.size === 0) {
+      throw new Error(`${root} (--${option}) holds no canary build`);
+    }
+    return exports;
+  };
+  const canary: CanaryChanges | undefined =
+    channel === 'canary' && canaryPrevious
+      ? {
+          previous: canaryPrevious,
+          ...compareExports(
+            canaryBuild(values['canary-baseline'], 'canary-baseline'),
+            canaryBuild(values['canary-next'], 'canary-next'),
+          ),
+        }
+      : undefined;
+  const release: NextRelease = {
+    ...nextRelease({
+      channel,
+      releases,
+      previous,
+      expect,
+      stable: nextStableVersion({
+        previousVersion: previous?.base,
+        previous: baseline,
+        next,
+        overrides: readFamilyOverrides(repositoryRoot),
+        major: readReleaseConfig(packageDirectory).major,
+      }),
     }),
-  });
+    ...(canary && { canary }),
+  };
   const json = JSON.stringify(release, undefined, 2) + '\n';
   if (values.out) fs.writeFileSync(values.out, json);
   if (values.summary) fs.writeFileSync(values.summary, summarise(release));

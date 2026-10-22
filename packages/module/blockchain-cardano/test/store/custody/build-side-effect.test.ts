@@ -1,4 +1,4 @@
-import { cardanoContextActions } from '@lace-contract/cardano-context';
+import { cardanoCustodyActions } from '@lace-contract/cardano-context';
 import { Ok } from '@lace-lib/util';
 import { Serializable } from '@lace-lib/util-store';
 import { lastValueFrom, of, toArray } from 'rxjs';
@@ -46,10 +46,10 @@ describe('custody transaction build side effect', () => {
     const actions = await lastValueFrom(
       makeCustodyTransactionBuilding()(
         {
-          cardanoContext: {
+          cardanoCustody: {
             buildCustodyTransaction$: of(
               ...requests.map(request =>
-                cardanoContextActions.cardanoContext.buildCustodyTransaction(
+                cardanoCustodyActions.cardanoCustody.buildCustodyTransaction(
                   request,
                 ),
               ),
@@ -60,7 +60,7 @@ describe('custody transaction build side effect', () => {
         {
           cardanoProvider: fakeProvider().provider,
           logger: dummyLogger,
-          actions: cardanoContextActions,
+          actions: cardanoCustodyActions,
         } as never,
       ).pipe(toArray()),
     );
@@ -71,8 +71,8 @@ describe('custody transaction build side effect', () => {
       ]),
     ).toEqual(
       expect.arrayContaining([
-        ['cardanoContext/buildCustodyTransactionCompleted', 'a'],
-        ['cardanoContext/buildCustodyTransactionCompleted', 'b'],
+        ['cardanoCustody/buildCustodyTransactionCompleted', 'a'],
+        ['cardanoCustody/buildCustodyTransactionCompleted', 'b'],
       ]),
     );
   });
@@ -80,7 +80,7 @@ describe('custody transaction build side effect', () => {
   it('carries the request and the answer as serializable payloads', async () => {
     const request = await createRequest();
     const action =
-      cardanoContextActions.cardanoContext.buildCustodyTransaction(request);
+      cardanoCustodyActions.cardanoCustody.buildCustodyTransaction(request);
     expect(action.payload.requestId).toBe('create');
     expect(JSON.parse(JSON.stringify(action.payload))).toEqual(action.payload);
     expect(Serializable.from(action.payload.request)).toEqual(request);

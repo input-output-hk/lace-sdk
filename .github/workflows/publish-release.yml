@@ -184,8 +184,11 @@ jobs:
   # @input-output-hk/lace-sdk publishes from this repository, linked here.
   # Each publish job waits for both build jobs, so a release whose checks
   # fail for any package publishes nothing and stays a draft.
+  # @laceio/sdk depends on @laceio/cardano at the release's version, so it
+  # publishes after the Cardano packages: npm never serves an SDK whose
+  # dependency it does not have yet.
   publish-sdk:
-    needs: [build-sdk, build-cardano]
+    needs: [build-sdk, build-cardano, publish-cardano]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # npm's trusted publisher is bound to this environment, so only this job
@@ -468,6 +471,21 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+
+          # A re-run after the release went public, which completes a
+          # partial publish, has nothing left to flip when the published
+          # release's tag is at this commit. At another commit it is another
+          # release, and the run stops.
+          published=$(gh api "/repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft' 2>/dev/null || true)
+          if [[ "$published" == false ]]; then
+            tagged=$(gh api "/repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+            if [[ "$tagged" == "$RELEASE_SHA" ]]; then
+              echo "::notice::$TAG is already published at $RELEASE_SHA; nothing to flip"
+              exit 0
+            fi
+            echo "::error::$TAG is already published at $tagged, not at this run's $RELEASE_SHA"
+            exit 1
+          fi
 
           # Look up the draft via the LIST endpoint (which returns
           # drafts) rather than `gh release view <tag>` (which goes

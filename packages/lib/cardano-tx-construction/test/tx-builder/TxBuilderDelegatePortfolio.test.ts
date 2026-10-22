@@ -39,7 +39,9 @@ vi.mock('@lace-lib/cardano-input-selection', async () => {
   );
   return {
     ...actual,
-    GreedyInputSelector: vi.fn(args => new actual.GreedyInputSelector(args)),
+    GreedyInputSelector: vi.fn(function (args) {
+      return new actual.GreedyInputSelector(args);
+    }),
     roundRobinRandomImprove: vi.fn(args =>
       actual.roundRobinRandomImprove(args),
     ),

@@ -9,6 +9,7 @@ import type {
   PassportAuthoriser,
   PassportEncryptionKey,
 } from '@lace-contract/passport';
+import type { AccountRecordStore } from '@lace-module/passport-account/sdk';
 
 /**
  * The seams `createPassportAccountModule` takes, served by the hosted Lace
@@ -23,7 +24,7 @@ export type RemotePassportSeams = {
    */
   encryptionKey: PassportEncryptionKey;
   /** Reads and writes the sealed Passport account record on the signer origin. */
-  accountRecordStore: ReturnType<typeof createRemoteAccountRecordStore>;
+  accountRecordStore: AccountRecordStore;
 };
 
 /**

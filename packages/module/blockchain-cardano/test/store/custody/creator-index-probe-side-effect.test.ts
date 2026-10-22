@@ -1,6 +1,6 @@
 import { Cardano } from '@cardano-sdk/core';
 import * as Crypto from '@cardano-sdk/crypto';
-import { cardanoContextActions } from '@lace-contract/cardano-context';
+import { cardanoCustodyActions } from '@lace-contract/cardano-context';
 import {
   createCustodyAccountRecord,
   deriveCustodyDeviceKey,
@@ -92,10 +92,10 @@ const sideEffectWith = (
 ) =>
   makeCustodyCreatorIndexProbing()(
     {
-      cardanoContext: {
+      cardanoCustody: {
         probeCustodyCreatorIndex$: of(
           ...requests.map(request =>
-            cardanoContextActions.cardanoContext.probeCustodyCreatorIndex(
+            cardanoCustodyActions.cardanoCustody.probeCustodyCreatorIndex(
               request,
             ),
           ),
@@ -106,7 +106,7 @@ const sideEffectWith = (
     {
       cardanoProvider: provider,
       logger,
-      actions: cardanoContextActions,
+      actions: cardanoCustodyActions,
     } as never,
   );
 

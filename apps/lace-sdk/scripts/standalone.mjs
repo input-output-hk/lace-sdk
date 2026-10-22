@@ -62,6 +62,9 @@ const ROOT_TOOLS = [
   'tsdown',
   'typescript',
   'vitest',
+  // The release notes read the changelog fragments (release-scope.ts), which
+  // the tests cover.
+  'yaml',
 ];
 
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -249,7 +252,9 @@ const transform = snapshot => {
     engines: rootPackage.engines,
     workspaces,
     scripts: {
-      build: `bash ${SDK}/scripts/build.sh`,
+      // The SDK imports @laceio/cardano, and its build's checks load and
+      // type-check against that package's build, so it builds first.
+      build: `bash apps/lace-cardano/scripts/build.sh && bash ${SDK}/scripts/build.sh`,
       'build:cardano': CARDANO_APPS.map(
         app => `bash ${app}/scripts/build.sh`,
       ).join(' && '),

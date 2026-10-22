@@ -5,6 +5,8 @@
 // stable-omits: CardanoAccountPublicKeyPayload, CardanoAccountPublicKeyResult
 // stable-omits: CardanoCustodyAccount, CardanoCustodyAccountIdentityError
 // stable-omits: CardanoCustodyAccountOperation, CardanoCustodyAccountState
+// stable-omits: CardanoCustodyActionCreators, CardanoCustodySelectors
+// stable-omits: CardanoCustodySideEffect
 // stable-omits: CardanoCustodyActivityMetadata, CardanoCustodyBuildError
 // stable-omits: CardanoCustodyBuildRequest, CardanoCustodyBuildResult
 // stable-omits: CardanoCustodyCollateralFunding, CardanoCustodyCreateOperation
@@ -34,6 +36,8 @@
 // stable-omits: NightDesignationStateSuccess, SignCardanoCustodyDataPayload
 // stable-omits: SignCardanoCustodyTxPayload, SignCardanoDataPayload
 // stable-omits: SignCardanoTxPayload, WithMnemonicWords
+// stable-omits: cardanoCustodyActions, cardanoCustodySelectors
+// stable-omits: cardanoCustodyStoreContract
 // stable-omits: cardanoCustodyActivityMetadataOf
 // stable-omits: checkCardanoCustodySignDataRequest
 // stable-omits: checkCardanoCustodySignRequest

@@ -325,8 +325,11 @@ const txHistoryStorageMock = {
   serialize: vi.fn().mockResolvedValue('tx-history'),
 } as unknown as WalletSdk.InMemoryTransactionHistoryStorage;
 
-vi.mocked(WalletSdk.InMemoryTransactionHistoryStorage).mockReturnValue(
-  txHistoryStorageMock,
+vi.mocked(WalletSdk.InMemoryTransactionHistoryStorage).mockImplementation(
+  // eslint-disable-next-line prefer-arrow-functions/prefer-arrow-functions -- invoked with `new`, which an arrow function cannot be
+  function () {
+    return txHistoryStorageMock;
+  },
 );
 vi.mocked(WalletSdk.InMemoryTransactionHistoryStorage.restore).mockReturnValue(
   txHistoryStorageMock,
@@ -476,13 +479,14 @@ describe('startMidnightAccountWallet', () => {
 
     it('wires the wallet to the tx-history storage it persists (LW-15122)', async () => {
       const createdStorages: WalletSdk.InMemoryTransactionHistoryStorage[] = [];
-      const makeStorageStub = () => {
+      // eslint-disable-next-line prefer-arrow-functions/prefer-arrow-functions -- invoked with `new`, which an arrow function cannot be
+      function makeStorageStub() {
         const stub = {
           serialize: vi.fn().mockReturnValue('[]'),
         } as unknown as WalletSdk.InMemoryTransactionHistoryStorage;
         createdStorages.push(stub);
         return stub;
-      };
+      }
       vi.mocked(WalletSdk.InMemoryTransactionHistoryStorage)
         .mockImplementationOnce(makeStorageStub) // config-literal default
         .mockImplementationOnce(makeStorageStub); // fresh-path instance
@@ -1720,9 +1724,15 @@ describe('startMidnightAccountWallet', () => {
       Object.assign(unshieldedWalletMock, {
         serializeState: vi.fn().mockResolvedValue('unshielded-serialized'),
       });
-      vi.mocked(WalletSdk.InMemoryTransactionHistoryStorage).mockReturnValue({
+      const txHistoryStorage = {
         serialize: vi.fn().mockResolvedValue('txhistory-serialized'),
-      } as unknown as WalletSdk.InMemoryTransactionHistoryStorage);
+      } as unknown as WalletSdk.InMemoryTransactionHistoryStorage;
+      vi.mocked(WalletSdk.InMemoryTransactionHistoryStorage).mockImplementation(
+        // eslint-disable-next-line prefer-arrow-functions/prefer-arrow-functions -- invoked with `new`, which an arrow function cannot be
+        function () {
+          return txHistoryStorage;
+        },
+      );
       vi.mocked(store.upsert).mockReturnValue(of(void 0));
     });
 

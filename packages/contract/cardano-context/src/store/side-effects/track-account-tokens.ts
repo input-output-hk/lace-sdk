@@ -5,12 +5,13 @@ import {
   combineLatest,
   distinct,
   distinctUntilChanged,
+  filter,
   map,
   mergeAll,
   mergeMap,
 } from 'rxjs';
 
-import { extensionAccountTokens } from '../../extensions';
+import { isExtensionTokenAccount } from '../../extensions';
 import { toAccountTokens } from '../helpers/account-tokens';
 
 import type { SideEffect } from '../../contract';
@@ -82,7 +83,8 @@ const computeAccountTokens =
     );
 
 /**
- * Computes tokens from utxos and withdrawable reward amount for all activated Cardano accounts.
+ * Computes tokens from utxos and withdrawable reward amount for all activated
+ * Cardano accounts, except those a feature's own store tracks.
  * ADA balance is set as sum of UTXO coins and withdrawable amount (added to first address).
  */
 export const trackAccountTokens: SideEffect = (
@@ -93,10 +95,12 @@ export const trackAccountTokens: SideEffect = (
   stateObservables.cardanoContext.selectActiveCardanoAccounts$.pipe(
     mergeAll(),
     distinct(accumulator => accumulator.accountId),
+    filter(account => !isExtensionTokenAccount(account)),
     mergeMap(account =>
-      (
-        extensionAccountTokens(account) ??
-        computeAccountTokens(account.accountId)
-      )(actionObservables, stateObservables, dependencies),
+      computeAccountTokens(account.accountId)(
+        actionObservables,
+        stateObservables,
+        dependencies,
+      ),
     ),
   );

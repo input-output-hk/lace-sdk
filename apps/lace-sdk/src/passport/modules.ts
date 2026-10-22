@@ -1,9 +1,7 @@
 /**
- * The experimental entry's modules: the Cardano entry's, with the Passport
- * module and the seams it runs on. Midnight Passport accounts are an
- * experimental feature of the canary build (ADR 66).
+ * The Passport module and the seams it runs on. Midnight Passport accounts
+ * are an experimental feature of the canary build (ADR 66).
  */
-export * from '../modules-cardano';
 export {
   createDevDeposit,
   createDevSponsor,
@@ -16,9 +14,39 @@ export {
   midnightDevnetNetwork,
 } from '@lace-module/passport-account/sdk';
 export type {
+  AccountRecordStore,
+  AuthorityKey,
+  AuthorityKeyKind,
+  CreatePasskeyAuthoriserProps,
   CreatePasskeyKeySourceProps,
   CreatePassportAccountModuleProps,
+  DevDeposit,
+  DevDepositConfig,
+  DevDepositRequest,
+  DevDepositResult,
+  DevSponsor,
+  DevSponsorConfig,
+  DevTokenKind,
+  FetchBytes,
+  HttpProverOptions,
+  JubjubAuthoriser,
+  KeyMaterialResolver,
   MidnightDevnetNetworkProps,
+  PasskeyAuthoriser,
   PasskeyCredentialRef,
+  PasskeyEncryptionKey,
   PasskeySessionKeySource,
+  PassportAccountRecord,
+  PendingCreationMarker,
+  PendingDeployment,
+  ProverFetch,
+  RecordPresence,
+  Sleep,
+  SponsorBalanceOptions,
+  SponsorWallet,
+  SponsorWalletContext,
+  StoredGrant,
+  StoredGrantObject,
+  StoredGrantView,
+  StoredGrants,
 } from '@lace-module/passport-account/sdk';

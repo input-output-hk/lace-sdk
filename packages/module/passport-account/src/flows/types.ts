@@ -92,7 +92,10 @@ export type StoredGrants = Record<string, StoredGrant>;
  * the write that completes the record. Read through the hosted signer by
  * any flow but the creation, it is only the {@link PendingCreationMarker}.
  * `grants` is present once this client has issued a grant that is still
- * on chain. No key material is ever part of this record.
+ * on chain. While a creation is unfinished, `deployment` holds the
+ * contract's maintenance authority key, which is full custody of the
+ * contract until activation: store the record sealed. Once the creation
+ * completes, the record holds no secret.
  */
 export type PassportAccountRecord = {
   address: string;

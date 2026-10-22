@@ -1,7 +1,7 @@
 {
   "name": "lace-cardano",
   "projectType": "library",
-  "tags": ["scope:app"],
+  "tags": ["scope:app", "release:lace-sdk"],
   "targets": {
     "build": {
       "executor": "nx:run-commands",
@@ -16,7 +16,8 @@
         "{workspaceRoot}/packages/lib/util/src/common/**/*",
         "{workspaceRoot}/tsconfig.base.json"
       ],
-      "outputs": ["{projectRoot}/dist"]
+      "outputs": ["{projectRoot}/dist"],
+      "dependsOn": []
     },
     "test": {
       "description": "Integration tests of the release path (test/release.test.mjs): scripts/check-release.ts and scripts/release-plan.mjs against fixture packages, a directory standing in for npm and a local registry answering 404 or 503",
@@ -25,7 +26,9 @@
       "inputs": [
         "{projectRoot}/scripts/**/*",
         "{projectRoot}/test/release.test.mjs",
-        "{workspaceRoot}/apps/lace-sdk/scripts/release-compat.ts"
+        "{workspaceRoot}/apps/lace-sdk/scripts/release-compat.ts",
+        "{workspaceRoot}/apps/lace-sdk/scripts/releases.mjs",
+        "{workspaceRoot}/apps/lace-sdk/scripts/entries.mjs"
       ],
       "options": {
         "command": "node --test test/release.test.mjs",

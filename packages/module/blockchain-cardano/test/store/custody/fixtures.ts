@@ -10,7 +10,7 @@ import { mockProviders } from '@cardano-sdk/util-dev';
 import {
   CardanoAccountId,
   CardanoCustodyWalletId,
-  cardanoContextActions,
+  cardanoCustodyActions,
   classifyCardanoCustodyAccount,
 } from '@lace-contract/cardano-context';
 import { BlockchainNetworkId } from '@lace-contract/network';
@@ -475,6 +475,8 @@ export const stateObservables = (store: StoreFixture = {}) => {
       selectAccountUtxos$: of(
         store.settledUtxos ? { [accountId]: settled } : {},
       ),
+    },
+    cardanoCustody: {
       selectCardanoCustodyAccountState$: of((id: AccountId) =>
         account && id === account.accountId && store.isClassified !== false
           ? classifyCardanoCustodyAccount({
@@ -509,9 +511,9 @@ export const runBuild = async (
   const action = await firstValueFrom(
     makeCustodyTransactionBuilding()(
       {
-        cardanoContext: {
+        cardanoCustody: {
           buildCustodyTransaction$: of(
-            cardanoContextActions.cardanoContext.buildCustodyTransaction(
+            cardanoCustodyActions.cardanoCustody.buildCustodyTransaction(
               request,
             ),
           ),
@@ -521,7 +523,7 @@ export const runBuild = async (
       {
         cardanoProvider: provider,
         logger,
-        actions: cardanoContextActions,
+        actions: cardanoCustodyActions,
       } as never,
     ),
   );

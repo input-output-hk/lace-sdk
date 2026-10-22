@@ -9,6 +9,7 @@ import { ActivityType } from '@lace-contract/activities';
 import {
   applyInFlightUtxoAdjustments,
   cardanoContextActions,
+  cardanoCustodyActions,
   CardanoNetworkId,
   CardanoPaymentAddress,
   classifyCardanoCustodyAccount,
@@ -352,22 +353,22 @@ export const createCustodyTestWallet = () => {
 
   const buildCompleted$ = new Subject<
     ReturnType<
-      typeof cardanoContextActions.cardanoContext.buildCustodyTransactionCompleted
+      typeof cardanoCustodyActions.cardanoCustody.buildCustodyTransactionCompleted
     >
   >();
   const buildFailed$ = new Subject<
     ReturnType<
-      typeof cardanoContextActions.cardanoContext.buildCustodyTransactionFailed
+      typeof cardanoCustodyActions.cardanoCustody.buildCustodyTransactionFailed
     >
   >();
   const probeCompleted$ = new Subject<
     ReturnType<
-      typeof cardanoContextActions.cardanoContext.probeCustodyCreatorIndexCompleted
+      typeof cardanoCustodyActions.cardanoCustody.probeCustodyCreatorIndexCompleted
     >
   >();
   const probeFailed$ = new Subject<
     ReturnType<
-      typeof cardanoContextActions.cardanoContext.probeCustodyCreatorIndexFailed
+      typeof cardanoCustodyActions.cardanoCustody.probeCustodyCreatorIndexFailed
     >
   >();
   const submitCompleted$ = new Subject<
@@ -458,9 +459,10 @@ export const createCustodyTestWallet = () => {
   );
 
   const { cardanoContext: actions } = cardanoContextActions;
+  const { cardanoCustody: custodyActions } = cardanoCustodyActions;
   const dispatch = vi.fn((key: string, ...args: unknown[]) => {
     switch (key) {
-      case 'cardanoContext.buildCustodyTransaction': {
+      case 'cardanoCustody.buildCustodyTransaction': {
         const request = args[0] as CardanoCustodyBuildRequest;
         builds.push(request);
         // The build reads the era summaries in the store, as the module does.
@@ -475,14 +477,14 @@ export const createCustodyTestWallet = () => {
             };
         if (outcome.ok) {
           buildCompleted$.next(
-            actions.buildCustodyTransactionCompleted({
+            custodyActions.buildCustodyTransactionCompleted({
               requestId: request.requestId,
               result: outcome.result,
             }),
           );
         } else {
           buildFailed$.next(
-            actions.buildCustodyTransactionFailed({
+            custodyActions.buildCustodyTransactionFailed({
               requestId: request.requestId,
               error: outcome.error,
             }),
@@ -490,20 +492,20 @@ export const createCustodyTestWallet = () => {
         }
         return;
       }
-      case 'cardanoContext.probeCustodyCreatorIndex': {
+      case 'cardanoCustody.probeCustodyCreatorIndex': {
         const request = args[0] as CardanoCustodyCreatorIndexProbeRequest;
         probes.push(request);
         const outcome = control.answerProbe(request);
         if (outcome.ok) {
           probeCompleted$.next(
-            actions.probeCustodyCreatorIndexCompleted({
+            custodyActions.probeCustodyCreatorIndexCompleted({
               requestId: request.requestId,
               result: outcome.result,
             }),
           );
         } else {
           probeFailed$.next(
-            actions.probeCustodyCreatorIndexFailed({
+            custodyActions.probeCustodyCreatorIndexFailed({
               requestId: request.requestId,
               error: outcome.error,
             }),
@@ -601,12 +603,14 @@ export const createCustodyTestWallet = () => {
     stateObservables: {
       cardanoContext: {
         selectAccountUtxos$: settledUtxos$,
-        selectCardanoCustodyAccountState$: accountState$,
-        selectSettledCardanoCustodyAccountState$: settledAccountState$,
         selectChainId$: chainId$,
         selectEraSummaries$: eraSummaries$,
         selectTip$: tip$,
         selectTransactionHistoryGroupedByAccount$: history$,
+      },
+      cardanoCustody: {
+        selectCardanoCustodyAccountState$: accountState$,
+        selectSettledCardanoCustodyAccountState$: settledAccountState$,
       },
       wallets: { selectAll$: wallets$ },
       activities: {
@@ -626,12 +630,14 @@ export const createCustodyTestWallet = () => {
     },
     actionObservables: {
       cardanoContext: {
+        submitTxCompleted$: submitCompleted$,
+        submitTxFailed$: submitFailed$,
+      },
+      cardanoCustody: {
         buildCustodyTransactionCompleted$: buildCompleted$,
         buildCustodyTransactionFailed$: buildFailed$,
         probeCustodyCreatorIndexCompleted$: probeCompleted$,
         probeCustodyCreatorIndexFailed$: probeFailed$,
-        submitTxCompleted$: submitCompleted$,
-        submitTxFailed$: submitFailed$,
       },
     },
     dispatch,

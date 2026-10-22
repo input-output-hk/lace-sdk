@@ -11,7 +11,7 @@ import {
   DUST_THRESHOLD,
 } from '@lace-module/blockchain-bitcoin/sdk';
 import { Transaction } from 'bitcoinjs-lib';
-import { filter, firstValueFrom, map, timeout } from 'rxjs';
+import { combineLatest, filter, firstValueFrom, map, timeout } from 'rxjs';
 import {
   afterEach,
   beforeAll,
@@ -212,7 +212,8 @@ const addSyncedWallets = async (
 
 /**
  * Adds wallet entities to `wallet` without waiting for their accounts to
- * sync, for wallets that only sign.
+ * sync, for wallets that only sign. Signing resolves the account against the
+ * active network, so this waits until each entity's Bitcoin account is on it.
  */
 const addWallets = async (
   wallet: BitcoinTestWallet,
@@ -222,8 +223,21 @@ const addWallets = async (
     wallet.dispatch('wallets.addWallet', entity);
   }
   await firstValueFrom(
-    wallet.stateObservables.wallets.selectAll$.pipe(
-      filter(all => all.length === entities.length),
+    combineLatest([
+      wallet.stateObservables.wallets.selectAll$,
+      wallet.stateObservables.network.selectAllActiveNetworkIds$,
+    ]).pipe(
+      filter(
+        ([all, activeNetworkIds]) =>
+          all.length === entities.length &&
+          entities.every(entity =>
+            entity.accounts.some(
+              account =>
+                account.blockchainName === 'Bitcoin' &&
+                activeNetworkIds.includes(account.blockchainNetworkId),
+            ),
+          ),
+      ),
     ),
   );
 };

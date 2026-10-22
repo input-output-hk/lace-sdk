@@ -96,7 +96,7 @@
     "packages/types/web-encoding"
   ],
   "scripts": {
-    "build": "bash apps/lace-sdk/scripts/build.sh",
+    "build": "bash apps/lace-cardano/scripts/build.sh && bash apps/lace-sdk/scripts/build.sh",
     "build:cardano": "bash apps/lace-cardano/scripts/build.sh && bash apps/lace-cardano-ledger/scripts/build.sh && bash apps/lace-cardano-trezor/scripts/build.sh",
     "test": "cd apps/lace-sdk && NODE_OPTIONS=--experimental-require-module vitest run --config=vitest.config.js && node test/check-stable-variants.mjs"
   },
@@ -117,18 +117,18 @@
     "dayjs": "1.11.19",
     "eslint": "^9.9.1",
     "eslint-plugin-react-native": "^5.0.0",
-    "expo-camera": "56.0.8",
-    "expo-haptics": "56.0.3",
-    "expo-image": "~56.0.11",
-    "expo-secure-store": "~56.0.4",
+    "expo-camera": "57.0.6",
+    "expo-haptics": "57.0.3",
+    "expo-image": "~57.0.5",
+    "expo-secure-store": "~57.0.4",
     "fake-indexeddb": "^6.2.5",
     "history": "^5.3.0",
     "immer": "^10.1.1",
-    "jest-expo": "~56.0.5",
+    "jest-expo": "~57.0.6",
     "react": "19.2.3",
     "react-native-safe-area-context": "5.7.0",
     "react-native-svg": "15.15.4",
-    "react-native-worklets": "0.8.3",
+    "react-native-worklets": "0.10.1",
     "react-redux": "^9.1.0",
     "react-test-renderer": "19.2.3",
     "reassure": "^1.5.1",
@@ -139,14 +139,15 @@
     "prettier": "^2.8.8",
     "semver": "6.3.1",
     "tsdown": "^0.21.3",
-    "typescript": "~5.9.2"
+    "typescript": "~5.9.2",
+    "yaml": "2.9.0"
   },
   "overrides": {
     "websocket-driver": "0.7.5",
     "path-to-regexp@0.1.12": "0.1.13",
     "path-to-regexp@8.3.0": "8.4.2",
     "yaml@1.10.2": "1.10.3",
-    "morgan": "1.11.0",
+    "morgan": "1.12.1",
     "uuid@13.0.0": "13.0.2",
     "react-native-ble-plx": "3.5.1",
     "libsodium-sumo": "0.7.10",
@@ -160,26 +161,27 @@
     "tar-fs": "3.1.2",
     "flatted": "3.4.2",
     "fast-xml-parser": "5.7.0",
-    "minimatch": "9.0.7",
+    "minimatch@>=9 <9.0.7": "9.0.7",
     "eslint-plugin-import": {
       "minimatch": "3.1.5"
     },
-    "undici": "6.27.0",
+    "undici@^6": "6.28.1",
     "cheerio": {
-      "undici": "7.28.0"
+      "undici": "7.29.1"
     },
     "testcontainers": {
-      "undici": "7.28.0"
+      "undici": "7.29.1"
     },
     "cross-spawn": "7.0.6",
-    "tar": "7.5.16",
-    "protobufjs": "7.6.3",
-    "shell-quote": "1.8.4",
+    "tar": "7.5.22",
+    "protobufjs": "7.6.5",
+    "shell-quote": "1.11.0",
     "tmp": "0.2.7",
-    "postcss": "8.5.10",
-    "qs": "6.15.3",
+    "postcss": "8.5.23",
+    "qs": "6.16.0",
     "form-data@^4": "4.0.6",
     "@ledgerhq/react-native-hw-transport-ble": {
+      "react-native-ble-plx": "3.5.1",
       "uuid": "^11.1.1"
     },
     "xcode": {
@@ -189,7 +191,7 @@
       "uuid": "^11.1.1"
     },
     "@tootallnate/once": "2.0.1",
-    "@xmldom/xmldom": "0.8.13",
+    "@xmldom/xmldom": "0.8.15",
     "@module-federation/dts-plugin": {
       "ws": "8.21.0"
     },
@@ -199,20 +201,9 @@
     "tsx": {
       "esbuild": "0.28.1"
     },
-    "@nx/js": {
-      "picomatch": "4.0.4"
-    },
-    "@nx/rollup": {
-      "picomatch": "4.0.4"
-    },
-    "@nx/vite": {
-      "picomatch": "4.0.4"
-    },
-    "@nx/workspace": {
-      "picomatch": "4.0.4"
-    },
+    "picomatch@>=4 <4.0.4": "4.0.4",
     "@cardano-sdk/core": {
-      "ip-address": "10.2.0"
+      "ip-address": "10.7.4"
     },
     "@cardano-sdk/wallet": {
       "uuid": "^11.1.1"
@@ -229,6 +220,10 @@
     "@midnightntwrk/wallet-sdk-abstractions@2.x": "2.1.0",
     "@midnightntwrk/wallet-sdk-address-format": "3.1.2",
     "@midnightntwrk/wallet-sdk-indexer-client": "1.2.3",
-    "@midnightntwrk/wallet-sdk-utilities": "1.2.0"
+    "@midnightntwrk/wallet-sdk-utilities": "1.2.0",
+    "axios@1.18.1": "1.20.0",
+    "follow-redirects@1.16.0": "1.16.1",
+    "brace-expansion@5.0.8": "5.0.12",
+    "smol-toml@1.6.1": "1.9.1"
   }
 }

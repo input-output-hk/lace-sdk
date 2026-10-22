@@ -1,8 +1,9 @@
 // Each entry's declarations and its ESM and CommonJS outputs export the same
 // names, and every name the declarations promise as a value exists at run
-// time. On stable, no output file names a canary feature or Lace's own apps,
-// nor any name only the canary build exports: a stable export or doc comment
-// that mentions one commits the stable API to it (ADR 66).
+// time. On canary, every type a Passport export names is exported from the
+// experimental entry. On stable, no output file names a canary feature or
+// Lace's own apps, nor any name only the canary build exports: a stable export
+// or doc comment that mentions one commits the stable API to it (ADR 66).
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -21,6 +22,7 @@ import {
   findMarkers,
   identifierPattern,
   readDeclaredExports,
+  readUnexportedTypeReferences,
 } from '../scripts/export-surface.ts';
 import {
   channelEntries,
@@ -89,6 +91,29 @@ for (const entry of channelEntryNames(CHANNEL)) {
         CommonJS: Object.keys(require(path.join(distribution, `${entry}.cjs`))),
       },
     }),
+  );
+}
+
+if (CHANNEL === 'canary') {
+  // The Passport exports: those of src/passport/index.ts, and the members its
+  // modules add to the experimental entry's `m`.
+  const passportExports = readExportDocs({
+    entries: ['src/passport/index.ts', 'src/passport/modules.ts'].map(file =>
+      path.join(packageDirectory, file),
+    ),
+    options: compilerOptions('canary'),
+    workspaceRoot,
+  }).map(({ entry, name }) =>
+    entry.endsWith('src/passport/modules.ts') ? `m.${name}` : name,
+  );
+  problems.push(
+    ...readUnexportedTypeReferences(
+      path.join(distribution, 'experimental.d.ts'),
+      passportExports,
+    ).map(
+      ({ owner, type }) =>
+        `experimental: '${owner}' names '${type}', which the entry does not export`,
+    ),
   );
 }
 

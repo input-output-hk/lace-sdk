@@ -6,7 +6,7 @@ import { FIRST_HARDENED_INDEX } from './create-custody-account';
 import { readCustodyCreatorIndex } from './custody-creator-index';
 
 import type { CustodyCreatorIndexState } from './custody-creator-index';
-import type { SideEffect } from '../../contracts';
+import type { CustodySideEffect } from '../../custody-contracts';
 import type { Cardano } from '@cardano-sdk/core';
 import type {
   CardanoCustodyBuildError,
@@ -130,9 +130,9 @@ const probe = async (
 };
 
 export const makeCustodyCreatorIndexProbing =
-  (): SideEffect =>
+  (): CustodySideEffect =>
   (
-    { cardanoContext: { probeCustodyCreatorIndex$ } },
+    { cardanoCustody: { probeCustodyCreatorIndex$ } },
     { cardanoContext },
     { cardanoProvider, actions, logger },
   ) => {
@@ -150,11 +150,11 @@ export const makeCustodyCreatorIndexProbing =
         from(answer(request)).pipe(
           map(outcome =>
             outcome.ok
-              ? actions.cardanoContext.probeCustodyCreatorIndexCompleted({
+              ? actions.cardanoCustody.probeCustodyCreatorIndexCompleted({
                   requestId: request.requestId,
                   result: outcome.result,
                 })
-              : actions.cardanoContext.probeCustodyCreatorIndexFailed({
+              : actions.cardanoCustody.probeCustodyCreatorIndexFailed({
                   requestId: request.requestId,
                   error: outcome.error,
                 }),

@@ -483,6 +483,21 @@ export class CardanoCustodyAgentPolicyInvalidError extends CustomError {
 }
 
 /**
+ * The wallet carries no custody store: it was created without
+ * `m.blockchainCardanoCustody`, which custody helpers need next to the
+ * Cardano modules. Create the wallet with it.
+ */
+export class CardanoCustodyModuleNotLoadedError extends CustomError {
+  public readonly code = 'custody-module-not-loaded' as const;
+
+  public constructor() {
+    super(
+      'The wallet has no custody store: create it with m.blockchainCardanoCustody',
+    );
+  }
+}
+
+/**
  * The wallet's Cardano network was not ready within `timeoutMs`. `missing`
  * names what it lacked:
  *

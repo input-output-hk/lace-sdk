@@ -17,6 +17,7 @@ import {
   findStaticMidnightImports,
   undeclaredPackageRequires,
 } from './src/scan-static-midnight-imports.ts';
+import { useLaceioCardano } from './scripts/laceio-cardano.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,46 +33,6 @@ const resolveAlias = {
   // polyfill doesn't provide. The browser build uses the global Web Crypto API
   // (crypto.getRandomValues/randomUUID) and needs no polyfill.
   uuid: nm('uuid/dist/esm-browser/index.js'),
-  // chacha's main entry, which the CommonJS output resolves, prefers the
-  // optional native chacha-native and falls back to its pure-JS build. A
-  // bundle cannot load a native addon, and where chacha-native is not
-  // installed (it does not compile on Node 24) rolldown drops createCipher
-  // and createDecipher from the fallback, which breaks emip3 encryption.
-  // Both outputs therefore take the pure-JS build directly.
-  chacha: nm('chacha/browser.js'),
-};
-
-// @cardano-sdk/key-management depends on @emurgo/cardano-message-signing-nodejs
-// which loads WASM via fs.readFileSync (Node-only). The CIP-8 signData bindings
-// call WASM at module evaluation time (Label.new_text(...)), so we can't defer
-// initialization. Stub with a recursive proxy that absorbs any property/call chain.
-const STUB_MSG_SIGNING_ID = '\0stub-cardano-message-signing';
-const stubCardanoMessageSigning: Plugin = {
-  name: 'stub-cardano-message-signing',
-  resolveId(source) {
-    if (source === '@emurgo/cardano-message-signing-nodejs') {
-      return { id: STUB_MSG_SIGNING_ID };
-    }
-    return null;
-  },
-  load(id) {
-    if (id === STUB_MSG_SIGNING_ID) {
-      return `function stub() { return new Proxy(stub, { get: () => stub }); }
-export const AlgorithmId = stub();
-export const CBORValue = stub();
-export const COSEKey = stub();
-export const COSESign1Builder = stub();
-export const CurveType = stub();
-export const HeaderMap = stub();
-export const Headers = stub();
-export const Int = stub();
-export const KeyType = stub();
-export const Label = stub();
-export const ProtectedHeaderMap = stub();
-export default stub();`;
-    }
-    return null;
-  },
 };
 
 // The nodePolyfills plugin wraps `inherits` as an ESM default export, which
@@ -96,8 +57,7 @@ const fixCjsInterop: Plugin = {
 
 // The nodePolyfills built-in Buffer (`\0polyfill-node.buffer`) doesn't handle
 // Uint8Array in Buffer.concat — it uses `internalIsBuffer` which rejects plain
-// Uint8Array values. This breaks @cardano-sdk/key-management's emip3encrypt
-// (creates Uint8Array for salt/nonce then calls Buffer.concat).
+// Uint8Array values, which bundled code passes it.
 // Replace with the npm `buffer` package (v6) which converts Uint8Array properly.
 const BUFFER_PATCH_ID = '\0polyfill-buffer-patch';
 const fixBufferPolyfill: Plugin = {
@@ -229,8 +189,30 @@ const globalThisPolyfill: Plugin = {
 // file name: `lodash/isEqual` fails to load where `lodash/isEqual.js` works.
 // Bundlers accept both, so every emitted lodash import names the file.
 const LODASH_MODULE = /^lodash\/[^./]+$/;
+// Bitcoin is canary (ADR 66), and neither the Cardano entry nor anything it
+// imports may hold Bitcoin code (test/check-cardano-bundle.mjs). The codecs
+// both chains use therefore form a chunk of their own: otherwise the bundler
+// can merge one, such as bech32, into a chunk that also holds the Bitcoin
+// library, and the Cardano entry would import Bitcoin code to reach it. A
+// group also takes its modules' dependencies, and these depend on no Bitcoin
+// code.
+// The workspace's own copies only, with what they install under their own
+// node_modules (bs58's base-x): a package can install another copy under its
+// own node_modules (passport-account does, for @noble/hashes; the Bitcoin
+// libraries do, for bs58), which belongs to that package's code, not to the
+// shared chunk.
+const CODEC = String.raw`(?:bech32|base-x|bs58|@noble[/\\]hashes)`;
+const SHARED_CODEC_PATH = new RegExp(
+  String.raw`^(?:${CODEC}[/\\]node_modules[/\\])?${CODEC}[/\\]`,
+);
+const SHARED_CODEC_MODULE = (id: string) =>
+  id.startsWith(nm() + path.sep) &&
+  SHARED_CODEC_PATH.test(id.slice(nm().length + 1));
 const outputOptions = {
   paths: (id: string) => (LODASH_MODULE.test(id) ? `${id}.js` : id),
+  codeSplitting: {
+    groups: [{ name: 'codecs', test: SHARED_CODEC_MODULE }],
+  },
 };
 
 // The node polyfills plugin gives each module that reads __dirname or
@@ -256,6 +238,8 @@ if (CHANNEL !== 'stable' && CHANNEL !== 'canary') {
 // The stable build resolves a workspace file's `.stable` variant first
 // (scripts/reach.mjs, moduleSuffixes), as its declaration build does.
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.json'];
+const SIDE_EFFECT_FREE_EXTERNAL =
+  /^(?:@laceio\/cardano|@midnightntwrk\/wallet-sdk-hd)(?:\/|$)/;
 const inputOptions = {
   resolve: {
     alias: resolveAlias,
@@ -270,6 +254,16 @@ const inputOptions = {
         : RESOLVE_EXTENSIONS,
   },
   transform: { inject: { __dirname: NODE_PATH_ID, __filename: NODE_PATH_ID } },
+  // An external import nothing uses is dropped only when the package is
+  // known to have no side effects on import. These have none, so a chunk
+  // that uses only the Cardano names of @lace-lib/vendor's Cardano seam
+  // imports neither the Midnight HD wallet, which must stay behind a dynamic
+  // import(), nor a Cardano subpath it does not use.
+  treeshake: {
+    moduleSideEffects: [
+      { test: SIDE_EFFECT_FREE_EXTERNAL, external: true, sideEffects: false },
+    ],
+  },
 };
 // fixCjsInterop, fixBufferPolyfill, fixUtilTextCodecs, webCryptoRandomBytes
 // and globalThisPolyfill must come before nodePolyfills to take priority
@@ -352,11 +346,11 @@ const declaredPackages = {
 };
 
 const plugins = [
+  useLaceioCardano,
   assertStableExcludesCanary,
   recordBundledContracts,
   deterministicNodePaths,
   fixCjsInterop,
-  stubCardanoMessageSigning,
   fixBufferPolyfill,
   fixUtilTextCodecs,
   webCryptoRandomBytes,
@@ -451,7 +445,7 @@ const nodeBuiltinsForCjs: Plugin = {
 // bypass the stubs and polyfills above, so every other package stays in the
 // bundle.
 const EXTERNAL_DEPENDENCIES =
-  /^(?:@reduxjs\/toolkit|lodash|redux-observable|redux-persist|rxjs|ts-custom-error|ts-log)(?:\/|$)/;
+  /^(?:@laceio\/cardano|@reduxjs\/toolkit|lodash|redux-observable|redux-persist|rxjs|ts-custom-error|ts-log)(?:\/|$)/;
 const deps = (format: 'esm' | 'cjs') => ({
   neverBundle: [
     ...FORBIDDEN_EXTERNAL,

@@ -7,10 +7,10 @@ import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';
 
 import { CardanoNetworkId } from '../../src';
+import { cardanoCustodySelectors as custodySelectors } from '../../src/custody/store';
 import {
   cardanoContextActions as actions,
   cardanoContextReducers as reducers,
-  cardanoContextSelectors as selectors,
 } from '../../src/store/slice';
 import {
   cardanoCustodyAccount,
@@ -35,7 +35,7 @@ import type {
   CustodyGrant,
 } from '@lace-lib/cardano-custody';
 
-const { selectCardanoCustodyGrantStatuses } = selectors.cardanoContext;
+const { selectCardanoCustodyGrantStatuses } = custodySelectors.cardanoCustody;
 type RootState = Parameters<typeof selectCardanoCustodyGrantStatuses>[0];
 
 const accountId = cardanoCustodyAccount.accountId;

@@ -10,6 +10,7 @@ import {
   findMarkers,
   identifierPattern,
   readDeclaredExports,
+  readUnexportedTypeReferences,
 } from '../scripts/export-surface';
 
 import type { DeclaredExports } from '../scripts/export-surface';
@@ -90,6 +91,121 @@ export type Local = number;
       types: ['Local'],
       unresolvedStars: ['not-installed-anywhere'],
     });
+  });
+});
+
+describe('readUnexportedTypeReferences', () => {
+  it('reports a type an export names that the entry does not export', () => {
+    const file = fixture({
+      'index.d.ts': `
+type Options = { url: string };
+type Shape = { size: number };
+declare const make: (options: Options) => Shape;
+export { make };
+export type { Shape };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['make'])).toEqual([
+      { owner: 'make', type: 'Options' },
+    ]);
+  });
+
+  it('reads the declarations of namespace members through their renames', () => {
+    const file = fixture({
+      'index.d.ts': `
+type Props = { name: string };
+type Hidden = { secret: string };
+declare const create: (props: Props) => Hidden;
+declare const m_create: typeof create;
+type m_Props = Props;
+declare namespace m {
+  export { m_create as create, m_Props as Props };
+}
+export { m };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['m.create'])).toEqual([
+      { owner: 'm.create', type: 'Hidden' },
+    ]);
+  });
+
+  it('reports the qualifier an app writes, not the member it names', () => {
+    const file = fixture({
+      'index.d.ts': `
+declare enum E { A = 0 }
+declare const h: { a: number };
+declare namespace HN { interface I { id: string } }
+export interface O { colour: E.A; size: typeof h.a; hidden: HN.I }
+export { E, h };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['O'])).toEqual([
+      { owner: 'O', type: 'HN' },
+    ]);
+  });
+
+  it('reports a type whose value of the same name is the only one exported', () => {
+    const file = fixture({
+      'index.d.ts': `
+declare const x: 1;
+type x = { q: 1 };
+declare const m_x: typeof x;
+declare namespace m { export { m_x as x } }
+export interface O { v: x }
+export { m };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['O'])).toEqual([
+      { owner: 'O', type: 'x' },
+    ]);
+  });
+
+  it('accepts a value and a type renamed into a namespace, and a value exported as a type', () => {
+    const file = fixture({
+      'index.d.ts': `
+declare const Schema: { parse: (input: unknown) => Schema };
+type Schema = { q: 1 };
+declare const m_Schema: typeof Schema;
+type m_Schema = Schema;
+declare namespace m { export { m_Schema as Schema } }
+declare const parsers: { json: (input: string) => unknown };
+declare const read: (input: Schema) => typeof Schema & typeof parsers;
+export { m, read };
+export type { parsers };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['read', 'm.Schema'])).toEqual(
+      [],
+    );
+  });
+
+  it('ignores type parameters, external types and types outside the owners', () => {
+    const file = fixture({
+      'index.d.ts': `
+import type { Observable } from 'rxjs';
+type Internal = { id: string };
+declare const other: (value: Internal) => void;
+declare const watch: <T>(source: Observable<T>) => T;
+export { other, watch };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['watch'])).toEqual([]);
+  });
+
+  it('refuses an owner the entry does not export', () => {
+    const file = fixture({
+      'index.d.ts': 'export declare const make: () => void;',
+    });
+
+    expect(() => readUnexportedTypeReferences(file, ['missing'])).toThrow(
+      /does not export 'missing'/,
+    );
   });
 });
 

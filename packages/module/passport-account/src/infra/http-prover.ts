@@ -127,6 +127,7 @@ const defaultFetchBytes: FetchBytes = async url => {
   return new Uint8Array(await response.arrayBuffer());
 };
 
+/** Where `createHttpProver` gets key material, and the transports it uses. */
 export type HttpProverOptions = {
   /**
    * Resolves key locations to key material. Defaults to

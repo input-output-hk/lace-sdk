@@ -7,6 +7,7 @@ import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';
 
 import { CardanoNetworkId } from '../../src';
+import { cardanoCustodySelectors as custodySelectors } from '../../src/custody/store';
 import {
   cardanoContextActions as actions,
   cardanoContextReducers as reducers,
@@ -37,7 +38,7 @@ import type { Activity } from '@lace-contract/activities';
 import type { WalletEntity } from '@lace-contract/wallet-repo';
 
 type RootState = Parameters<
-  typeof selectors.cardanoContext.selectCardanoCustodyAccountState
+  typeof custodySelectors.cardanoCustody.selectCardanoCustodyAccountState
 >[0];
 
 const custodyAccountId = cardanoCustodyAccount.accountId;
@@ -168,7 +169,8 @@ const buildState = ({
 
 describe('custody selectors', () => {
   describe('selectCardanoCustodyAccountState', () => {
-    const { selectCardanoCustodyAccountState } = selectors.cardanoContext;
+    const { selectCardanoCustodyAccountState } =
+      custodySelectors.cardanoCustody;
 
     it('classifies a custody account from its UTxOs, withdrawable rewards and network parameters', () => {
       const control = controlUtxo(1);
@@ -332,7 +334,7 @@ describe('custody selectors', () => {
 
   describe('selectSettledCardanoCustodyAccountState', () => {
     const { selectSettledCardanoCustodyAccountState } =
-      selectors.cardanoContext;
+      custodySelectors.cardanoCustody;
 
     it('keeps confirmed control and funds while a pending operation replaces them', () => {
       const control = controlUtxo(1);
@@ -362,7 +364,7 @@ describe('custody selectors', () => {
         withdrawableRewards: 0n,
       });
       expect(
-        selectors.cardanoContext.selectCardanoCustodyAccountState(
+        custodySelectors.cardanoCustody.selectCardanoCustodyAccountState(
           state,
           custodyAccountId,
         ),

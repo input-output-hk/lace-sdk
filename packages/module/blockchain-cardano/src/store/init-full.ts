@@ -1,6 +1,5 @@
 import { composerFlowSideEffects } from './composer-flow-side-effects';
 import { composerFlowTxSideEffects } from './composer-flow-tx-side-effects';
-import { custodyTransactionSideEffects } from './custody/build-side-effect';
 import { initializeDependencies } from './dependencies';
 import { nightDesignationFlowSideEffects } from './night-designation-flow-side-effects';
 import { nightDesignationFlowTxSideEffects } from './night-designation-flow-tx-side-effects';
@@ -20,7 +19,6 @@ const redux: LaceInit<LaceModuleStoreInit> = async (props, dependencies) => ({
     ...composerFlowSideEffects,
     ...composerFlowTxSideEffects,
     ...nightDesignationFlowSideEffects,
-    ...custodyTransactionSideEffects,
     ...nightDesignationFlowTxSideEffects,
   ],
   sideEffectDependencies: await initializeDependencies(props, dependencies),

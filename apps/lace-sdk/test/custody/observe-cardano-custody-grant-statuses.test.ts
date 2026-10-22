@@ -20,7 +20,7 @@ type StatusesOf = (
 const walletWith = (statuses$: Subject<StatusesOf>) =>
   ({
     stateObservables: {
-      cardanoContext: { selectCardanoCustodyGrantStatuses$: statuses$ },
+      cardanoCustody: { selectCardanoCustodyGrantStatuses$: statuses$ },
     },
   } as unknown as Pick<WalletWithCardanoCustody, 'stateObservables'>);
 

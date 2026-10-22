@@ -20,5 +20,5 @@ PR CI and the shell, guest and Carbon build workflows run it before packaging. T
 local env file without printing credentials, run from the worktree root:
 
 ```sh
-node --env-file=apps/lace-extension/webpack/.env node_modules/nx/bin/nx.js run @lace-lib/image-url:smoke-test
+node --env-file=apps/lace-extension/webpack/.env node_modules/.bin/nx run @lace-lib/image-url:smoke-test
 ```

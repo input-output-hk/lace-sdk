@@ -12,6 +12,7 @@ import {
   CardanoCustodyOperationInProgressError,
   CardanoCustodyStaleControlError,
 } from './cardano-custody-errors';
+import { custodyActionObservables } from './cardano-custody-wallet';
 
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
 import type {
@@ -58,7 +59,7 @@ export const requestCardanoCustodyBuild = async (
 ): Promise<CardanoCustodyBuildOutcome> => {
   const requestId = crypto.randomUUID();
   const { buildCustodyTransactionCompleted$, buildCustodyTransactionFailed$ } =
-    wallet.actionObservables.cardanoContext;
+    custodyActionObservables(wallet);
   // Subscribed before dispatching: a module may answer synchronously.
   const outcome = firstValueFrom(
     merge(
@@ -82,7 +83,7 @@ export const requestCardanoCustodyBuild = async (
       ),
     ).pipe(timeout(CUSTODY_BUILD_TIMEOUT_MS)),
   );
-  wallet.dispatch('cardanoContext.buildCustodyTransaction', {
+  wallet.dispatch('cardanoCustody.buildCustodyTransaction', {
     ...request,
     requestId,
   } as CardanoCustodyBuildRequest);

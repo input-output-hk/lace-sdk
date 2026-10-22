@@ -133,10 +133,14 @@ const initialState: PassportSliceState = {
   droppedDevices: [],
 };
 
-type CreateAccountPayload = { lockAccount: boolean };
-type DevicePayload = { commitmentHex: string };
-type AddDevicePayload = DevicePayload & { reader?: DeviceReader };
-type RevokeGrantPayload = { grantId: GrantId };
+/** What `passportActions.createAccount` carries: whether to lock the account. */
+export type CreateAccountPayload = { lockAccount: boolean };
+/** The device a device action acts on, by its commitment. */
+export type DevicePayload = { commitmentHex: string };
+/** What `passportActions.addDevice` carries: the device and its optional reader. */
+export type AddDevicePayload = DevicePayload & { reader?: DeviceReader };
+/** What `passportActions.revokeGrant` carries: the grant to revoke. */
+export type RevokeGrantPayload = { grantId: GrantId };
 
 const slice = createSlice({
   name: 'passport',

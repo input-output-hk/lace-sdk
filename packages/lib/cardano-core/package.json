@@ -13,7 +13,7 @@
     "@lace-lib/util": "*",
     "@scure/base": "1.2.6",
     "fraction.js": "4.0.1",
-    "ip-address": "10.2.0",
+    "ip-address": "10.7.4",
     "lodash": "^4.17.21",
     "ts-custom-error": "^3.3.1",
     "ts-log": "^2.2.7",

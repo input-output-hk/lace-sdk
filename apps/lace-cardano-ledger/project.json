@@ -1,7 +1,7 @@
 {
   "name": "lace-cardano-ledger",
   "projectType": "library",
-  "tags": ["scope:app"],
+  "tags": ["scope:app", "release:lace-sdk"],
   "targets": {
     "build": {
       "executor": "nx:run-commands",

@@ -20,6 +20,11 @@ import {
 import { internalTermFindings } from '../scripts/release-notes-check';
 import {
   cleanTitle,
+  type Fragment,
+  fragmentProblems,
+  fragmentsSince,
+  parseFragment,
+  pullRequestFragments,
   renderNotes,
   renderPublicNotes,
   workspaceManifestChanges,
@@ -492,6 +497,49 @@ describe('the public release notes', () => {
     ).toContain('The first release, with 2 stable exports.');
   });
 
+  it("describe a canary by its canary build's changes", () => {
+    // The stable diff misses a change to a canary-only entry, such as
+    // `./experimental`: a canary's notes say what its own build changed.
+    const canary = {
+      ...api,
+      tag: 'lace-sdk@0.1.1-canary.1',
+      version: '0.1.1-canary.1',
+      channel: 'canary',
+      previous: 'lace-sdk@0.1.0',
+      bump: 'patch',
+      base: '0.1.1',
+      added: [],
+      removed: [],
+      changed: [],
+      compatible: [],
+      canary: {
+        previous: 'lace-sdk@0.1.1-canary.0',
+        added: ['experimental:GranteeScheme'],
+        removed: [],
+        changed: ['experimental:PassportAgentPolicy'],
+      },
+    };
+    for (const notes of [
+      renderPublicNotes(canary),
+      renderNotes({ ref: 'lace-sdk@0.1.1-canary.0', changes: [], api: canary }),
+    ]) {
+      expect(notes).toContain(
+        "The canary build, compared with `lace-sdk@0.1.1-canary.0`'s:",
+      );
+      expect(notes).toContain('- Added: `experimental:GranteeScheme`');
+      expect(notes).toContain('- Changed: `experimental:PassportAgentPolicy`');
+      expect(notes).toContain(
+        'It previews `0.1.1`: the stable API takes a patch change since `lace-sdk@0.1.0`.',
+      );
+      expect(notes).not.toContain('Compared with `lace-sdk@0.1.0`');
+    }
+    // Without its canary build's diff, a canary reads as before.
+    const { canary: _, ...withoutDiff } = canary;
+    expect(renderPublicNotes(withoutDiff)).toContain(
+      'Compared with `lace-sdk@0.1.0`: a patch change.',
+    );
+  });
+
   it('never name a pull request, a commit or a SHA', () => {
     // Whatever the private notes would list, the public renderer is given
     // the API diff alone and has nowhere to put a change.
@@ -502,6 +550,267 @@ describe('the public release notes', () => {
     expect(notes).not.toContain('## Changes');
     expect(notes).not.toContain('Dependency updates');
     expect(internalTermFindings(notes)).toEqual([]);
+  });
+});
+
+describe('changelog fragments', () => {
+  const fragment = (
+    kind: Fragment['kind'],
+    body: string,
+    { time, build = 'stable' }: { time: string; build?: Fragment['build'] },
+  ) =>
+    parseFragment(
+      `apps/lace-sdk/.changes/fragments/${kind}-${time}.yaml`,
+      `kind: ${kind}\nbody: ${body}\ntime: ${time}\ncustom:\n    Build: ${build}\n`,
+    );
+
+  it('read the kind and body changie writes', () => {
+    expect(
+      parseFragment(
+        'apps/lace-sdk/.changes/fragments/Added-1.yaml',
+        'kind: Added\nbody: |-\n    Grantees can be secp256k1 keys\n    for agent wallets\ntime: 2026-10-20T18:15:22.47633+01:00\ncustom:\n    Build: canary\n',
+      ),
+    ).toEqual({
+      file: 'apps/lace-sdk/.changes/fragments/Added-1.yaml',
+      kind: 'Added',
+      body: 'Grantees can be secp256k1 keys\nfor agent wallets',
+      build: 'canary',
+      time: '2026-10-20T18:15:22.47633+01:00',
+    });
+  });
+
+  it('refuse an unknown kind, an empty body or no build', () => {
+    expect(() =>
+      parseFragment('f.yaml', 'kind: Improved\nbody: faster\n'),
+    ).toThrow('kind must be one of Added, Changed');
+    expect(() => parseFragment('f.yaml', 'kind: Fixed\nbody: ""\n')).toThrow(
+      'has no body',
+    );
+    expect(() => parseFragment('f.yaml', 'kind: Fixed\nbody: a fix\n')).toThrow(
+      'custom.Build must be stable or canary',
+    );
+  });
+
+  it("leave a canary-only change out of a stable release's notes", () => {
+    const fragments = [
+      fragment('Added', 'Spending grants for agent keys', {
+        time: '1',
+        build: 'canary',
+      }),
+      fragment('Fixed', 'Signing keeps the change output', { time: '2' }),
+    ];
+    const api = {
+      previous: 'lace-sdk@0.1.0',
+      bump: 'patch',
+      added: [],
+      removed: [],
+      changed: [],
+      compatible: [],
+    };
+    const stable = renderPublicNotes({ ...api, channel: 'stable' }, fragments);
+    expect(stable).toContain('- Signing keeps the change output');
+    expect(stable).not.toContain('Spending grants');
+    expect(
+      renderPublicNotes({ ...api, channel: 'canary' }, fragments),
+    ).toContain('- Spending grants for agent keys');
+    expect(
+      renderNotes({
+        ref: 'lace-sdk@0.1.0',
+        changes: [],
+        api: { ...api, channel: 'stable' },
+        fragments,
+      }),
+    ).not.toContain('Spending grants');
+  });
+
+  it("open both notes, by kind in Keep a Changelog's order", () => {
+    const fragments = [
+      fragment('Fixed', 'Signing no longer drops the change output', {
+        time: '2',
+      }),
+      fragment('Added', 'Passport grants to secp256k1 keys', { time: '3' }),
+      fragment('Added', 'A Bitcoin wallet in the canary build', { time: '1' }),
+    ];
+    const section = [
+      "## What's new",
+      '',
+      '### Added',
+      '',
+      '- A Bitcoin wallet in the canary build',
+      '- Passport grants to secp256k1 keys',
+      '',
+      '### Fixed',
+      '',
+      '- Signing no longer drops the change output',
+      '',
+    ].join('\n');
+    const api = {
+      tag: 'lace-sdk@0.1.1',
+      version: '0.1.1',
+      channel: 'stable',
+      previous: 'lace-sdk@0.1.0',
+      bump: 'patch',
+      added: [],
+      removed: [],
+      changed: [],
+      compatible: [],
+    };
+    const publicNotes = renderPublicNotes(api, fragments);
+    expect(publicNotes).toContain(`A stable release.\n\n${section}\n## API`);
+    expect(internalTermFindings(publicNotes)).toEqual([]);
+    expect(
+      renderNotes({ ref: 'lace-sdk@0.1.0', changes: [], fragments }),
+    ).toContain(`${section}\n## Changes`);
+    expect(
+      renderNotes({ ref: 'lace-sdk@0.1.0', changes: [], fragments }),
+    ).toMatch(/^## What's new\n/);
+    // Without fragments, the notes read as before.
+    expect(renderPublicNotes(api)).not.toContain("What's new");
+  });
+
+  it('indent a multi-line entry under its item', () => {
+    const notes = renderPublicNotes(
+      {
+        previous: null,
+        bump: 'first',
+        added: [],
+        removed: [],
+        changed: [],
+        compatible: [],
+      },
+      [
+        parseFragment(
+          'f.yaml',
+          'kind: Changed\nbody: |-\n    One line\n    and the next\ncustom:\n    Build: stable\n',
+        ),
+      ],
+    );
+    expect(notes).toContain('- One line\n  and the next\n');
+  });
+
+  it('are required of a change to what ships, and of nothing else', () => {
+    const fixed = [fragment('Fixed', 'A fix', { time: '1' })];
+    expect(
+      fragmentProblems({
+        shipped: ['apps/lace-sdk/src/index.ts'],
+        fragments: [],
+      }),
+    ).toEqual([expect.stringContaining('npx changie new')]);
+    expect(
+      fragmentProblems({
+        shipped: [],
+        fragments: [
+          fragment('Fixed', 'Signing works again (LW-1234)', { time: '1' }),
+        ],
+      }),
+    ).toEqual([expect.stringContaining('names an internal term')]);
+    expect(
+      fragmentProblems({
+        shipped: ['apps/lace-sdk/src/index.ts'],
+        fragments: fixed,
+      }),
+    ).toEqual([]);
+    expect(fragmentProblems({ shipped: [], fragments: [] })).toEqual([]);
+  });
+
+  it('count no edit to a fragment a release holds', () => {
+    const fixed = [fragment('Fixed', 'A fix', { time: '1' })];
+    expect(
+      fragmentProblems({
+        shipped: ['apps/lace-sdk/src/index.ts'],
+        fragments: fixed,
+        released: fixed.map(({ file }) => file),
+      }),
+    ).toEqual([expect.stringContaining('a release already holds')]);
+  });
+
+  describe('in a repository with a release', () => {
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+    const directory = 'apps/lace-sdk/.changes/fragments';
+    const write = (repository: string, name: string, body: string) => {
+      fs.mkdirSync(path.join(repository, directory), { recursive: true });
+      fs.writeFileSync(
+        path.join(repository, directory, name),
+        `kind: Fixed\nbody: ${body}\ntime: ${name}\ncustom:\n    Build: stable\n`,
+      );
+    };
+    const commit = (repository: string, message: string) => {
+      git(repository, 'add', '-A');
+      git(repository, 'commit', '-q', '-m', message);
+      return git(repository, 'rev-parse', 'HEAD');
+    };
+
+    /**
+     * main with `Fixed-1.yaml` in the canary `lace-sdk@0.1.0-canary.1` and
+     * `Fixed-2.yaml` added after it; `run` gets the repository and main's
+     * tip, the base a pull request is compared with.
+     */
+    const withRepository = (
+      run: (repository: string, base: string) => void,
+    ) => {
+      const repository = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'sdk-fragments-'),
+      );
+      try {
+        git(repository, 'init', '-q', '-b', 'main');
+        git(repository, 'config', 'user.email', 'test@example.invalid');
+        git(repository, 'config', 'user.name', 'test');
+        git(repository, 'config', 'commit.gpgsign', 'false');
+        git(repository, 'config', 'tag.gpgsign', 'false');
+        write(repository, 'Fixed-1.yaml', 'Signing keeps the change');
+        commit(repository, 'a fix');
+        git(repository, 'tag', 'lace-sdk@0.1.0-canary.1');
+        write(repository, 'Fixed-2.yaml', 'Fees round up');
+        run(repository, commit(repository, 'another fix'));
+      } finally {
+        fs.rmSync(repository, { recursive: true, force: true });
+      }
+    };
+    const shipped = ['apps/lace-sdk/src/index.ts'];
+    const bodiesSinceCanary = (repository: string) =>
+      fragmentsSince('lace-sdk@0.1.0-canary.1', repository).map(
+        ({ body }) => body,
+      );
+
+    it("refuse an edit to a released fragment, which the next release's notes would leave out", () => {
+      withRepository((repository, base) => {
+        write(repository, 'Fixed-1.yaml', 'Signing keeps the change output');
+        commit(repository, 'refine the fix');
+        const touched = pullRequestFragments(base, repository);
+        expect(touched.released).toEqual([`${directory}/Fixed-1.yaml`]);
+        expect(fragmentProblems({ shipped, ...touched })).toEqual([
+          expect.stringContaining('a release already holds'),
+        ]);
+        expect(bodiesSinceCanary(repository)).toEqual(['Fees round up']);
+
+        write(repository, 'Fixed-3.yaml', 'Signing keeps the change output');
+        commit(repository, 'describe the refinement');
+        expect(
+          fragmentProblems({
+            shipped,
+            ...pullRequestFragments(base, repository),
+          }),
+        ).toEqual([]);
+        expect(bodiesSinceCanary(repository)).toEqual([
+          'Fees round up',
+          'Signing keeps the change output',
+        ]);
+      });
+    });
+
+    it('count an edit to a fragment no release holds', () => {
+      withRepository((repository, base) => {
+        write(repository, 'Fixed-2.yaml', 'Fees round up, never down');
+        commit(repository, 'refine the unreleased fix');
+        const touched = pullRequestFragments(base, repository);
+        expect(touched.released).toEqual([]);
+        expect(fragmentProblems({ shipped, ...touched })).toEqual([]);
+        expect(bodiesSinceCanary(repository)).toEqual([
+          'Fees round up, never down',
+        ]);
+      });
+    });
   });
 });
 

@@ -19,6 +19,7 @@ import type {
   AnyWallet,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { Mock } from 'vitest';
 
 const accountId = 'wallet-1-0-1' as AccountId;
 const extendedAccountPublicKey = 'ab'.repeat(64);
@@ -62,9 +63,7 @@ const buildContext = (
   ...overrides,
 });
 
-const loadFactory = async (
-  request: ReturnType<typeof vi.fn>,
-): Promise<CardanoSignerFactory> =>
+const loadFactory = async (request: Mock): Promise<CardanoSignerFactory> =>
   (
     await createRemoteCardanoVaultModule({
       client: { request },

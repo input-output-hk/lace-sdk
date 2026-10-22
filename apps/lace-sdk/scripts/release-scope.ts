@@ -9,7 +9,8 @@
 //
 //   node scripts/release-scope.ts changed [<ref>]                 JSON: { ref, ships, files }
 //   node scripts/release-scope.ts notes [<ref>] [--api <json>] [--first-canary] [--out <file>]
-//   node scripts/release-scope.ts public-notes --api <json> [--out <file>]
+//   node scripts/release-scope.ts public-notes [<ref>] --api <json> [--out <file>]
+//   node scripts/release-scope.ts fragment-check <base>             exits 1 without a fragment
 //
 // `changed` says whether anything the SDK ships differs between <ref> (the
 // previous release's tag) and HEAD. `notes` lists the pull requests merged
@@ -20,12 +21,18 @@
 // with no pull request, commit or SHA. Without <ref>, before the
 // first release of the channel, everything ships and the notes name the
 // first release; the first canary's notes take the latest stable release as
-// <ref> with --first-canary, and list the changes since it.
+// <ref> with --first-canary, and list the changes since it. Both notes open
+// with the changelog fragments added since <ref> (FRAGMENT_DIRECTORY), the
+// users' account of the release. `fragment-check` fails a pull request into
+// <base> that changes what the family ships and adds no fragment, nor edits
+// one no release holds yet, or whose fragments name an internal term.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+
+import { parse as parseYaml } from 'yaml';
 
 import {
   binaryOwners,
@@ -48,6 +55,8 @@ import {
   packageDirectory,
   reachedWorkspaceFiles,
 } from './reach.mjs';
+import { internalTermFindings } from './release-notes-check.ts';
+import { TAG_PREFIX } from './releases.mjs';
 
 const repositoryRoot = path.resolve(packageDirectory, '../..');
 
@@ -121,6 +130,15 @@ export interface NotesApi {
   removed: readonly string[];
   changed: readonly string[];
   compatible: readonly string[];
+  /** The stable version a canary previews. */
+  base?: string;
+  /** A canary's own changes: its canary build against `canary.previous`'s. */
+  canary?: {
+    previous: string;
+    added: readonly string[];
+    removed: readonly string[];
+    changed: readonly string[];
+  };
 }
 
 /** Whether `file` (repository-relative) is part of what the SDK ships. */
@@ -360,10 +378,11 @@ export const workspaceManifestChanges = ({
     });
 };
 
-const git = (args: string[]): string =>
+const git = (args: string[], cwd = repositoryRoot, input?: string): string =>
   execFileSync('git', args, {
-    cwd: repositoryRoot,
+    cwd,
     encoding: 'utf8',
+    input,
     maxBuffer: 256 * 1024 * 1024,
   });
 
@@ -472,8 +491,263 @@ const titleFromGitHub = (pull: number): string | undefined => {
   }
 };
 
+/**
+ * The family's changelog fragments, which changie writes (`.changie.yaml`
+ * beside them): one file per user-facing change, with its kind. A release
+ * commits nothing back, so it deletes no fragment: a release's notes take the
+ * fragments added since the release its changes count from, and the monthly
+ * sweep (sdk-changelog-sweep.yml) deletes those both channels have released.
+ */
+export const FRAGMENT_DIRECTORY = 'apps/lace-sdk/.changes/fragments';
+
+/** The fragment kinds, Keep a Changelog's, in the order the notes list them. */
+export const FRAGMENT_KINDS = [
+  'Added',
+  'Changed',
+  'Deprecated',
+  'Removed',
+  'Fixed',
+  'Security',
+] as const;
+
+export interface Fragment {
+  /** The fragment's path, repository-relative. */
+  file: string;
+  kind: (typeof FRAGMENT_KINDS)[number];
+  body: string;
+  /**
+   * The build the change is in: `canary` for a feature only the canary build
+   * has, which a stable release's notes leave out.
+   */
+  build: 'canary' | 'stable';
+  /** When changie wrote it, which orders fragments of one kind. */
+  time: string;
+}
+
+/** A fragment's YAML, read strictly: a known kind, a body and its build. */
+export const parseFragment = (file: string, text: string): Fragment => {
+  const value: unknown = parseYaml(text);
+  const record = (value ?? {}) as Record<string, unknown>;
+  const kind = FRAGMENT_KINDS.find(known => known === record.kind);
+  const body = typeof record.body === 'string' ? record.body.trim() : '';
+  if (!kind) {
+    throw new Error(
+      `${file}: kind must be one of ${FRAGMENT_KINDS.join(', ')}, not ${String(
+        record.kind,
+      )}`,
+    );
+  }
+  if (!body) throw new Error(`${file}: the fragment has no body`);
+  const custom = (record.custom ?? {}) as Record<string, unknown>;
+  const build = custom.Build;
+  if (build !== 'stable' && build !== 'canary') {
+    throw new Error(
+      `${file}: custom.Build must be stable or canary, not ${String(build)}`,
+    );
+  }
+  const time =
+    record.time instanceof Date
+      ? record.time.toISOString()
+      : typeof record.time === 'string' || typeof record.time === 'number'
+      ? String(record.time)
+      : '';
+  return { file, kind, body, build, time };
+};
+
+/** The fragment files that differ between `ref` and HEAD as `filter` selects. */
+const fragmentFilesSince = (ref: string, filter: 'A' | 'M', root: string) =>
+  git(
+    [
+      'diff',
+      '--name-only',
+      '--no-renames',
+      `--diff-filter=${filter}`,
+      ref,
+      'HEAD',
+      '--',
+      FRAGMENT_DIRECTORY,
+    ],
+    root,
+  )
+    .split('\n')
+    .filter(file => file.endsWith('.yaml'));
+
+const fragmentAtHead = (file: string, root: string) =>
+  parseFragment(file, git(['show', `HEAD:${file}`], root));
+
+/**
+ * The fragments added since `ref` that HEAD holds, or every fragment before
+ * the first release.
+ */
+export const fragmentsSince = (
+  ref: string | undefined,
+  root = repositoryRoot,
+): Fragment[] =>
+  (ref
+    ? fragmentFilesSince(ref, 'A', root)
+    : git(['ls-files', '--', FRAGMENT_DIRECTORY], root)
+        .split('\n')
+        .filter(file => file.endsWith('.yaml'))
+  ).map(file => fragmentAtHead(file, root));
+
+/**
+ * Those of `files` that a `lace-sdk@` tag's tree holds. A tag counts whether
+ * or not its release was published: the check needs only git, and treating a
+ * draft as released asks for a new fragment where an edit would have done.
+ */
+const releasedFragmentFiles = (
+  files: readonly string[],
+  root: string,
+): Set<string> => {
+  const tags = git(
+    ['for-each-ref', '--format=%(refname)', `refs/tags/${TAG_PREFIX}*`],
+    root,
+  )
+    .split('\n')
+    .filter(Boolean);
+  if (files.length === 0 || tags.length === 0) return new Set();
+  const answers = git(
+    ['cat-file', '--batch-check'],
+    root,
+    tags.flatMap(tag => files.map(file => `${tag}:${file}\n`)).join(''),
+  ).split('\n');
+  return new Set(
+    files.filter((_, index) =>
+      tags.some(
+        (_, tag) => !answers[tag * files.length + index]?.endsWith(' missing'),
+      ),
+    ),
+  );
+};
+
+/**
+ * The fragments a pull request into `base` adds or edits, and which of the
+ * edited ones a release already holds. A release lists only the fragments
+ * added since the release before it of its channel, so an edit to a fragment
+ * a release holds reaches no later release's notes: the change it describes
+ * needs a fragment of its own.
+ */
+export const pullRequestFragments = (
+  base: string,
+  root = repositoryRoot,
+): { fragments: Fragment[]; released: string[] } => {
+  const edited = fragmentFilesSince(base, 'M', root);
+  const held = releasedFragmentFiles(edited, root);
+  return {
+    fragments: [...fragmentFilesSince(base, 'A', root), ...edited].map(file =>
+      fragmentAtHead(file, root),
+    ),
+    released: edited.filter(file => held.has(file)),
+  };
+};
+
+/** A fragment's entry: its body as a list item, continued lines indented. */
+const fragmentItem = (fragment: Fragment) =>
+  `- ${fragment.body.split('\n').join('\n  ')}`;
+
+/**
+ * The fragments a release of `channel` lists: a stable release leaves out
+ * changes only the canary build has.
+ */
+const releasedFragments = (
+  fragments: readonly Fragment[],
+  channel: string | undefined,
+) =>
+  channel === 'stable'
+    ? fragments.filter(fragment => fragment.build === 'stable')
+    : fragments;
+
+/** The fragments by kind, in Keep a Changelog's order, oldest first. */
+const fragmentLines = (fragments: readonly Fragment[]): string[] =>
+  FRAGMENT_KINDS.flatMap(kind => {
+    const ofKind = fragments
+      .filter(fragment => fragment.kind === kind)
+      .sort(
+        (a, b) => a.time.localeCompare(b.time) || a.file.localeCompare(b.file),
+      );
+    return ofKind.length > 0
+      ? [`### ${kind}`, '', ...ofKind.map(fragmentItem), '']
+      : [];
+  });
+
+/**
+ * A pull request's fragment problems: a change to what the family ships that
+ * adds no fragment, nor edits one no release holds yet, and any fragment it
+ * touches naming an internal term, which the public notes' leak-check would
+ * refuse at release.
+ */
+export const fragmentProblems = ({
+  shipped,
+  fragments,
+  released = [],
+}: {
+  shipped: readonly string[];
+  /** The fragments the pull request adds or edits. */
+  fragments: readonly Fragment[];
+  /** The edited fragments a release already holds, which count for nothing. */
+  released?: readonly string[];
+}): string[] => [
+  ...(shipped.length > 0 &&
+  fragments.every(fragment => released.includes(fragment.file))
+    ? [
+        `This change reaches what the SDK family ships (${shipped
+          .slice(0, 5)
+          .join(', ')}${shipped.length > 5 ? ', …' : ''}) and adds ${
+          released.length > 0
+            ? `no changelog fragment: a release already holds ${released.join(
+                ', ',
+              )}, so an edit to it reaches no later release's notes`
+            : 'or edits no changelog fragment'
+        }. From apps/lace-sdk, run \`npx changie new\` and describe the change for the SDK's users, edit an unreleased fragment already describing it, or label the pull request \`skip-changelog\` when they would not notice it.`,
+      ]
+    : []),
+  ...fragments.flatMap(fragment =>
+    internalTermFindings(fragment.body).map(
+      finding =>
+        `${fragment.file} names an internal term (${finding}); the public release notes publish the fragment as written.`,
+    ),
+  ),
+];
+
 const exportList = (keys: readonly string[]) =>
   keys.length > 0 ? keys.map(key => `\`${key}\``).join(', ') : 'none';
+
+/**
+ * The API section's body. A canary describes what it changed, its canary
+ * build against the one its changes count from, and names the stable version
+ * it previews; the stable diff alone would miss its canary-only surface.
+ */
+const apiLines = (api: NotesApi): string[] => {
+  if (api.channel === 'canary' && api.canary) {
+    const { canary } = api;
+    return [
+      `The canary build, compared with \`${canary.previous}\`'s:`,
+      '',
+      `- Added: ${exportList(canary.added)}`,
+      `- Removed: ${exportList(canary.removed)}`,
+      `- Changed: ${exportList(canary.changed)}`,
+      ...(api.previous && api.base
+        ? [
+            '',
+            `It previews \`${api.base}\`: the stable API takes a ${api.bump} change since \`${api.previous}\`.`,
+          ]
+        : []),
+    ];
+  }
+  if (!api.previous) {
+    return [`The first release, with ${api.added.length} stable exports.`];
+  }
+  return [
+    `Compared with \`${api.previous}\`: a ${api.bump} change.`,
+    '',
+    `- Added: ${exportList(api.added)}`,
+    `- Removed: ${exportList(api.removed)}`,
+    `- Changed: ${exportList(api.changed)}`,
+    ...(api.compatible.length > 0
+      ? [`- Declared compatible: ${exportList(api.compatible)}`]
+      : []),
+  ];
+};
 
 /**
  * The release notes: the pull requests (or direct commits) whose change
@@ -483,15 +757,22 @@ export const renderNotes = ({
   ref,
   changes,
   api,
+  fragments = [],
   firstCanary = false,
 }: {
   ref: string | undefined;
   changes: readonly ShippedChange[];
   api?: NotesApi;
+  /** The changelog fragments added since `ref`. */
+  fragments?: readonly Fragment[];
   /** The first canary, whose changes count from the latest stable `ref`. */
   firstCanary?: boolean;
 }): string => {
-  const lines = ['## Changes', ''];
+  const released = releasedFragments(fragments, api?.channel);
+  const lines =
+    released.length > 0
+      ? ["## What's new", '', ...fragmentLines(released), '## Changes', '']
+      : ['## Changes', ''];
   const item = (change: ShippedChange) =>
     change.number === undefined
       ? `- ${change.title} (${change.sha.slice(0, 12)})`
@@ -516,21 +797,7 @@ export const renderNotes = ({
     lines.push('', '## Dependency updates', '', ...dependencies.map(item));
   }
   if (api) {
-    lines.push('', '## API', '');
-    if (api.previous) {
-      lines.push(
-        `Compared with \`${api.previous}\`: a ${api.bump} change.`,
-        '',
-        `- Added: ${exportList(api.added)}`,
-        `- Removed: ${exportList(api.removed)}`,
-        `- Changed: ${exportList(api.changed)}`,
-      );
-      if (api.compatible.length > 0) {
-        lines.push(`- Declared compatible: ${exportList(api.compatible)}`);
-      }
-    } else {
-      lines.push(`The first release, with ${api.added.length} stable exports.`);
-    }
+    lines.push('', '## API', '', ...apiLines(api));
   }
   return lines.join('\n') + '\n';
 };
@@ -550,9 +817,13 @@ const RELEASED_PACKAGES = [
  * repository's history, so its notes describe the published API alone, and
  * the list of pull requests stays in the private release (renderNotes).
  */
-export const renderPublicNotes = (api: NotesApi): string => {
+export const renderPublicNotes = (
+  api: NotesApi,
+  fragments: readonly Fragment[] = [],
+): string => {
   const version = api.version ?? '';
   const isCanary = api.channel === 'canary';
+  const released = releasedFragments(fragments, api.channel);
   const docs = isCanary
     ? 'https://sdk.lace.io/canary/'
     : `https://sdk.lace.io/v/${version}/`;
@@ -563,6 +834,9 @@ export const renderPublicNotes = (api: NotesApi): string => {
       ? `A canary release, previewing the next stable version: install it as \`@canary\` or \`@${version}\`.`
       : 'A stable release.',
     '',
+    ...(released.length > 0
+      ? ["## What's new", '', ...fragmentLines(released)]
+      : []),
     '## API',
     '',
   ];
@@ -572,21 +846,8 @@ export const renderPublicNotes = (api: NotesApi): string => {
       '',
     );
   }
-  if (api.previous) {
-    lines.push(
-      `Compared with \`${api.previous}\`: a ${api.bump} change.`,
-      '',
-      `- Added: ${exportList(api.added)}`,
-      `- Removed: ${exportList(api.removed)}`,
-      `- Changed: ${exportList(api.changed)}`,
-    );
-    if (api.compatible.length > 0) {
-      lines.push(`- Declared compatible: ${exportList(api.compatible)}`);
-    }
-  } else {
-    lines.push(`The first release, with ${api.added.length} stable exports.`);
-  }
   lines.push(
+    ...apiLines(api),
     '',
     '## Packages',
     '',
@@ -658,18 +919,32 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       ? (JSON.parse(fs.readFileSync(values.api, 'utf8')) as NotesApi)
       : undefined;
   if (
-    !['changed', 'notes', 'public-notes'].includes(command ?? '') ||
-    (command === 'public-notes' && !values.api)
+    !['changed', 'notes', 'public-notes', 'fragment-check'].includes(
+      command ?? '',
+    ) ||
+    (command === 'public-notes' && !values.api) ||
+    (command === 'fragment-check' && !ref)
   ) {
     // eslint-disable-next-line no-console -- usage
     console.error(
-      'usage: node scripts/release-scope.ts changed [<ref>] | notes [<ref>] [--api <json>] [--first-canary] [--out <file>] | public-notes --api <json> [--out <file>]',
+      'usage: node scripts/release-scope.ts changed [<ref>] | notes [<ref>] [--api <json>] [--first-canary] [--out <file>] | public-notes [<ref>] --api <json> [--out <file>] | fragment-check <base>',
     );
     process.exit(2);
   }
+  if (command === 'fragment-check') {
+    const problems = fragmentProblems({
+      shipped: shippedChanges(ref ?? ''),
+      ...pullRequestFragments(ref ?? ''),
+    });
+    for (const problem of problems) {
+      // eslint-disable-next-line no-console -- the check's verdict
+      console.error(`::error::${problem}`);
+    }
+    process.exit(problems.length > 0 ? 1 : 0);
+  }
   const publicApi = command === 'public-notes' ? readApi() : undefined;
   const result = publicApi
-    ? renderPublicNotes(publicApi)
+    ? renderPublicNotes(publicApi, fragmentsSince(ref))
     : command === 'changed'
     ? (() => {
         const files = ref ? shippedChanges(ref) : [];
@@ -686,6 +961,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         ref,
         changes: ref ? shippedPullRequests(ref) : [],
         api: readApi(),
+        fragments: fragmentsSince(ref),
         firstCanary: values['first-canary'] === true,
       });
   if (values.out) fs.writeFileSync(values.out, result);

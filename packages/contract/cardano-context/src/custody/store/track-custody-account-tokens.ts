@@ -1,11 +1,12 @@
 import { coalesceValueQuantities } from '@cardano-sdk/core';
-import { distinctUntilChanged, map } from 'rxjs';
+import { distinct, distinctUntilChanged, map, mergeAll, mergeMap } from 'rxjs';
 
-import { toAccountTokens } from '../store/helpers/account-tokens';
-import { CardanoPaymentAddress } from '../types';
+import { toAccountTokens } from '../../store/helpers/account-tokens';
+import { CardanoPaymentAddress } from '../../types';
+import { isCardanoCustodyAccount } from '../account';
 
-import type { SideEffect } from '../contract';
-import type { CardanoCustodyAccount } from '../custody/account';
+import type { CardanoCustodyAccount } from '../account';
+import type { CardanoCustodySideEffect } from '../contract';
 
 /**
  * A custody account holds what its owner can spend through Lace while it is
@@ -17,8 +18,8 @@ import type { CardanoCustodyAccount } from '../custody/account';
  * none of them reaches the tokens store.
  */
 export const computeCustodyAccountTokens =
-  (account: CardanoCustodyAccount): SideEffect =>
-  (_, { cardanoContext: { selectCardanoCustodyAccountState$ } }, { actions }) =>
+  (account: CardanoCustodyAccount): CardanoCustodySideEffect =>
+  (_, { cardanoCustody: { selectCardanoCustodyAccountState$ } }, { actions }) =>
     selectCardanoCustodyAccountState$.pipe(
       map(selectAccountState => selectAccountState(account.accountId)),
       distinctUntilChanged(),
@@ -50,3 +51,26 @@ export const computeCustodyAccountTokens =
         }),
       ),
     );
+
+/**
+ * Tracks the tokens of every active custody account, which the Cardano
+ * context's own token tracking leaves to this store.
+ */
+export const trackCustodyAccountTokens: CardanoCustodySideEffect = (
+  actionObservables,
+  stateObservables,
+  dependencies,
+) =>
+  stateObservables.cardanoContext.selectActiveCardanoAccounts$.pipe(
+    mergeAll(),
+    distinct(account => account.accountId),
+    mergeMap(account =>
+      isCardanoCustodyAccount(account)
+        ? computeCustodyAccountTokens(account)(
+            actionObservables,
+            stateObservables,
+            dependencies,
+          )
+        : [],
+    ),
+  );

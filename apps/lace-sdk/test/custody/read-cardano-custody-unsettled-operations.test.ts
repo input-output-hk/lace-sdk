@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createLaceWallet } from '../../src/create-lace-wallet';
 import { openCardanoCustodyAccount } from '../../src/custody/cardano-custody-account-entity';
+import { blockchainCardanoCustody } from '../../src/custody/modules';
 import { readCardanoCustodyUnsettledOperations } from '../../src/custody/read-cardano-custody-unsettled-operations';
 import { submitCardanoCustodyTransaction } from '../../src/custody/submit-cardano-custody-transaction';
 import { waitForCardanoCustodyOperation } from '../../src/custody/wait-for-cardano-custody-operation';
@@ -140,6 +141,7 @@ const startWallet = async (
       m.featureDev,
       storage.module,
       m.blockchainCardano,
+      blockchainCardanoCustody,
       m.cardanoProviderBlockfrost,
       m.cryptoCardanoSdk,
       createPasskeyVaultModule({ keySource: {} as PasskeyKeySource }),

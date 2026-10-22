@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./sdk": "./src/sdk.ts",
+    "./custody-sdk": "./src/custody-sdk.ts",
     "./src/state": "./src/state.ts"
   },
   "main": "src/index.ts",

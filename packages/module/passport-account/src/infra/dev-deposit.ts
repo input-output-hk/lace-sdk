@@ -48,6 +48,7 @@ class UnshieldedNightDepositError extends Error {
   }
 }
 
+/** How `createDevDeposit` reaches the localnet and the wallet it funds from. */
 export type DevDepositConfig = {
   /** Hex seed of the funded development wallet the deposits come from. */
   seedHex: string;

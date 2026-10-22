@@ -1,5 +1,7 @@
 import { distinctUntilChanged, map } from 'rxjs';
 
+import { custodyStateObservables } from './cardano-custody-wallet';
+
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
 import type { CardanoCustodyGrantWithStatus } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
@@ -8,7 +10,7 @@ import type { Observable } from 'rxjs';
 /**
  * Every grant UTxO of a custody account with where its grant stands, in
  * slot order, from
- * `wallet.stateObservables.cardanoContext.selectCardanoCustodyGrantStatuses$`.
+ * `wallet.stateObservables.cardanoCustody.selectCardanoCustodyGrantStatuses$`.
  * Each entry carries the grant UTxO, the grant its datum holds and its
  * token, and `status`:
  *
@@ -36,7 +38,7 @@ export const observeCardanoCustodyGrantStatuses = (
   wallet: Pick<WalletWithCardanoCustody, 'stateObservables'>,
   accountId: AccountId,
 ): Observable<CardanoCustodyGrantWithStatus[] | undefined> =>
-  wallet.stateObservables.cardanoContext.selectCardanoCustodyGrantStatuses$.pipe(
+  custodyStateObservables(wallet).selectCardanoCustodyGrantStatuses$.pipe(
     map(statusesOf => statusesOf(accountId)),
     distinctUntilChanged(),
   );

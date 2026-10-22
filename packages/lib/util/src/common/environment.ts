@@ -12,8 +12,16 @@ export enum Environment {
   Development = 'development',
 }
 
-export const isProductionEnvironment = (): boolean =>
-  process.env.NODE_ENV === Environment.Production;
+// The expression stays `process.env.NODE_ENV`, which the apps' bundlers
+// replace when they build; a browser that runs this unbundled, through a
+// published package, may have no `process` global, and is not production.
+export const isProductionEnvironment = (): boolean => {
+  try {
+    return process.env.NODE_ENV === Environment.Production;
+  } catch {
+    return false;
+  }
+};
 
 export const getEnvironmentConfiguration = (): Environment =>
   isProductionEnvironment() ? Environment.Production : Environment.Development;

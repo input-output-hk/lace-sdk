@@ -49,6 +49,7 @@ export type SponsorWalletContext = {
   adoptUnbalanced(bytes: Uint8Array): unknown;
 };
 
+/** How `createDevSponsor` reaches the network and the wallet that pays the fees. */
 export type DevSponsorConfig = {
   /** Hex seed of the funded development wallet paying the dust fees. */
   seedHex: string;
