@@ -22,11 +22,18 @@
     "./midnight-facade-reservations": "./src/midnight-facade-reservations.ts",
     "./attested-proving-service": "./src/attested-proving-service.ts",
     "./temenos-attested-prover": "./src/temenos-attested-prover.ts",
-    "./temenos-trust-roots": "./src/temenos-trust-roots.ts"
+    "./temenos-trust-roots": "./src/temenos-trust-roots.ts",
+    "./wasm-proof-server": "./src/wasm-proof-server.ts",
+    "./wasm-proof-backend": "./src/wasm-proof-backend.ts",
+    "./midnight-submission-service": "./src/midnight-submission-service.ts",
+    "./wasm-proof-compute": "./src/wasm-proof-compute.ts"
   },
   "main": "src/index.ts",
   "scripts": {
     "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@lace-lib/midnight-prover": "*"
   },
   "devDependencies": {
     "@bitcoinerlab/secp256k1": "1.2.0",
@@ -42,6 +49,7 @@
     "@ledgerhq/hw-transport-webhid": "6.31.0",
     "@midnight-ntwrk/dapp-connector-api": "4.0.1",
     "@midnight-ntwrk/ledger-v8": "8.1.0",
+    "@midnight-ntwrk/zkir-v2": "2.1.0",
     "@midnightntwrk/wallet-sdk": "1.2.0",
     "@midnightntwrk/wallet-sdk-abstractions": "2.1.0",
     "@midnightntwrk/wallet-sdk-address-format": "3.1.2",

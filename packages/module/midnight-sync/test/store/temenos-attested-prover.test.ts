@@ -284,6 +284,7 @@ describe('resolved measurement configuration', () => {
           expect.objectContaining({
             indexerUrl: `https://indexer.example/graphql?apiKey=${apiKey}`,
           }),
+          { fetchImpl: expect.any(Function) as typeof fetch },
         );
         await session.close();
       }
@@ -315,4 +316,47 @@ describe('resolved measurement configuration', () => {
     );
     await session.close();
   });
+});
+
+it('aborts Temenos evidence requests instead of waiting for their network timeout', async () => {
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init: RequestInit) => {
+      const signal = init.signal!;
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error('Proof cancelled'),
+            );
+          },
+          { once: true },
+        );
+      });
+    }),
+  );
+  try {
+    const driver = createStoreTemenosAttestedProver({
+      networkId: MidnightSDKNetworkIds.PreProd,
+      proofServerApiUrl: TEMENOS_PROOF_SERVER_URL,
+      getLedgerIndexerUrl: async () => FIXTURE_CONFIG.indexerUrl,
+      trustRoots: { amdRootCertificates: FIXTURE_CONFIG.amdRootCertificates },
+    });
+    const abort = new AbortController();
+    const result = driver.establishAttestedSession(() => {}, abort.signal);
+    const rejected = expect(result).rejects.toThrow();
+    await vi.waitFor(() => {
+      expect(signals.length).toBeGreaterThan(0);
+    });
+    abort.abort(new Error('Proof cancelled'));
+    await rejected;
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

@@ -1,4 +1,7 @@
-import { createProvingServiceFromTransport } from './proof-server-transport';
+import {
+  createProvingServiceFromTransport,
+  createCircuitProviderFromTransport,
+} from './proof-server-transport';
 
 import type {
   AttestationProgressEvent,
@@ -59,6 +62,7 @@ export type AttestedProverProvider = {
   operations: readonly ProofOperation[];
   establishAttestedSession: (
     onEvent: (event: AttestationProgressEvent) => void,
+    signal?: AbortSignal,
   ) => Promise<AttestedProvingSession>;
 };
 
@@ -71,7 +75,7 @@ export type AttestedProverProvider = {
 export const createAttestedProofServerAccess = (
   provider: AttestedProverProvider,
   onProgress: (event: AttestationProgressEvent) => void,
-): ProofServerAccess => {
+): ProofServerAccess & { transport: ProofServerTransport } => {
   const requireOperation = (operation: ProofOperation) => {
     if (!provider.operations.includes(operation))
       throw new ProofOperationUnavailableError(provider.id, operation);
@@ -79,7 +83,9 @@ export const createAttestedProofServerAccess = (
   const attested = async <T>(
     operation: ProofOperation,
     use: (session: AttestedProvingSession) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> => {
+    signal?.throwIfAborted();
     requireOperation(operation);
     const phase = operation === 'prove' ? 'proving' : 'checking';
     onProgress({ type: 'reset', steps: [...provider.phases, phase] });
@@ -94,7 +100,8 @@ export const createAttestedProofServerAccess = (
       onProgress(event);
     };
     try {
-      session = await provider.establishAttestedSession(reportProgress);
+      session = await provider.establishAttestedSession(reportProgress, signal);
+      signal?.throwIfAborted();
       currentPhase = phase;
       onProgress({ type: 'phase', phase, status: 'started' });
       const result = await use(session);
@@ -118,13 +125,37 @@ export const createAttestedProofServerAccess = (
   const checkSession = async (
     session: AttestedProvingSession,
     payload: Uint8Array,
+    signal?: AbortSignal,
   ) => {
     requireOperation('check');
     if (!session.check)
       throw new ProofOperationUnavailableError(provider.id, 'check');
-    return session.check(payload);
+    return session.check(payload, signal);
   };
+  const transport: ProofServerTransport = {
+    check: async (payload, signal) =>
+      attested(
+        'check',
+        async session => checkSession(session, payload, signal),
+        signal,
+      ),
+    prove: async (payload, signal) =>
+      attested(
+        'prove',
+        async session => session.prove(payload, signal),
+        signal,
+      ),
+  };
+  const circuits = createCircuitProviderFromTransport(transport);
   return {
+    circuits: {
+      ...circuits,
+      // The connector's optional preflight must not prevent prove-only servers
+      // from proving. Explicit check() still rejects without sending any data.
+      ...(!provider.operations.includes('check') && {
+        checkAndProve: circuits.prove,
+      }),
+    },
     provingService: {
       prove: async transaction =>
         attested('prove', async session =>
@@ -134,11 +165,6 @@ export const createAttestedProofServerAccess = (
           }).prove(transaction),
         ),
     },
-    transport: {
-      check: async payload =>
-        attested('check', async session => checkSession(session, payload)),
-      prove: async payload =>
-        attested('prove', async session => session.prove(payload)),
-    },
+    transport,
   };
 };

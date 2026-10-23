@@ -68,7 +68,10 @@ export type TemenosVerifier = {
   AttestationVerificationError: abstract new (...args: never[]) => Error & {
     readonly phase: VerificationPhase;
   };
-  createVerifier(config: VerifierConfig): {
+  createVerifier(
+    config: VerifierConfig,
+    signal?: AbortSignal,
+  ): {
     establishVerifiedSession(
       onPhase?: (event: PhaseEvent) => void,
     ): Promise<VerifiedSession>;
@@ -353,7 +356,8 @@ export const createTemenosAttestedProverWith = (
     id: 'temenos',
     operations: ['prove'],
     phases: TEMENOS_ATTESTATION_PHASES,
-    establishAttestedSession: async onEvent => {
+    establishAttestedSession: async (onEvent, signal) => {
+      signal?.throwIfAborted();
       const config: VerifierConfig = {
         ...deployment,
         amdRootCertificates,
@@ -361,11 +365,12 @@ export const createTemenosAttestedProverWith = (
       };
       // A fresh verifier per run: re-verification is per-proof,
       // never the library's session-TTL cadence.
-      const operationVerifier = verifier.createVerifier(config);
+      const operationVerifier = verifier.createVerifier(config, signal);
       let currentPhase: TemenosAttestationPhaseId = 'obtain-evidence';
       try {
         const session = await operationVerifier.establishVerifiedSession(
           event => {
+            if (event.status === 'started') signal?.throwIfAborted();
             if (event.status === 'started' && event.phase !== 'prove')
               currentPhase = PHASE_MAP[event.phase];
             const mapped = mapPhaseEvent(event);

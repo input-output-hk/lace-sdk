@@ -89,19 +89,30 @@ const checkTarball = (tarball, expected) => {
 };
 
 /**
- * The release's plan: every package, at the release's version, which each
- * manifest must name, with its dist-tag (`latest`, or `canary` for a canary)
- * and both tarballs.
+ * The release's plan: every package of a family release, or the one package
+ * a package's release names, at the release's version, which each manifest
+ * must name, with its dist-tag (`latest`, or `canary` for a canary) and both
+ * tarballs.
  */
 export const plan = ({ tag, root = process.cwd(), tarballs }) => {
-  const match = /^lace-sdk@(\d+\.\d+\.\d+(?:-canary\.(\d+))?)$/.exec(tag);
-  if (!match)
-    throw new Error(`'${tag}' does not name lace-sdk@X.Y.Z[-canary.N]`);
-  const [, version, canary] = match;
-  const items = DIRECTORIES.map(directory => {
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(root, directory, 'package.json'), 'utf8'),
+  const match =
+    /^(lace-sdk|@laceio\/cardano(?:-ledger|-trezor)?)@(\d+\.\d+\.\d+(?:-canary\.(\d+))?)$/.exec(
+      tag,
     );
+  if (!match)
+    throw new Error(
+      `'${tag}' does not name lace-sdk@X.Y.Z[-canary.N] or a Cardano package's <name>@X.Y.Z[-canary.N]`,
+    );
+  const [, released, version, canary] = match;
+  const manifests = DIRECTORIES.map(directory => ({
+    directory,
+    manifest: JSON.parse(
+      fs.readFileSync(path.join(root, directory, 'package.json'), 'utf8'),
+    ),
+  })).filter(
+    ({ manifest }) => released === 'lace-sdk' || manifest.name === released,
+  );
+  const items = manifests.map(({ directory, manifest }) => {
     if (manifest.version !== version) {
       throw new Error(
         `${directory}/package.json names ${manifest.name}@${manifest.version}, not this release's ${version}`,

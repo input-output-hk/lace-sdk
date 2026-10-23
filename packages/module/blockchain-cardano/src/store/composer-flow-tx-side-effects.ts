@@ -116,6 +116,7 @@ export const makeComposerProcessing =
                     Cardano?: {
                       consumedInputs?: unknown[];
                       producedOutputs?: unknown[];
+                      withdrawals?: unknown[];
                     };
                   }
                 | undefined
@@ -130,6 +131,11 @@ export const makeComposerProcessing =
                 Cardano: {
                   consumedInputs: upstreamCardano?.consumedInputs ?? [],
                   producedOutputs: upstreamCardano?.producedOutputs ?? [],
+                  // Kept so the balance does not count withdrawn rewards
+                  // twice while the transaction is pending.
+                  ...(upstreamCardano?.withdrawals && {
+                    withdrawals: upstreamCardano.withdrawals,
+                  }),
                 },
               },
             };

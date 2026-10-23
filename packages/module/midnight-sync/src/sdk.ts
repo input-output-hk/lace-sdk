@@ -106,5 +106,8 @@ export type {
   AttestedProverProvider,
   AttestedProvingSession,
 } from './store/attested-proving-service';
-export { createProvingProviderFromTransport } from './store/proof-server-transport';
+export {
+  createProvingProviderFromTransport,
+  createProvingProviderFromCircuits,
+} from './store/proof-server-transport';
 export { midnightDustBalances } from './store/side-effects/watch';

@@ -21,6 +21,7 @@ export const WalletApiMethodNames: (keyof ExtendedDAppConnectorWalletAPI)[] = [
   'getConfiguration',
   'getConnectionStatus',
   'submitTransaction',
+  'proofCommand',
   'checkCircuit',
   'proveCircuit',
   'getTxHistory',

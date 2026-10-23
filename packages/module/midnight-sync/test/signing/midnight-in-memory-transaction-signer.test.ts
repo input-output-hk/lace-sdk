@@ -22,6 +22,7 @@ const testSignerAuth = signerAuthFromPrompt(getTestAuthSecretDeps(), {
 });
 
 const mockTransaction = {
+  identifiers: () => ['signed-test-tx'],
   serialize: () => new Uint8Array([0x01, 0x02]),
 };
 
@@ -365,7 +366,10 @@ describe('instance-bound transaction signing', () => {
         transferTransaction: vi.fn(() => of({ id: 'recipe' })),
         signRecipe: vi.fn(() => of({ id: 'signed' })),
         finalizeRecipe: vi.fn(() =>
-          of({ serialize: () => new Uint8Array([byte]) }),
+          of({
+            identifiers: () => [`tx-${byte}`],
+            serialize: () => new Uint8Array([byte]),
+          }),
         ),
       } as unknown as MidnightWallet);
     const first = engine(1);

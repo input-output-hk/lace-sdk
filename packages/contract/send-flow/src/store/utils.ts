@@ -320,6 +320,7 @@ export const applyFormDataChange = <S extends StateOpen>(
     ...previousState,
     confirmButtonEnabled: false,
     fees: [],
+    withdrawals: [],
     txBuildErrorTranslationKey: undefined,
     form: nextForm,
     status: 'FormPendingValidation',
@@ -339,6 +340,7 @@ export const txBuildResulted = (
         ...previousState,
         confirmButtonEnabled: !result.warningTranslationKey,
         fees: result.fees,
+        withdrawals: result.withdrawals ?? [],
         serializedTx: result.serializedTx,
         status: 'Form' as const,
         txBuildErrorTranslationKey: result.warningTranslationKey,
@@ -347,6 +349,7 @@ export const txBuildResulted = (
         ...previousState,
         confirmButtonEnabled: false,
         fees: [],
+        withdrawals: [],
         status: 'Form' as const,
         txBuildErrorTranslationKey: result.errorTranslationKey,
       };

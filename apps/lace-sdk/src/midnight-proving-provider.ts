@@ -1,5 +1,5 @@
 import { Err, Ok } from '@lace-lib/util';
-import { createProvingProviderFromTransport } from '@lace-module/midnight-sync/sdk';
+import { createProvingProviderFromCircuits } from '@lace-module/midnight-sync/sdk';
 import { firstValueFrom, from, timeout } from 'rxjs';
 
 import { midnightWalletFor, resolveMidnightAccountId } from './midnight-wallet';
@@ -61,14 +61,14 @@ export const getMidnightProvingProvider = async (
     );
     const account = { ...selection, accountId };
     await midnightWalletFor(wallet, account);
-    const provider = createProvingProviderFromTransport(
+    const provider = createProvingProviderFromCircuits(
       {
         check: async payload =>
-          (await midnightWalletFor(wallet, account)).proofServerTransport.check(
+          (await midnightWalletFor(wallet, account)).proofCircuitProvider.check(
             payload,
           ),
         prove: async payload =>
-          (await midnightWalletFor(wallet, account)).proofServerTransport.prove(
+          (await midnightWalletFor(wallet, account)).proofCircuitProvider.prove(
             payload,
           ),
       },

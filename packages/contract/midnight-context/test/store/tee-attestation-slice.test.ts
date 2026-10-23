@@ -293,3 +293,86 @@ describe('send operation ownership', () => {
     expect(reducer(cleared, late)).toBe(cleared);
   });
 });
+
+describe('wallet transaction stages', () => {
+  const phase = (
+    id: string,
+    status: 'completed' | 'failed' | 'started' = 'started',
+  ): AttestationProgressEvent => ({
+    type: 'phase',
+    phase: `transaction-${id}`,
+    status,
+  });
+  it('keeps transaction progress when Temenos resets and finishes its own checklist', () => {
+    const state = foldEvents([
+      phase('preparing'),
+      phase('proving'),
+      { type: 'reset', steps: ['proving'] },
+      { type: 'phase', phase: 'proving', status: 'completed' },
+      phase('finalizing'),
+    ]);
+    expect(state.status).toBe('succeeded');
+    expect(state.transactionSteps?.map(s => s.status)).toEqual([
+      'done',
+      'done',
+      'running',
+      'pending',
+      'pending',
+      'pending',
+    ]);
+  });
+  it('returns to inclusion after retraction and only finishes on finality', () => {
+    const events = [
+      phase('submitting'),
+      phase('inclusion'),
+      phase('confirmation'),
+      phase('inclusion'),
+    ];
+    expect(foldEvents(events).transactionSteps?.map(s => s.status)).toEqual([
+      'done',
+      'done',
+      'done',
+      'done',
+      'running',
+      'pending',
+    ]);
+    expect(
+      foldEvents([
+        ...events,
+        phase('confirmation', 'completed'),
+      ]).transactionSteps?.every(s => s.status === 'done'),
+    ).toBe(true);
+  });
+  it('marks the active stage failed without completing later stages', () => {
+    expect(
+      foldEvents([
+        phase('proving'),
+        phase('failed', 'failed'),
+      ]).transactionSteps?.map(s => s.status),
+    ).toEqual(['done', 'failed', 'pending', 'pending', 'pending', 'pending']);
+  });
+  it('rejects stale operations and clears old stages on a new send', () => {
+    const active = foldEvents([phase('proving')]);
+    expect(
+      reducer(active, updated(phase('confirmation', 'completed'), 'other')),
+    ).toBe(active);
+    expect(reducer(active, started('new')).transactionSteps).toBeUndefined();
+  });
+  it('tracks concurrent proving-data requests without negative counts', () => {
+    const material = (
+      status: 'completed' | 'started',
+    ): AttestationProgressEvent => ({
+      type: 'phase',
+      phase: 'proof-material',
+      status,
+    });
+    expect(
+      foldEvents([
+        material('started'),
+        material('started'),
+        material('completed'),
+      ]).proofMaterialRequests,
+    ).toBe(1);
+    expect(foldEvents([material('completed')]).proofMaterialRequests).toBe(0);
+  });
+});

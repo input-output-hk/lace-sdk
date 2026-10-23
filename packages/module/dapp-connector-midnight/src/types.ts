@@ -1,4 +1,6 @@
 import type { MidnightSDKNetworkId } from '@lace-contract/midnight-context';
+import type { ProverCommand, ProverReply } from '@lace-lib/midnight-prover';
+import type { ProofCircuitRequest } from '@lace-lib/vendor/midnight-proof-servers';
 import type { ConnectedAPI } from '@midnight-ntwrk/dapp-connector-api';
 import type { Runtime } from 'webextension-polyfill';
 
@@ -11,16 +13,12 @@ export type LockInfo = {
   isLocked: () => Promise<boolean>;
 };
 
-/**
- * Raw proof-server access behind the page-side `getProvingProvider`. The
- * dApp holds its circuits' key material, so the page assembles each `/check`
- * and `/prove` payload itself and the wallet forwards the opaque bytes over
- * the proof server it is configured with — for `tee-delegated`, the attested
- * channel. The wallet never resolves a URL for the dApp.
- */
+/** Page-owned circuit material crosses as data; the wallet selects the backend. */
 export type ProofServerApi = {
-  checkCircuit: (payload: Uint8Array) => Promise<Uint8Array>;
-  proveCircuit: (payload: Uint8Array) => Promise<Uint8Array>;
+  // AbortSignal is process-local; remote cancellation uses proofCommand.
+  checkCircuit(request: ProofCircuitRequest): Promise<(bigint | undefined)[]>;
+  proveCircuit(request: ProofCircuitRequest): Promise<Uint8Array>;
+  proofCommand(command: ProverCommand): Promise<ProverReply>;
 };
 
 /**

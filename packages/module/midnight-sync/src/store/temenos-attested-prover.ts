@@ -48,21 +48,36 @@ export const createStoreTemenosAttestedProver = (
       verifier: {
         LocalCheckFailedError,
         AttestationVerificationError,
-        createVerifier: config => {
+        createVerifier: (config, signal) => {
+          // Keep the verifier's request timeouts while cancelling all network
+          // phases belonging to this operation, including the encrypted proxy.
+          const fetchImpl: typeof fetch = async (input, init) =>
+            globalThis.fetch(input, {
+              ...init,
+              signal: signal
+                ? AbortSignal.any([
+                    signal,
+                    ...(init?.signal ? [init.signal] : []),
+                  ])
+                : init?.signal,
+            });
           const overrides = testSeam?.dependencies;
           return new AttestationVerifier(
             {
               evidenceProvider:
                 overrides?.evidenceProvider ??
-                AkxEvidenceProvider.fromConfig(config),
+                AkxEvidenceProvider.fromConfig(config, { fetchImpl }),
               ledgerClient:
-                overrides?.ledgerClient ?? RealLedgerClient.fromConfig(config),
+                overrides?.ledgerClient ??
+                RealLedgerClient.fromConfig(config, { fetchImpl }),
               localVerifier:
                 overrides?.localVerifier ?? new RealLocalVerifier(),
               wardenClient:
-                overrides?.wardenClient ?? RealWardenClient.fromConfig(config),
+                overrides?.wardenClient ??
+                RealWardenClient.fromConfig(config, { fetchImpl }),
               channelBinder:
-                overrides?.channelBinder ?? AkxChannelBinder.fromConfig(config),
+                overrides?.channelBinder ??
+                AkxChannelBinder.fromConfig(config, { fetchImpl }),
             },
             config,
           );

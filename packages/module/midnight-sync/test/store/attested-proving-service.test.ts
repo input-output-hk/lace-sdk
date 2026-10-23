@@ -389,7 +389,7 @@ describe('provider-neutral session contract', () => {
     await expect(access.transport.check(checkPayload)).resolves.toEqual(
       new Uint8Array([7]),
     );
-    expect(fixture.check).toHaveBeenCalledWith(checkPayload);
+    expect(fixture.check).toHaveBeenCalledWith(checkPayload, undefined);
     expect(fixture.prove).not.toHaveBeenCalled();
     expect(fixture.close).toHaveBeenCalledTimes(1);
     expect(events[0]).toEqual({
@@ -438,3 +438,56 @@ describe('provider-neutral session contract', () => {
     expect(fixture.close).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each(['establishing', 'proving'] as const)(
+  'closes a cancelled attested session while %s',
+  async stage => {
+    const abort = new AbortController();
+    let finishSetup!: () => void;
+    let beginProving!: () => void;
+    const proving = new Promise<void>(resolve => {
+      beginProving = resolve;
+    });
+    const close = vi.fn(async () => {});
+    const prove = vi.fn(async (_payload: Uint8Array, signal?: AbortSignal) => {
+      beginProving();
+      return new Promise<Uint8Array>((_resolve, reject) => {
+        signal!.addEventListener(
+          'abort',
+          () => {
+            reject(new Error('Proof cancelled'));
+          },
+          {
+            once: true,
+          },
+        );
+      });
+    });
+    const access = createAttestedProofServerAccess(
+      {
+        id: 'test',
+        phases: [],
+        operations: ['prove'],
+        establishAttestedSession: async (_progress, signal) => {
+          expect(signal).toBe(abort.signal);
+          await new Promise<void>(resolve => {
+            finishSetup = resolve;
+          });
+          return { prove, close };
+        },
+      },
+      () => {},
+    );
+    const result = access.transport.prove(provePayload, abort.signal);
+    const rejected = expect(result).rejects.toThrow('Proof cancelled');
+    if (stage === 'proving') {
+      finishSetup();
+      await proving;
+    }
+    abort.abort(new Error('Proof cancelled'));
+    if (stage === 'establishing') finishSetup();
+    await rejected;
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(prove).toHaveBeenCalledTimes(stage === 'proving' ? 1 : 0);
+  },
+);

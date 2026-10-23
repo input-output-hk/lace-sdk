@@ -22,6 +22,15 @@
  *   --canary-previous <tag> --canary-baseline <root> --canary-next <root>
  * ```
  *
+ * With `--package <name>`, one package of the family instead: its own
+ * releases (`releases.mjs`, `--package`), its own exports in each tree, its
+ * own release-overrides.json and release.json, and its own `<name>@` tags.
+ * `--previous-dependencies` and `--dependencies` give the family packages'
+ * versions at the previous release and now (`name@version`, space-separated):
+ * a package whose range on one it depends on moves to a new compatibility
+ * line takes a breaking change, since its declarations import that
+ * package's types.
+ *
  * `--next` and `--baseline` are trees holding each package's stable build
  * where the repository does (`apps/lace-sdk/dist/*.d.ts`,
  * `apps/lace-cardano/dist/*.d.ts`, …): the checked-out repository by default,
@@ -59,13 +68,16 @@ import {
   bumpVersion,
   canaryBaseFloor,
   compareVersions,
+  loadPackageReleases,
   loadReleases,
   nextCanaryNumber,
+  parsePackageReleaseTag,
   parseReleaseTag,
   parseVersion,
   previousStable,
   promotedVersion,
   readReleaseConfig,
+  releaseName,
   TAG_PREFIX,
   type Bump,
   type ReleaseTag,
@@ -110,10 +122,23 @@ export const FAMILY = [
 const prefixed = <T>(prefix: string, entries: Iterable<[string, T]>) =>
   [...entries].map(([key, value]): [string, T] => [`${prefix}${key}`, value]);
 
-/** Every export of the family's stable builds under `root`. */
-export const readFamilyExports = (root: string): ExportMap =>
+/** The family's members, or the one named `only`, which must be one. */
+const membersOf = (only?: string) => {
+  if (only === undefined) return FAMILY;
+  const members = FAMILY.filter(member => member.name === only);
+  if (members.length === 0) {
+    throw new Error(`${only} is not a package of the SDK's family`);
+  }
+  return members;
+};
+
+/**
+ * Every export of the family's stable builds under `root`, or with `only`,
+ * of that package's.
+ */
+export const readFamilyExports = (root: string, only?: string): ExportMap =>
   new Map(
-    FAMILY.flatMap(member => {
+    membersOf(only).flatMap(member => {
       const directory = path.join(root, member.directory);
       if (!('entries' in member)) {
         return [...readExports(declarationsIn(directory))];
@@ -137,9 +162,15 @@ export const readFamilyExports = (root: string): ExportMap =>
     }),
   );
 
-/** Each package's release overrides, keyed as readFamilyExports keys exports. */
-export const readFamilyOverrides = (root: string): ReleaseOverride[] =>
-  FAMILY.flatMap(member =>
+/**
+ * Each package's release overrides, keyed as readFamilyExports keys exports,
+ * or with `only`, that package's.
+ */
+export const readFamilyOverrides = (
+  root: string,
+  only?: string,
+): ReleaseOverride[] =>
+  membersOf(only).flatMap(member =>
     readOverrides(path.join(root, member.directory)).map(override => ({
       ...override,
       export: `${member.prefix}${override.export}`,
@@ -163,7 +194,48 @@ export interface StableVersion {
   breaking: string[];
   /** Breaking exports that were not `@deprecated` in the previous release. */
   undeprecated: string[];
+  /**
+   * The family packages this one depends on whose range moved to a new
+   * compatibility line since the previous release (`name@from→to`): their
+   * types are this package's API, so the move makes the release breaking.
+   */
+  dependencies?: string[];
 }
+
+/**
+ * The compatibility line a caret range on `version` stays within: the major
+ * from 1.0, the minor before it, the patch before 0.1. A canary's line is its
+ * stable version's.
+ */
+export const compatibilityLine = (version: string): string => {
+  const { major, minor, patch } = parseVersion(version);
+  if (major > 0) return `${major}`;
+  return minor > 0 ? `0.${minor}` : `0.0.${patch}`;
+};
+
+/**
+ * A family dependency's version at the previous release and at this one, by
+ * name, as the workflow passes them (`name@version`).
+ */
+export interface DependencyVersions {
+  previous: ReadonlyMap<string, string>;
+  next: ReadonlyMap<string, string>;
+}
+
+/** The dependencies whose compatibility line moved, as `name@from→to`. */
+export const movedDependencies = ({
+  previous,
+  next,
+}: DependencyVersions): string[] =>
+  [...next]
+    .filter(
+      ([name, version]) =>
+        previous.has(name) &&
+        compatibilityLine(previous.get(name) ?? '') !==
+          compatibilityLine(version),
+    )
+    .map(([name, version]) => `${name}@${previous.get(name)}→${version}`)
+    .sort();
 
 /**
  * The next stable version after `previousVersion` for the change from
@@ -178,12 +250,15 @@ export const nextStableVersion = ({
   next,
   overrides,
   major = 0,
+  dependencies,
 }: {
   previousVersion: string | undefined;
   previous: ExportMap;
   next: ExportMap;
   overrides: readonly ReleaseOverride[];
   major?: number;
+  /** For a package released on its own, its family dependencies' versions. */
+  dependencies?: DependencyVersions;
 }): StableVersion => {
   const promoted = promotedVersion(previousVersion, major);
   if (previousVersion === undefined) {
@@ -213,7 +288,11 @@ export const nextStableVersion = ({
     );
   const compatibleVersion =
     promoted ?? bumpVersion(previousVersion, compatibleBump);
+  // A dependency whose types this package's declarations import breaks
+  // them when its line moves, though no export of this package changed.
+  const moved = dependencies ? movedDependencies(dependencies) : [];
   const isCompatible =
+    moved.length === 0 &&
     removed.length === 0 &&
     changed.every(key => declaredFor(compatibleVersion).has(key));
   const bump: Bump = isCompatible ? compatibleBump : 'breaking';
@@ -230,6 +309,7 @@ export const nextStableVersion = ({
     compatible,
     breaking,
     undeprecated: breaking.filter(key => !previous.get(key)?.deprecated),
+    ...(moved.length > 0 && { dependencies: moved }),
   };
 };
 
@@ -247,6 +327,8 @@ export interface NextRelease extends StableVersion {
   previous: string | null;
   /** A canary's own changes, for its notes: its canary build's diff. */
   canary?: CanaryChanges;
+  /** The one package released, with --package; the whole family when absent. */
+  package?: string;
   problems: string[];
   warnings: string[];
 }
@@ -274,12 +356,15 @@ export const nextRelease = ({
   previous,
   stable,
   expect,
+  tagPrefix = TAG_PREFIX,
 }: {
   channel: 'canary' | 'stable';
   releases: readonly ReleaseTag[];
   previous: ReleaseTag | undefined;
   stable: StableVersion;
   expect?: ReleaseTag;
+  /** What a release tag names before its version: `lace-sdk@`, or a package's `<name>@`. */
+  tagPrefix?: string;
 }): NextRelease => {
   const problems: string[] = [];
   const warnings: string[] = [];
@@ -300,7 +385,7 @@ export const nextRelease = ({
       ? expect?.canary ?? nextCanaryNumber(releases, base)
       : undefined;
   const version = canary === undefined ? base : `${base}-canary.${canary}`;
-  const tag = `${TAG_PREFIX}${version}`;
+  const tag = `${tagPrefix}${version}`;
   const from = previous?.tag ?? 'the first release';
 
   if (expect && expect.version !== version) {
@@ -308,9 +393,12 @@ export const nextRelease = ({
       `${expect.tag} is not the version this commit takes: its API diff with ${from} makes it ${tag}`,
     );
   }
-  if (!expect && releases.some(existing => existing.tag === tag)) {
+  // By version: a package's release and the family's of one version are the
+  // same published version.
+  const released = releases.find(existing => existing.version === version);
+  if (!expect && released) {
     problems.push(
-      `${tag} is already released; a released version is final, so merge a change before releasing again`,
+      `${version} is already released (${released.tag}); a released version is final, so merge a change before releasing again`,
     );
   }
   if (channel === 'canary' && previous === undefined) {
@@ -348,19 +436,36 @@ export const summarise = (release: NextRelease): string => {
     release.bump === 'promotion'
       ? `\`apps/lace-sdk/release.json\` promotes the family to \`${release.base}\`.`
       : release.previous
-      ? `A **${release.bump}** change since \`${release.previous}\`, so the ${
+      ? `A **${release.bump}** change since ${releaseName(
+          release.previous,
+          release.package,
+        )}, so the ${
           release.channel === 'canary' ? 'next stable version' : 'version'
         } is \`${release.base}\`.`
       : `The first release, \`${release.base}\`.`,
     '',
   ];
+  if (release.dependencies) {
+    lines.push(
+      `Its range on ${list(
+        release.dependencies,
+      )} moves to a new compatibility line, whose types its declarations import, so the change is breaking.`,
+      '',
+    );
+  }
   if (release.raisedFrom) {
     lines.push(
       `The API diff gives \`${release.raisedFrom}\`, but a canary since the latest stable release already previews \`${release.base}\`, and a canary never previews a lower version.`,
       '',
     );
   }
-  if (release.previous) {
+  const isApiUnchanged =
+    release.added.length === 0 &&
+    release.removed.length === 0 &&
+    release.changed.length === 0;
+  if (release.previous && isApiUnchanged) {
+    lines.push('No export changed.', '');
+  } else if (release.previous) {
     lines.push(
       '| Exports | Count | Names |',
       '| --- | --- | --- |',
@@ -383,7 +488,7 @@ export const summarise = (release: NextRelease): string => {
     if (unexplained.length > 0 && release.bump !== 'promotion') {
       lines.push(
         `A changed export that keeps calling code working is declared compatible in its package's \`release-overrides.json\` with the version \`${bumpVersion(
-          release.previous.slice(TAG_PREFIX.length),
+          release.previous.slice(release.previous.lastIndexOf('@') + 1),
           release.added.length > 0 ? 'feature' : 'patch',
         )}\`; the release then takes that version.`,
         '',
@@ -410,6 +515,40 @@ export const summarise = (release: NextRelease): string => {
   return lines.join('\n') + '\n';
 };
 
+/** `name@version` pairs, space-separated, by name. */
+const versionsByName = (specs = ''): Map<string, string> =>
+  new Map(
+    specs
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(spec => {
+        const at = spec.lastIndexOf('@');
+        return [spec.slice(0, at), spec.slice(at + 1)];
+      }),
+  );
+
+/**
+ * The versions, at the previous release and now, of the family packages the
+ * package in `directory` depends on.
+ */
+export const dependencyVersions = (
+  directory: string,
+  previous: string | undefined,
+  next: string | undefined,
+): DependencyVersions => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(directory, 'package.json'), 'utf8'),
+  ) as { dependencies?: Record<string, string> };
+  const own = (versions: Map<string, string>) =>
+    new Map(
+      [...versions].filter(([name]) => name in (manifest.dependencies ?? {})),
+    );
+  return {
+    previous: own(versionsByName(previous)),
+    next: own(versionsByName(next)),
+  };
+};
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const packageDirectory = path.resolve(import.meta.dirname, '..');
   const repositoryRoot = path.resolve(packageDirectory, '../..');
@@ -422,14 +561,26 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       'canary-previous': { type: 'string' },
       'canary-baseline': { type: 'string' },
       'canary-next': { type: 'string' },
+      package: { type: 'string' },
+      dependencies: { type: 'string' },
+      'previous-dependencies': { type: 'string' },
       out: { type: 'string' },
       summary: { type: 'string' },
     },
   });
-  const expect = values.expect ? parseReleaseTag(values.expect) : undefined;
-  if (values.expect && !expect) {
+  // With --package, one package's release: its own releases, tags and
+  // builds; without, the family's, in lockstep.
+  const only = values.package;
+  const [member] = membersOf(only);
+  const tagPrefix = only ? `${only}@` : TAG_PREFIX;
+  const expect = values.expect
+    ? only
+      ? parsePackageReleaseTag(values.expect)
+      : parseReleaseTag(values.expect)
+    : undefined;
+  if (values.expect && (!expect || !values.expect.startsWith(tagPrefix))) {
     throw new Error(
-      `--expect must be lace-sdk@X.Y.Z[-canary.N], not ${values.expect}`,
+      `--expect must be ${tagPrefix}X.Y.Z[-canary.N], not ${values.expect}`,
     );
   }
   const channel = expect
@@ -440,7 +591,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (channel !== 'stable' && channel !== 'canary') {
     throw new Error(`--channel must be stable or canary, not ${channel}`);
   }
-  const releases = loadReleases();
+  const releases = only ? loadPackageReleases(only) : loadReleases();
   // An existing release follows the stable release below the version it
   // names, so a re-run after later releases still checks it against its own.
   const previous = previousStable(releases, { below: expect?.base });
@@ -449,14 +600,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       `--baseline must hold the stable builds of ${previous.tag}, the previous stable release`,
     );
   }
-  const next = readFamilyExports(values.next);
-  if (![...next.keys()].some(key => !key.startsWith('@'))) {
+  const next = readFamilyExports(values.next, only);
+  if (
+    only ? next.size === 0 : ![...next.keys()].some(key => !key.startsWith('@'))
+  ) {
     throw new Error(
-      `${values.next} holds no stable build of @laceio/sdk: run SDK_CHANNEL=stable npx nx build lace-sdk first`,
+      `${values.next} holds no stable build of ${
+        only ?? '@laceio/sdk'
+      }: run SDK_CHANNEL=stable npx nx run-many -t build -p tag:release:lace-sdk first`,
     );
   }
   const baseline: ExportMap = previous
-    ? readFamilyExports(values.baseline ?? '')
+    ? readFamilyExports(values.baseline ?? '', only)
     : new Map<string, DeclaredExport>();
   if (previous && baseline.size === 0) {
     throw new Error(
@@ -468,7 +623,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (!root) {
       throw new Error(`--canary-previous needs --${option}`);
     }
-    const exports = readFamilyExports(root);
+    const exports = readFamilyExports(root, only);
     if (exports.size === 0) {
       throw new Error(`${root} (--${option}) holds no canary build`);
     }
@@ -490,15 +645,27 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       releases,
       previous,
       expect,
+      tagPrefix,
       stable: nextStableVersion({
         previousVersion: previous?.base,
         previous: baseline,
         next,
-        overrides: readFamilyOverrides(repositoryRoot),
-        major: readReleaseConfig(packageDirectory).major,
+        overrides: readFamilyOverrides(repositoryRoot, only),
+        // Each package's own release.json; the family's is the SDK's.
+        major: readReleaseConfig(
+          only ? path.join(repositoryRoot, member.directory) : packageDirectory,
+        ).major,
+        ...(only && {
+          dependencies: dependencyVersions(
+            path.join(repositoryRoot, member.directory),
+            values['previous-dependencies'],
+            values.dependencies,
+          ),
+        }),
       }),
     }),
     ...(canary && { canary }),
+    ...(only && { package: only }),
   };
   const json = JSON.stringify(release, undefined, 2) + '\n';
   if (values.out) fs.writeFileSync(values.out, json);

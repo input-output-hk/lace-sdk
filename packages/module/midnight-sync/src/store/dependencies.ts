@@ -13,6 +13,7 @@ import { AuthenticationCancelledError } from '@lace-contract/signer';
 import { BigNumber, Milliseconds } from '@lace-lib/util';
 import { withReservationRelease } from '@lace-lib/vendor/midnight-facade-reservations';
 import { assertProofServerRouting } from '@lace-lib/vendor/midnight-proof-servers';
+import { createProgressSubmissionService } from '@lace-lib/vendor/midnight-submission-service';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import {
   InMemoryTransactionHistoryStorage,
@@ -36,6 +37,7 @@ import {
   defaultIfEmpty,
   defer,
   distinctUntilChanged,
+  EMPTY,
   exhaustMap,
   filter,
   firstValueFrom,
@@ -71,7 +73,7 @@ import type {
   MidnightWallet,
   CoinStatus,
   MidnightAccountId,
-  ProofServerTransport,
+  ProofCircuitProvider,
   SerializedMidnightWallet,
   StartMidnightAccountWalletParams,
 } from '@lace-contract/midnight-context';
@@ -128,6 +130,10 @@ export type CreateAttestedProver = (props: {
 export type MidnightEngineOptions = {
   /** Without it, a wallet on a `tee-delegated` proof server does not start. */
   createAttestedProver?: CreateAttestedProver;
+  /** App loadouts supply local proving; headless loadouts reject it by default. */
+  createLocalProofServerAccess?: (
+    onProgress: NonNullable<Parameters<FinalizeRecipeWithProgress>[2]>,
+  ) => ProofServerAccess;
   batchUpdates?: MidnightSyncBatchUpdates;
 };
 
@@ -137,7 +143,7 @@ type MidnightAccountWalletInstanceDependencies =
 type AccountWalletInstanceResult = {
   walletFacade: WalletFacade;
   txHistoryStorage: InMemoryTransactionHistoryStorage;
-  proofServerTransport: ProofServerTransport;
+  proofCircuitProvider: ProofCircuitProvider;
   finalizeRecipe: FinalizeRecipeWithProgress;
 };
 
@@ -180,6 +186,7 @@ const getAccountWalletInstance = async (
   logger: WithLogger['logger'],
   {
     createAttestedProver,
+    createLocalProofServerAccess,
     batchUpdates = DEFAULT_BATCH_UPDATES,
   }: MidnightEngineOptions,
 ): Promise<AccountWalletInstanceResult> => {
@@ -199,12 +206,16 @@ const getAccountWalletInstance = async (
   const { networkId } = account.blockchainSpecific;
 
   const proofServerUrl = getProofServerEndpoint(config.proofServer);
-  if (!proofServerUrl) {
+  if (!proofServerUrl && config.proofServer.kind !== 'in-process') {
     throw new Error(
       `Cannot start Midnight wallet: proof server mode "${config.proofServer.kind}" has no HTTP endpoint`,
     );
   }
-  assertProofServerRouting(config.proofServer, !!createAttestedProver);
+  assertProofServerRouting(
+    config.proofServer,
+    !!createAttestedProver,
+    !!createLocalProofServerAccess,
+  );
 
   // tee-delegated proving always goes through the attested service, and
   // nothing — remote flag included — can swap it for anything that does not
@@ -212,7 +223,9 @@ const getAccountWalletInstance = async (
   const createAccess = (
     onProgress: NonNullable<Parameters<FinalizeRecipeWithProgress>[2]>,
   ): ProofServerAccess =>
-    config.proofServer.kind === 'tee-delegated' && createAttestedProver
+    config.proofServer.kind === 'in-process' && createLocalProofServerAccess
+      ? createLocalProofServerAccess(onProgress)
+      : config.proofServer.kind === 'tee-delegated' && createAttestedProver
       ? createAttestedProofServerAccess(
           createAttestedProver({
             networkId: networkId,
@@ -227,7 +240,9 @@ const getAccountWalletInstance = async (
           }),
           onProgress,
         )
-      : createProofServerAccess(createHttpProofServerTransport(proofServerUrl));
+      : createProofServerAccess(
+          createHttpProofServerTransport(proofServerUrl!),
+        );
 
   // Connector calls have no ownership of the wallet send checklist.
   const proofServer = createScopedProofServerAccess(createAccess);
@@ -304,6 +319,7 @@ const getAccountWalletInstance = async (
         walletFacade: await WalletFacade.init({
           configuration,
           provingService: () => proofServer.provingService,
+          submissionService: createProgressSubmissionService,
           shielded: config =>
             ShieldedWallet(config).restore(
               SerialisedWalletState.toJSON(shielded),
@@ -316,7 +332,7 @@ const getAccountWalletInstance = async (
             DustWallet(config).restore(SerialisedWalletState.toJSON(dust)),
         }),
         txHistoryStorage: restoredTxHistoryStorage,
-        proofServerTransport: proofServer.transport,
+        proofCircuitProvider: proofServer.circuits,
         finalizeRecipe,
       };
     }
@@ -342,6 +358,7 @@ const getAccountWalletInstance = async (
     walletFacade: await WalletFacade.init({
       configuration,
       provingService: () => proofServer.provingService,
+      submissionService: createProgressSubmissionService,
       shielded: config => ShieldedWallet(config).startWithSeed(zswapKeyBuffer),
       unshielded: config =>
         UnshieldedWallet(config).startWithPublicKey(
@@ -351,7 +368,7 @@ const getAccountWalletInstance = async (
         DustWallet(config).startWithSeed(dustKeyBuffer, dustParameters),
     }),
     txHistoryStorage,
-    proofServerTransport: proofServer.transport,
+    proofCircuitProvider: proofServer.circuits,
     finalizeRecipe,
   };
 };
@@ -367,14 +384,14 @@ const createAccountObservableMidnightWallet = ({
   keyManager,
   walletFacade,
   haltPersistence,
-  proofServerTransport,
+  proofCircuitProvider,
   finalizeRecipe,
 }: {
   account: StartMidnightAccountWalletParams['account'];
   keyManager: StartMidnightAccountWalletParams['keyManager'];
   walletFacade: WalletFacade;
   haltPersistence: () => void;
-  proofServerTransport: ProofServerTransport;
+  proofCircuitProvider: ProofCircuitProvider;
   finalizeRecipe: FinalizeRecipeWithProgress;
 }): Observable<MidnightWallet> => {
   const { networkId } = account.blockchainSpecific;
@@ -398,7 +415,7 @@ const createAccountObservableMidnightWallet = ({
         areKeysAvailable$: keyManager.areKeysAvailable$,
         networkId,
         nightVerifyingKey,
-        proofServerTransport,
+        proofCircuitProvider,
         walletId: account.walletId,
 
         address$: state$.pipe(
@@ -674,7 +691,7 @@ type ManagedWalletInstances = {
   walletFacade: WalletFacade;
   /** Synchronously stops future persist writes; see the persistOnce guard. */
   haltPersistence: () => void;
-  proofServerTransport: ProofServerTransport;
+  proofCircuitProvider: ProofCircuitProvider;
   finalizeRecipe: FinalizeRecipeWithProgress;
 };
 
@@ -715,7 +732,7 @@ const createAndManageWallets = (
       const {
         walletFacade: facade,
         txHistoryStorage,
-        proofServerTransport,
+        proofCircuitProvider,
         finalizeRecipe,
       } = await getAccountWalletInstance(props, logger, options);
 
@@ -902,7 +919,7 @@ const createAndManageWallets = (
         haltPersistence: () => {
           isPersistenceHalted = true;
         },
-        proofServerTransport,
+        proofCircuitProvider,
         finalizeRecipe,
       });
     };
@@ -953,7 +970,7 @@ const createStartMidnightAccountWallet =
         ({
           walletFacade,
           haltPersistence,
-          proofServerTransport,
+          proofCircuitProvider,
           finalizeRecipe,
         }) =>
           createAccountObservableMidnightWallet({
@@ -961,7 +978,7 @@ const createStartMidnightAccountWallet =
             keyManager: props.keyManager,
             walletFacade,
             haltPersistence,
-            proofServerTransport,
+            proofCircuitProvider,
             finalizeRecipe,
           }),
       ),
@@ -981,6 +998,8 @@ export const createMidnightSideEffectDependencies =
     return {
       midnightWallets$,
 
+      wasmProofActivities$: EMPTY,
+      dismissWasmProofActivity: () => undefined,
       teeAttestationProgress$,
 
       getMidnightWalletByAccountId: (accountId: AccountId) =>

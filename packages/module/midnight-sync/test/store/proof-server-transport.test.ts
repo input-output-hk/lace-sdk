@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createHttpProofServerTransport,
+  createCircuitProviderFromTransport,
   createProvingProviderFromTransport,
   createProvingServiceFromTransport,
 } from '../../src/store/proof-server-transport';
@@ -42,6 +43,7 @@ describe('createHttpProofServerTransport', () => {
         new URL(`https://proof.example.com/service/${endpoint}`),
         {
           method: 'POST',
+          signal: undefined,
           headers: { 'Content-Type': 'application/octet-stream' },
           body: payload,
         },
@@ -231,3 +233,86 @@ describe('createProvingProviderFromTransport', () => {
     );
   });
 });
+
+describe('circuit request encoding for server modes', () => {
+  it('passes the preimage, binding input and dApp keys to the SDK encoder', async () => {
+    const ledger = await import('@midnight-ntwrk/ledger-v8');
+    const request = {
+      serializedPreimage: new Uint8Array([1]),
+      keyLocation: 'contract',
+      keyMaterial: {
+        proverKey: new Uint8Array([2]),
+        verifierKey: new Uint8Array([3]),
+        ir: new Uint8Array([4]),
+      },
+      overwriteBindingInput: 7n,
+    };
+    const provePayload = new Uint8Array([8]);
+    const checkPayload = new Uint8Array([9]);
+    vi.spyOn(ledger, 'createProvingPayload').mockReturnValue(provePayload);
+    vi.spyOn(ledger, 'createCheckPayload').mockReturnValue(checkPayload);
+    vi.spyOn(ledger, 'parseCheckResult').mockReturnValue([42n, undefined]);
+    const response = new Uint8Array([10]);
+    const transport = {
+      prove: vi.fn(async () => response),
+      check: vi.fn(async () => response),
+    };
+    const circuits = createCircuitProviderFromTransport(transport);
+    await expect(circuits.prove(request)).resolves.toBe(response);
+    expect(ledger.createProvingPayload).toHaveBeenCalledWith(
+      request.serializedPreimage,
+      7n,
+      request.keyMaterial,
+    );
+    expect(transport.prove).toHaveBeenCalledWith(provePayload, undefined);
+    await expect(circuits.check(request)).resolves.toEqual([42n, undefined]);
+    expect(ledger.createCheckPayload).toHaveBeenCalledWith(
+      request.serializedPreimage,
+      request.keyMaterial.ir,
+    );
+    expect(transport.check).toHaveBeenCalledWith(checkPayload, undefined);
+    vi.restoreAllMocks();
+  });
+});
+
+it.each(['check', 'prove'] as const)(
+  'cancels the HTTP %s request at the circuit boundary',
+  async method => {
+    let requestSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: RequestInit) => {
+        requestSignal = init.signal!;
+        return new Promise<Response>((_resolve, reject) => {
+          requestSignal!.addEventListener(
+            'abort',
+            () => {
+              reject(
+                requestSignal!.reason instanceof Error
+                  ? requestSignal!.reason
+                  : new Error('Proof cancelled'),
+              );
+            },
+            { once: true },
+          );
+        });
+      }),
+    );
+    try {
+      const abort = new AbortController();
+      const provider = createCircuitProviderFromTransport(
+        createHttpProofServerTransport('http://localhost:6300'),
+      );
+      const result = provider[method](
+        { serializedPreimage: new Uint8Array([1]), keyLocation: 'circuit' },
+        abort.signal,
+      );
+      const rejected = expect(result).rejects.toThrow('Proof cancelled');
+      abort.abort(new Error('Proof cancelled'));
+      await rejected;
+      expect(requestSignal?.aborted).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);

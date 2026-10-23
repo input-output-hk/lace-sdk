@@ -25,7 +25,7 @@ const computeAccountTokens =
     {
       cardanoContext: {
         selectAccountUtxosWithInFlight$,
-        selectRewardAccountDetails$,
+        selectRewardAccountDetailsWithInFlight$,
       },
     },
     { actions },
@@ -34,9 +34,11 @@ const computeAccountTokens =
     // (e.g. a migration sweep) must leave the source's balance the moment it
     // is submitted and credit the destination once — the raw sets double-count
     // it until both providers catch up (LW-15318).
+    // Rewards likewise: a pending withdrawal's rewards already sit in its
+    // outputs, so the in-flight view stops counting them as withdrawable.
     combineLatest([
       selectAccountUtxosWithInFlight$,
-      selectRewardAccountDetails$,
+      selectRewardAccountDetailsWithInFlight$,
     ]).pipe(
       map(([accountUtxoMap, rewardAccountDetailsMap]) => ({
         accountUtxos: accountUtxoMap[accountId],

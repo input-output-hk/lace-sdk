@@ -61,6 +61,11 @@
   },
   {
     "version": "0.1.1",
+    "export": "index:BlockchainSpecificActivityMetadata",
+    "reason": "The Cardano activity metadata it carries gains an optional withdrawals field, which pending activities record so the balance stops counting their rewards twice; an added optional field breaks no code that reads or writes the metadata."
+  },
+  {
+    "version": "0.1.1",
     "export": "index:CardanoContextObservables",
     "reason": "Its declaration imports the key-management and tx-construction types (KeyRole, AddressType, AccountKeyDerivationPath, GroupedAddress, Bip32AccountDependencies, TxEvaluator, TxEvaluationResult) from @laceio/cardano instead of carrying copies of them; the shapes are unchanged, and the enums are now the ones @laceio/cardano exports."
   },

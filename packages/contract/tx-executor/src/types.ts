@@ -70,6 +70,12 @@ export type BuildTxParams<
   serializedTx: string;
   txParams: TxParamsBundle<BSTokenMetadata, BSTxParams>;
   blockchainSpecificSendFlowData: BSSendFlowData;
+  /**
+   * Lets the builder fund the transaction from the account's withdrawable
+   * staking rewards when its spendable balance alone cannot. Set it only from
+   * a flow that shows the result's `withdrawals` to the user before signing.
+   */
+  allowRewardsWithdrawal?: boolean;
 }>;
 
 export type TxBuildResult = Result<
@@ -77,6 +83,8 @@ export type TxBuildResult = Result<
     fees: FeeEntry[];
     serializedTx: string;
     warningTranslationKey?: TranslationKey;
+    /** Value drawn from outside the inputs, such as withdrawn staking rewards. */
+    withdrawals?: FeeEntry[];
   },
   { errorTranslationKey: TranslationKey }
 >;

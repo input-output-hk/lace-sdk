@@ -8,6 +8,7 @@ import { Effect } from 'effect';
 
 import type {
   AttestationProgressEvent,
+  ProofCircuitProvider,
   ProofServerTransport,
 } from './midnight-proof-servers';
 import type * as ledger from '@midnight-ntwrk/ledger-v8';
@@ -19,15 +20,36 @@ import type { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';
 
 /**
  * Everything the wallet hands out for one configured proof server: the
- * SDK-facing transaction-level service for its own transactions, and the raw
- * wire protocol for callers that build their own payloads (dApp connector).
- * Both ride the same transport, so a mode's routing — attested or plain — is
- * decided once.
+ * SDK transaction service and circuit-level dApp provider. HTTP payloads are
+ * encoded at this boundary; local WASM consumes the circuit data directly.
+ * Both use the same selection, including attestation for a TEE server.
  */
 export type ProofServerAccess = {
   provingService: ProvingService<UnboundTransaction>;
-  transport: ProofServerTransport;
+  circuits: ProofCircuitProvider;
 };
+
+/** HTTP and attested backends encode circuit data only at the transport boundary. */
+export const createCircuitProviderFromTransport = (
+  transport: ProofServerTransport,
+): ProofCircuitProvider => ({
+  check: async (request, signal) =>
+    parseCheckResult(
+      await transport.check(
+        createCheckPayload(request.serializedPreimage, request.keyMaterial?.ir),
+        signal,
+      ),
+    ),
+  prove: async (request, signal) =>
+    transport.prove(
+      createProvingPayload(
+        request.serializedPreimage,
+        request.overwriteBindingInput,
+        request.keyMaterial,
+      ),
+      signal,
+    ),
+});
 
 /** Append the endpoint while preserving any base path. */
 const buildEndpointUrl = (baseUrl: string, endpoint: string): URL => {
@@ -36,12 +58,17 @@ const buildEndpointUrl = (baseUrl: string, endpoint: string): URL => {
   return url;
 };
 
-const post = async (url: URL, payload: Uint8Array): Promise<Uint8Array> => {
+const post = async (
+  url: URL,
+  payload: Uint8Array,
+  signal?: AbortSignal,
+): Promise<Uint8Array> => {
   // `Uint8Array<SharedArrayBuffer>` doesn't satisfy lib.dom's `BodyInit`
   // typing on all setups, so cast through `unknown` — the runtime value is
   // a plain typed array `fetch` accepts in every browser we ship to.
   const response = await fetch(url, {
     method: 'POST',
+    signal,
     headers: { 'Content-Type': 'application/octet-stream' },
     body: payload as unknown as BodyInit,
   });
@@ -63,8 +90,8 @@ export const createHttpProofServerTransport = (
   const checkUrl = buildEndpointUrl(baseUrl, '/check');
   const proveUrl = buildEndpointUrl(baseUrl, '/prove');
   return {
-    check: async payload => post(checkUrl, payload),
-    prove: async payload => post(proveUrl, payload),
+    check: async (payload, signal) => post(checkUrl, payload, signal),
+    prove: async (payload, signal) => post(proveUrl, payload, signal),
   };
 };
 
@@ -88,8 +115,8 @@ export type ProvingProviderOptions = {
  * a key material provider every circuit is proved with the material the
  * proof server holds; `onKeyMaterialError` decides what a failed lookup does.
  */
-export const createProvingProviderFromTransport = (
-  transport: ProofServerTransport,
+export const createProvingProviderFromCircuits = (
+  circuits: ProofCircuitProvider,
   keyMaterialProvider?: Record<
     'getProverKey' | 'getVerifierKey' | 'getZKIR',
     (keyLocation: string) => Promise<Uint8Array>
@@ -116,26 +143,32 @@ export const createProvingProviderFromTransport = (
   };
   return {
     check: async (serializedPreimage, keyLocation) =>
-      parseCheckResult(
-        await transport.check(
-          createCheckPayload(
-            serializedPreimage,
-            (
-              await keyMaterial(keyLocation)
-            )?.ir,
-          ),
-        ),
-      ),
+      circuits.check({
+        serializedPreimage,
+        keyLocation,
+        keyMaterial: await keyMaterial(keyLocation),
+      }),
     prove: async (serializedPreimage, keyLocation, overwriteBindingInput) =>
-      transport.prove(
-        createProvingPayload(
-          serializedPreimage,
-          overwriteBindingInput,
-          await keyMaterial(keyLocation),
-        ),
-      ),
+      circuits.prove({
+        serializedPreimage,
+        keyLocation,
+        overwriteBindingInput,
+        keyMaterial: await keyMaterial(keyLocation),
+      }),
   };
 };
+
+/** Preserve the HTTP adapter for consumers with a raw binary transport. */
+export const createProvingProviderFromTransport = (
+  transport: ProofServerTransport,
+  keyMaterialProvider?: Parameters<typeof createProvingProviderFromCircuits>[1],
+  options?: ProvingProviderOptions,
+): ledger.ProvingProvider =>
+  createProvingProviderFromCircuits(
+    createCircuitProviderFromTransport(transport),
+    keyMaterialProvider,
+    options,
+  );
 
 /** Adapts a transport to the wallet SDK's transaction-level `ProvingService`. */
 export const createProvingServiceFromTransport = (
@@ -153,8 +186,9 @@ export const createProvingServiceFromTransport = (
 /** Access to a proof server reachable as-is, with no attestation step. */
 export const createProofServerAccess = (
   transport: ProofServerTransport,
-): ProofServerAccess => ({
+): ProofServerAccess & { transport: ProofServerTransport } => ({
   provingService: createProvingServiceFromTransport(transport),
+  circuits: createCircuitProviderFromTransport(transport),
   transport,
 });
 
@@ -174,7 +208,7 @@ export const createScopedProofServerAccess = (
   const unscoped = createAccess(() => undefined);
   const operations = new WeakMap<object, ProofServerAccess['provingService']>();
   return {
-    transport: unscoped.transport,
+    circuits: unscoped.circuits,
     provingService: {
       prove: async transaction =>
         (operations.get(transaction) ?? unscoped.provingService).prove(
@@ -189,12 +223,25 @@ export const createScopedProofServerAccess = (
       if (!transaction) return facade.finalizeRecipe(recipe);
       if (operations.has(transaction))
         throw new Error('This transaction is already being finalized');
-      operations.set(
-        transaction,
-        onProgress
-          ? createAccess(onProgress).provingService
-          : unscoped.provingService,
-      );
+      const access = onProgress
+        ? createAccess(onProgress).provingService
+        : unscoped.provingService;
+      onProgress?.({
+        type: 'phase',
+        phase: 'transaction-proving',
+        status: 'started',
+      });
+      operations.set(transaction, {
+        prove: async tx => {
+          const proven = await access.prove(tx);
+          onProgress?.({
+            type: 'phase',
+            phase: 'transaction-finalizing',
+            status: 'started',
+          });
+          return proven;
+        },
+      });
       try {
         return await facade.finalizeRecipe(recipe);
       } finally {

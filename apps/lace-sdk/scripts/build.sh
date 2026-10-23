@@ -33,6 +33,7 @@ build() {
   node test/check-export-surface.mjs
   node test/check-cardano-bundle.mjs
   node test/check-node-load.mjs
+  node test/check-cardano-identity.mjs
   node test/check-consumer-types.mjs
 }
 

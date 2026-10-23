@@ -25,6 +25,8 @@ export {
 export {
   applyInFlightUtxoAdjustments,
   ownPendingOutputs,
+  pendingRewardWithdrawalKey,
+  type PendingRewardWithdrawals,
 } from './apply-in-flight-utxo-adjustments';
 export {
   extractOwnedPaymentCredentials,

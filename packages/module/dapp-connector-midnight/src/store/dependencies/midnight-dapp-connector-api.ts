@@ -7,6 +7,7 @@ import {
   MidnightSDKNetworkIds,
 } from '@lace-contract/midnight-context';
 import { senderOrigin } from '@lace-lib/dapp-connector';
+import { createProofJobs } from '@lace-lib/midnight-prover';
 import {
   deserializeMidnightSealedTransaction,
   deserializeMidnightUnsealedTransaction,
@@ -42,6 +43,8 @@ import type {
   MidnightNetwork,
 } from '@lace-contract/midnight-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { ProverCommand, ProverReply } from '@lace-lib/midnight-prover';
+import type { ProofCircuitRequest } from '@lace-lib/vendor/midnight-proof-servers';
 import type {
   TokenType,
   HistoryEntry,
@@ -89,6 +92,11 @@ export class MidnightDappConnectorApi
   readonly #getAccountIdForOrigin: (origin: string) => AccountId | undefined;
   readonly #onPendingActivity?: (activity: Activity) => void;
   readonly #logger?: Logger;
+  // Async backends own scheduling. Forward accepted requests so WASM queued
+  // jobs are visible to the wallet, while the offscreen worker stays serial.
+  readonly #proofJobs = createProofJobs({
+    shouldForwardProvidersConcurrently: true,
+  });
 
   public constructor(options: MidnightDappConnectorApiOptions) {
     this.wallets$ = options.wallets$;
@@ -417,7 +425,7 @@ export class MidnightDappConnectorApi
 
     const { proofServer } = networkConfig;
     const proverServerUri = getProofServerEndpoint(proofServer);
-    if (!proverServerUri) {
+    if (!proverServerUri && proofServer.kind !== 'in-process') {
       throw new APIError(
         ErrorCodes.InternalError,
         `Proof server mode "${proofServer.kind}" has no HTTP endpoint`,
@@ -495,26 +503,46 @@ export class MidnightDappConnectorApi
     }
   }
 
-  /**
-   * dApp proving rides the wallet's own proof-server transport for the
-   * account bound to the origin, so the mode's routing applies unchanged:
-   * credentials the wallet resolved at start-up, and for `tee-delegated` a
-   * transport that exists only as the result of a successful attestation.
-   */
-  public async checkCircuit(
-    payload: Uint8Array,
+  /** Bind every upload, job and result to the authorized document and wallet. */
+  public async proofCommand(
+    command: ProverCommand,
     { sender }: SenderContext,
-  ): Promise<Uint8Array> {
+  ): Promise<ProverReply> {
     const wallet = await this.ensureWallet(sender);
-    return wallet.proofServerTransport.check(payload);
+    const documentId = (
+      sender as Runtime.MessageSender & { documentId?: string }
+    ).documentId;
+    if (!documentId || sender.tab?.id === undefined)
+      throw new APIError(
+        ErrorCodes.InvalidRequest,
+        'Missing dApp document identity',
+      );
+    const owner = JSON.stringify([
+      senderOrigin(sender),
+      sender.tab.id,
+      sender.frameId,
+      documentId,
+      wallet.accountId,
+      wallet.networkId,
+    ]);
+    return this.#proofJobs.handle(command, owner, wallet.proofCircuitProvider);
+  }
+
+  /** dApp circuits use the same backend as wallet transactions. */
+  public async checkCircuit(
+    request: ProofCircuitRequest,
+    { sender }: SenderContext,
+  ): Promise<(bigint | undefined)[]> {
+    const wallet = await this.ensureWallet(sender);
+    return wallet.proofCircuitProvider.check(request);
   }
 
   public async proveCircuit(
-    payload: Uint8Array,
+    request: ProofCircuitRequest,
     { sender }: SenderContext,
   ): Promise<Uint8Array> {
     const wallet = await this.ensureWallet(sender);
-    return wallet.proofServerTransport.prove(payload);
+    return wallet.proofCircuitProvider.prove(request);
   }
 
   public async getTxHistory(

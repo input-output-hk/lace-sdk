@@ -1,5 +1,13 @@
 import { coalesceValueQuantities } from '@cardano-sdk/core';
-import { distinct, distinctUntilChanged, map, mergeAll, mergeMap } from 'rxjs';
+import { BigNumber } from '@lace-lib/util';
+import {
+  combineLatest,
+  distinct,
+  distinctUntilChanged,
+  map,
+  mergeAll,
+  mergeMap,
+} from 'rxjs';
 
 import { toAccountTokens } from '../../store/helpers/account-tokens';
 import { CardanoPaymentAddress } from '../../types';
@@ -16,14 +24,38 @@ import type { CardanoCustodySideEffect } from '../contract';
  * the owner's fee reserve, grant UTxOs hold lovelace only a sweep frees,
  * stranded deposits cannot be spent, and account tokens are no holding, so
  * none of them reaches the tokens store.
+ *
+ * The rewards come from the balance view of the reward details: a pending
+ * withdrawal's rewards already sit in its outputs, which the classification
+ * reads in flight, so they must not count a second time. The classified
+ * state itself keeps the raw amount the chain reports.
  */
 export const computeCustodyAccountTokens =
   (account: CardanoCustodyAccount): CardanoCustodySideEffect =>
-  (_, { cardanoCustody: { selectCardanoCustodyAccountState$ } }, { actions }) =>
-    selectCardanoCustodyAccountState$.pipe(
-      map(selectAccountState => selectAccountState(account.accountId)),
-      distinctUntilChanged(),
-      map(accountState =>
+  (
+    _,
+    {
+      cardanoCustody: { selectCardanoCustodyAccountState$ },
+      cardanoContext: { selectRewardAccountDetailsWithInFlight$ },
+    },
+    { actions },
+  ) =>
+    combineLatest([
+      selectCardanoCustodyAccountState$.pipe(
+        map(selectAccountState => selectAccountState(account.accountId)),
+      ),
+      selectRewardAccountDetailsWithInFlight$.pipe(
+        map(
+          details =>
+            details[account.accountId]?.rewardAccountInfo.withdrawableAmount,
+        ),
+      ),
+    ]).pipe(
+      distinctUntilChanged(
+        ([previousState, previousRewards], [state, rewards]) =>
+          previousState === state && previousRewards === rewards,
+      ),
+      map(([accountState, inFlightRewards]) =>
         actions.tokens.setAccountTokens({
           blockchainName: 'Cardano',
           accountId: account.accountId,
@@ -43,7 +75,9 @@ export const computeCustodyAccountTokens =
                           ...accountState.reserves.own,
                         ].map(([, txOut]) => txOut.value),
                       ),
-                      accountState.withdrawableRewards,
+                      inFlightRewards === undefined
+                        ? accountState.withdrawableRewards
+                        : BigNumber.valueOf(inFlightRewards),
                     ),
                   },
                 ]

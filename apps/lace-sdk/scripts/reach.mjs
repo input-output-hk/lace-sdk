@@ -111,10 +111,27 @@ export const CARDANO_APPS = [
 ];
 
 /**
- * The workspace source the Cardano packages' sources reach, resolved with the
- * declaration build's configuration, which their builds inline, as real paths.
+ * The workspace sources each Cardano package's build inlines, beside its own
+ * (its tsdown.config.ts): the domain layer inlines the ported packages it
+ * publishes; a hardware wallet package inlines its adapter alone and imports
+ * the domain layer from `@laceio/cardano`, so the rest of what its sources
+ * reach is not in its output.
  */
-export const cardanoReachedFiles = () => {
+const CARDANO_INLINED = {
+  'apps/lace-cardano': () => true,
+  'apps/lace-cardano-ledger': file =>
+    /[/\\]packages[/\\]lib[/\\]cardano-hardware-ledger[/\\]/.test(file),
+  'apps/lace-cardano-trezor': file =>
+    /[/\\]packages[/\\]lib[/\\]cardano-hardware-trezor[/\\]/.test(file),
+};
+
+/**
+ * The workspace source the Cardano packages' builds reach, or those of
+ * `apps` alone, resolved with the declaration build's configuration: each
+ * app's own sources and the workspace sources its build inlines
+ * (CARDANO_INLINED), as real paths.
+ */
+export const cardanoReachedFiles = (apps = CARDANO_APPS) => {
   const repositoryRoot = path.resolve(packageDirectory, '../..');
   const parsed = ts.getParsedCommandLineOfConfigFile(
     path.join(repositoryRoot, CARDANO_APPS[0], 'tsconfig.dts.json'),
@@ -122,11 +139,17 @@ export const cardanoReachedFiles = () => {
     { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => undefined },
   );
   if (!parsed) throw new Error('Cannot read the Cardano tsconfig.dts.json');
-  const roots = CARDANO_APPS.flatMap(app =>
-    fs
+  const reached = new Set();
+  for (const app of apps) {
+    const own = path.join(repositoryRoot, app) + path.sep;
+    const roots = fs
       .readdirSync(path.join(repositoryRoot, app, 'src'), { recursive: true })
       .filter(file => /\.tsx?$/.test(file))
-      .map(file => path.join(repositoryRoot, app, 'src', file)),
-  );
-  return reachedWorkspaceFiles(roots, parsed.options);
+      .map(file => path.join(repositoryRoot, app, 'src', file));
+    const inlined = CARDANO_INLINED[app] ?? (() => true);
+    for (const file of reachedWorkspaceFiles(roots, parsed.options)) {
+      if (file.startsWith(own) || inlined(file)) reached.add(file);
+    }
+  }
+  return [...reached].sort();
 };

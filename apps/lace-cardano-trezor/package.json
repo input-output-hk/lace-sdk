@@ -1,6 +1,6 @@
 {
   "name": "@laceio/cardano-trezor",
-  "version": "0.1.1-canary.2",
+  "version": "0.1.0",
   "private": false,
   "description": "Trezor hardware wallet signing for Cardano, over Trezor Connect: the Trezor key agent of the Cardano domain layer Lace builds on.",
   "repository": {
@@ -31,7 +31,7 @@
     "NOTICE"
   ],
   "dependencies": {
-    "@laceio/cardano": "0.1.1-canary.2",
+    "@laceio/cardano": "^0.1.1",
     "@trezor/connect": "9.4.0",
     "@trezor/connect-web": "9.4.0",
     "lodash": "^4.17.21",

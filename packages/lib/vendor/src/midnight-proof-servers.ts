@@ -1,8 +1,8 @@
 /**
  * Discriminated union describing how Midnight proofs are generated for a
  * given network. Each kind carries the parameters the wallet needs to wire
- * up that backend; `in-process` and `paired-device` are placeholders for
- * upcoming WASM and mobile-companion modes.
+ * up that backend; `in-process` uses WASM, while `paired-device` remains
+ * reserved for a mobile-companion mode.
  *
  * Key-exposure boundary (trust-tier order, strongest first):
  *   - `in-process`   — proofs in the wallet process; keys never copied across
@@ -170,15 +170,17 @@ export type AttestationProgressEvent =
   | { type: 'reset'; steps: AttestationPhaseId[] };
 
 export type ProofServerTransport = {
-  check: (payload: Uint8Array) => Promise<Uint8Array>;
-  prove: (payload: Uint8Array) => Promise<Uint8Array>;
+  check: (payload: Uint8Array, signal?: AbortSignal) => Promise<Uint8Array>;
+  prove: (payload: Uint8Array, signal?: AbortSignal) => Promise<Uint8Array>;
 };
 
 /** Refuses unsupported modes and routes recognized TEE hosts only through attestation. */
 export const assertProofServerRouting = (
   mode: ProofServerMode,
   hasAttestedProver: boolean,
+  hasLocalProver = false,
 ): void => {
+  if (mode.kind === 'in-process' && hasLocalProver) return;
   if (mode.kind === 'in-process' || mode.kind === 'paired-device')
     throw new Error(`Unsupported Midnight proof server mode "${mode.kind}"`);
   const hostname = new URL(mode.url).hostname.replace(/\.$/, '');
@@ -196,3 +198,17 @@ export const assertProofServerRouting = (
       'Cannot attest Midnight proof server: proof server mode "tee-delegated" needs an attested prover',
     );
 };
+
+/** Circuit data stays inside the wallet's proving boundary for every backend. */
+export type ProofCircuitRequest = {
+  serializedPreimage: Uint8Array;
+  keyLocation: string;
+  keyMaterial?: {
+    proverKey: Uint8Array;
+    verifierKey: Uint8Array;
+    ir: Uint8Array;
+  };
+  overwriteBindingInput?: bigint;
+};
+
+export type { CircuitProvider as ProofCircuitProvider } from '@lace-lib/midnight-prover';

@@ -25,13 +25,33 @@ export interface ReleaseTag {
   publishedAt?: string;
 }
 
+/** A package's release: a ReleaseTag naming the package it is a release of. */
+export interface PackageReleaseTag extends ReleaseTag {
+  package: string;
+}
+
 export type Bump = 'breaking' | 'feature' | 'patch';
 
 export const TAG_PREFIX: string;
 export const DEVELOPMENT_VERSION: string;
 export const FIRST_VERSION: string;
 export const FAMILY_DIRECTORIES: readonly string[];
+export const PACKAGES: readonly { name: string; directory: string }[];
+export const releaseName: (tag: string, name?: string) => string;
+export const parsePackageReleaseTag: (
+  tag: string,
+) => PackageReleaseTag | undefined;
+export const packageReleasesOf: (
+  records: readonly ReleaseRecord[],
+  name: string,
+) => PackageReleaseTag[];
+export const loadPackageReleases: (name: string) => PackageReleaseTag[];
 export const stampVersion: (root: string, version: string) => string[];
+export const familyRange: (version: string, isCanary: boolean) => string;
+export const stampPackage: (
+  root: string,
+  release: { name: string; version: string; others: Record<string, string> },
+) => string[];
 export const parseVersion: (text: string) => Version;
 export const compareVersions: (a: Version, b: Version) => number;
 export const parseReleaseTag: (tag: string) => ReleaseTag | undefined;

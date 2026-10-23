@@ -108,8 +108,8 @@ const createMockMidnightWallet = (
   accountId,
   networkId,
   nightVerifyingKey: createKeystore(randomBytes(32), networkId).getPublicKey(),
-  proofServerTransport: {
-    check: async () => new Uint8Array(),
+  proofCircuitProvider: {
+    check: async () => [],
     prove: async () => new Uint8Array(),
   },
   walletId,

@@ -3,19 +3,23 @@ name: Publish release
 # Companion to the lace-platform publish workflow, for the Lace SDK's
 # standalone repository (ADR 66).
 #
-# Each SDK release reaches this repository as one commit on main, pushed by the
-# publishing App, whose message starts `release: lace-sdk@<version>`. Build the
-# package from that commit, check it against the versioning rules, publish it
-# to npmjs and GitHub Packages, then publish the corresponding draft GitHub
-# release against the commit. The release goes public last, so a release that
-# fails a check or a publish stays a draft and a re-run resumes it.
+# Each release reaches this repository as one commit on main, pushed by the
+# publishing App, whose message starts `release: <tag>`. A package's release
+# (`@laceio/cardano@0.1.2`) publishes that package alone; the family's
+# (`lace-sdk@0.1.0`) publishes @laceio/sdk and the Cardano packages
+# (@laceio/cardano and its hardware wallet packages, ADR 68) in lockstep, at
+# its version. Build the packages from that commit, check them against the
+# versioning rules, publish them to npmjs and GitHub Packages, then publish
+# the corresponding draft GitHub release against the commit. The release
+# goes public last, so a release that fails a check or a publish stays a
+# draft and a re-run resumes it.
 #
-# Each release also publishes the SDK's Cardano packages (@laceio/cardano and
-# its hardware wallet packages, ADR 68) from the same commit, on the same
-# channel and with the same checks, at the release's version: the family
-# releases in lockstep, and lace-platform stamps the version into every
-# manifest of the pushed commit. A version npm already has must be this build
-# byte for byte.
+# lace-platform stamps the release's version into the manifests of the
+# pushed commit, and a package's release every other package at its latest
+# release, with ranges between them. A package releases after the packages
+# it depends on, so its build waits for their versions on npm before its
+# check holds it to them. A version npm already has must be this build byte
+# for byte.
 #
 # Only the App may update main (a ruleset), and only release managers may cut
 # the private release that makes it push, so a push here is the decision to
@@ -29,6 +33,61 @@ permissions:
   contents: write
 
 jobs:
+  # The release the commit names, from the event alone: its tag, version and
+  # dist-tag, the package it publishes (none for the family's), and which
+  # builds run. Nothing is checked out or installed.
+  resolve:
+    if: >
+      startsWith(github.event.head_commit.message, 'release: lace-sdk@') ||
+      startsWith(github.event.head_commit.message, 'release: @laceio/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      package: ${{ steps.release.outputs.package }}
+      sdk: ${{ steps.release.outputs.sdk }}
+      cardano: ${{ steps.release.outputs.cardano }}
+    steps:
+      - name: Resolve the release from the commit
+        id: release
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          subject=${COMMIT_MESSAGE%%$'\n'*}
+          tag=${subject#release: }
+          if [[ ! "$tag" =~ ^(lace-sdk|@laceio/[a-z-]+)@([0-9]+\.[0-9]+\.[0-9]+(-canary\.[0-9]+)?)$ ]]; then
+            echo "::error::'$subject' does not name lace-sdk@X.Y.Z[-canary.N] or @laceio/<name>@X.Y.Z[-canary.N]"
+            exit 1
+          fi
+          prefix=${BASH_REMATCH[1]}
+          version=${BASH_REMATCH[2]}
+          package=''
+          sdk=true
+          cardano=true
+          if [[ "$prefix" != lace-sdk ]]; then
+            package="$prefix"
+            sdk=false
+            cardano=false
+            case "$package" in
+              @laceio/sdk) sdk=true ;;
+              @laceio/cardano | @laceio/cardano-ledger | @laceio/cardano-trezor) cardano=true ;;
+              *)
+                echo "::error::$package is not a package this repository publishes"
+                exit 1
+                ;;
+            esac
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "package=$package"
+            echo "sdk=$sdk"
+            echo "cardano=$cardano"
+          } >> "$GITHUB_OUTPUT"
+
   # The package is built from the pushed public source, which installs from
   # public registries only. The build runs dependency code, so it holds no
   # credentials: it hands the two tarballs to publish-sdk, which runs no
@@ -36,14 +95,18 @@ jobs:
   # published with GITHUB_TOKEN never triggers a separate on-release workflow.
 
   build-sdk:
-    if: >
-      startsWith(github.event.head_commit.message, 'release: lace-sdk@')
+    needs: resolve
+    if: needs.resolve.outputs.sdk == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The build, then up to an hour's wait for the family packages a
+    # package's release depends on.
+    timeout-minutes: 120
     permissions:
       contents: read
     env:
-      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      PACKAGE: ${{ needs.resolve.outputs.package }}
       NPM_PACKAGE: '@laceio/sdk'
       GITHUB_PACKAGE: '@input-output-hk/lace-sdk'
       # The SDK build and its declaration programs outgrow Node's default heap.
@@ -65,19 +128,18 @@ jobs:
           node-version-file: .nvmrc
           package-manager-cache: false
 
-      # Two channels (ADR 66): lace-sdk@X.Y.Z is the stable build on `latest`;
-      # lace-sdk@X.Y.Z-canary.N is the canary build on `canary`, a preview of
-      # the stable version X.Y.Z. lace-platform computes each release's
-      # version from its tags and stamps it into apps/lace-sdk/package.json,
-      # so the manifest names the release's version exactly.
+      # Two channels (ADR 66): X.Y.Z is the stable build on `latest`;
+      # X.Y.Z-canary.N is the canary build on `canary`, a preview of the
+      # stable version X.Y.Z. lace-platform computes each release's version
+      # from its tags and stamps it into apps/lace-sdk/package.json, so the
+      # manifest names the release's version exactly.
       - name: Resolve the channel from the tag
         id: version
         run: |
           set -euo pipefail
-          subject=${COMMIT_MESSAGE%%$'\n'*}
-          tag=${subject#release: }
+          tag="$TAG"
+          version="$VERSION"
           stamped=$(node -p "require('./apps/lace-sdk/package.json').version")
-          version=${tag#lace-sdk@}
           if [[ "$version" != "$stamped" ]]; then
             echo "::error::release $tag does not match apps/lace-sdk/package.json, which names $stamped"
             exit 1
@@ -89,7 +151,7 @@ jobs:
             channel=canary
             dist_tag=canary
           else
-            echo "::error::release $tag is neither lace-sdk@X.Y.Z nor lace-sdk@X.Y.Z-canary.N"
+            echo "::error::release $tag is neither X.Y.Z nor X.Y.Z-canary.N"
             exit 1
           fi
           {
@@ -104,6 +166,37 @@ jobs:
       - run: npm run build
         env:
           SDK_CHANNEL: ${{ steps.version.outputs.channel }}
+
+      # A package's release names the versions of the family packages it
+      # depends on, which release before it; its check holds it to versions
+      # npm has, so the build waits for them first, for up to an hour.
+      - name: Wait for the family packages it depends on
+        if: env.PACKAGE != ''
+        run: |
+          set -euo pipefail
+          directory=''
+          for manifest in apps/*/package.json; do
+            [[ "$(jq -r .name "$manifest")" == "$PACKAGE" ]] && directory=$(dirname "$manifest")
+          done
+          if [[ -z "$directory" ]]; then
+            echo "::error::no package.json here names $PACKAGE"
+            exit 1
+          fi
+          deadline=$(( $(date +%s) + 60 * 60 ))
+          for dependency in $(jq -r '(.dependencies // {}) | keys[] | select(startswith("@laceio/"))' "$directory/package.json"); do
+            version=''
+            for manifest in apps/*/package.json; do
+              [[ "$(jq -r .name "$manifest")" == "$dependency" ]] && version=$(jq -r .version "$manifest")
+            done
+            until [[ "$(npm view "$dependency@$version" version --@laceio:registry=https://registry.npmjs.org 2>/dev/null || true)" == "$version" ]]; do
+              if (( $(date +%s) >= deadline )); then
+                echo "::error::$dependency@$version is not on npm after an hour; publish its release, then re-run this job"
+                exit 1
+              fi
+              sleep 30
+            done
+            echo "✓ $dependency@$version is on npm"
+          done
 
       # ADR 66's versioning rules, against the latest stable on npm. The
       # private repo runs the same check before it mirrors; this is the last
@@ -139,14 +232,15 @@ jobs:
   # identical to it, and packs every package at the release's version under
   # each registry's name.
   build-cardano:
-    if: >
-      startsWith(github.event.head_commit.message, 'release: lace-sdk@')
+    needs: resolve
+    if: needs.resolve.outputs.cardano == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
-      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      PACKAGE: ${{ needs.resolve.outputs.package }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -162,11 +256,39 @@ jobs:
 
       - run: npm run build:cardano
 
-      - name: Check the versioning rules and pack what the release publishes
+      # A package's release names the versions of the family packages it
+      # depends on, which release before it; its check holds it to versions
+      # npm has, so the build waits for them first, for up to an hour.
+      - name: Wait for the family packages it depends on
+        if: env.PACKAGE != ''
         run: |
           set -euo pipefail
-          subject=${COMMIT_MESSAGE%%$'\n'*}
-          RELEASE_TAG=${subject#release: } node apps/lace-cardano/scripts/check-release.ts
+          directory=''
+          for manifest in apps/*/package.json; do
+            [[ "$(jq -r .name "$manifest")" == "$PACKAGE" ]] && directory=$(dirname "$manifest")
+          done
+          if [[ -z "$directory" ]]; then
+            echo "::error::no package.json here names $PACKAGE"
+            exit 1
+          fi
+          deadline=$(( $(date +%s) + 60 * 60 ))
+          for dependency in $(jq -r '(.dependencies // {}) | keys[] | select(startswith("@laceio/"))' "$directory/package.json"); do
+            version=''
+            for manifest in apps/*/package.json; do
+              [[ "$(jq -r .name "$manifest")" == "$dependency" ]] && version=$(jq -r .version "$manifest")
+            done
+            until [[ "$(npm view "$dependency@$version" version --@laceio:registry=https://registry.npmjs.org 2>/dev/null || true)" == "$version" ]]; do
+              if (( $(date +%s) >= deadline )); then
+                echo "::error::$dependency@$version is not on npm after an hour; publish its release, then re-run this job"
+                exit 1
+              fi
+              sleep 30
+            done
+            echo "✓ $dependency@$version is on npm"
+          done
+
+      - name: Check the versioning rules and pack what the release publishes
+        run: RELEASE_TAG="$TAG" node apps/lace-cardano/scripts/check-release.ts
         env:
           RELEASE_TARBALLS: ${{ runner.temp }}/cardano-tarballs
 
@@ -183,12 +305,19 @@ jobs:
   # workflow and environment replaces it. The GitHub Packages package
   # @input-output-hk/lace-sdk publishes from this repository, linked here.
   # Each publish job waits for both build jobs, so a release whose checks
-  # fail for any package publishes nothing and stays a draft.
-  # @laceio/sdk depends on @laceio/cardano at the release's version, so it
-  # publishes after the Cardano packages: npm never serves an SDK whose
-  # dependency it does not have yet.
+  # fail for any package publishes nothing and stays a draft. A package's
+  # release runs one of them; the other is skipped. @laceio/sdk depends on
+  # @laceio/cardano, so in the family's release it publishes after the
+  # Cardano packages: npm never serves an SDK whose dependency it does not
+  # have yet.
   publish-sdk:
-    needs: [build-sdk, build-cardano, publish-cardano]
+    needs: [resolve, build-sdk, build-cardano, publish-cardano]
+    if: >
+      !cancelled() &&
+      needs.resolve.outputs.sdk == 'true' &&
+      needs.build-sdk.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.build-cardano.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.publish-cardano.result)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # npm's trusted publisher is bound to this environment, so only this job
@@ -221,9 +350,9 @@ jobs:
           set -euo pipefail
           subject=${COMMIT_MESSAGE%%$'\n'*}
           tag=${subject#release: }
-          version=${tag#lace-sdk@}
-          if [[ "$tag" != lace-sdk@* || ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-canary\.[0-9]+)?$ ]]; then
-            echo "::error::'$subject' does not name lace-sdk@X.Y.Z[-canary.N]"
+          version=${tag##*@}
+          if [[ ! "$tag" =~ ^(lace-sdk|@laceio/sdk)@ || ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-canary\.[0-9]+)?$ ]]; then
+            echo "::error::'$subject' does not name lace-sdk@X.Y.Z[-canary.N] or @laceio/sdk@X.Y.Z[-canary.N]"
             exit 1
           fi
           dist_tag=latest
@@ -343,7 +472,12 @@ jobs:
   # trusted publishing as publish-sdk; on GitHub Packages each package is
   # @input-output-hk/<directory name>.
   publish-cardano:
-    needs: [build-sdk, build-cardano]
+    needs: [resolve, build-sdk, build-cardano]
+    if: >
+      !cancelled() &&
+      needs.resolve.outputs.cardano == 'true' &&
+      needs.build-cardano.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.build-sdk.result)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: npm-publish
@@ -460,14 +594,20 @@ jobs:
           done < "$RUNNER_TEMP/cardano-plan"
 
   flip:
-    needs: [build-sdk, publish-sdk, build-cardano, publish-cardano]
-    # The release goes public once everything it publishes is out.
+    needs: [resolve, build-sdk, publish-sdk, build-cardano, publish-cardano]
+    # The release goes public once everything it publishes is out: every job
+    # the release runs succeeded, and none failed or was cancelled.
+    if: >
+      !cancelled() &&
+      needs.resolve.result == 'success' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     steps:
       - name: Publish the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.publish-sdk.outputs.tag }}
+          TAG: ${{ needs.resolve.outputs.tag }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail

@@ -28,6 +28,8 @@ import type {
   MakePropertiesObservable,
 } from '@lace-lib/util';
 import type { Serializable } from '@lace-lib/util-store';
+import type { ProofCircuitProvider } from '@lace-lib/vendor/midnight-proof-servers';
+import type { ProofActivity } from '@lace-lib/vendor/wasm-proof-backend';
 import type {
   DustSecretKey,
   RawTokenType,
@@ -39,6 +41,8 @@ import type { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';
 import type { Roles } from '@midnightntwrk/wallet-sdk/hd';
 import type { UnshieldedKeystore } from '@midnightntwrk/wallet-sdk/unshielded';
 import type { Observable } from 'rxjs';
+
+export type { ProofActivity } from '@lace-lib/vendor/wasm-proof-backend';
 
 export type LockStatus = 'locked' | 'unlocked' | 'unlocking';
 
@@ -62,6 +66,7 @@ export type MidnightAccountPublicKeys = {
 };
 
 export type MidnightContextSliceState = {
+  supportsWasmProver: boolean;
   defaultNetworksConfig: MidnightNetworksConfig;
   defaultTestNetNetworkId: MidnightSDKTestNetworkId;
   userNetworksConfigOverrides: PartialMidnightNetworksConfig;
@@ -254,21 +259,8 @@ export type ObservableWalletFacade = MakePropertiesObservable<
   }
 >;
 
-/**
- * The proof server's wire protocol, bound to one account's configured mode:
- * opaque `/check` and `/prove` request bodies in, response bodies out. The
- * wallet never inspects the bytes, so callers that assemble their own
- * payloads (the dApp connector, which holds the dApp's key material) can
- * share the wallet's route — for `tee-delegated` that route only exists as
- * the result of a successful attestation, so they inherit fail-closed proving
- * instead of resolving a proof-server URL themselves. A mode may refuse
- * `check` (the attested channel tunnels only `/prove`); callers must treat
- * its rejection as "unavailable", never fall back to another route.
- */
-export type ProofServerTransport = {
-  check: (payload: Uint8Array) => Promise<Uint8Array>;
-  prove: (payload: Uint8Array) => Promise<Uint8Array>;
-};
+/** Both wallet and dApp circuits use the account's single selected backend. */
+export type { ProofCircuitProvider } from '@lace-lib/vendor/midnight-proof-servers';
 
 export type MidnightWallet = ObservableWalletFacade & {
   accountId: MidnightAccountId;
@@ -280,7 +272,7 @@ export type MidnightWallet = ObservableWalletFacade & {
   ) => Observable<WalletEntry | undefined>;
   networkId: MidnightSDKNetworkId;
   nightVerifyingKey: SignatureVerifyingKey;
-  proofServerTransport: ProofServerTransport;
+  proofCircuitProvider: ProofCircuitProvider;
   signData: (
     data: Uint8Array,
   ) => Observable<{ signature: string; verifyingKey: string }>;
@@ -374,6 +366,9 @@ export type AttestationProgressState = {
     status: AttestationStepStatus;
     detail?: string;
   }>;
+  /** End-to-end wallet send stages, separate from provider attestation. */
+  proofMaterialRequests?: number;
+  transactionSteps?: Array<{ id: string; status: AttestationStepStatus }>;
   checks?: AttestationCheckResult[];
   failure?: {
     phase: AttestationPhaseId;
@@ -401,6 +396,8 @@ export type MidnightSideEffectsDependencies = {
   startMidnightAccountWallet: (
     params: StartMidnightAccountWalletParams,
   ) => Observable<MidnightWallet>;
+  wasmProofActivities$: Observable<ProofActivity[]>;
+  dismissWasmProofActivity: (id: string) => void;
   /**
    * Wallet-send progress, tagged with operation ownership. Connector proof
    * requests never emit into this stream. Side effects only observe (ADR 19).

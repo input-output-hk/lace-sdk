@@ -63,6 +63,7 @@
     "packages/lib/core",
     "packages/lib/crypto",
     "packages/lib/image-url",
+    "packages/lib/midnight-prover",
     "packages/lib/observability",
     "packages/lib/passkey",
     "packages/lib/ui-toolkit",

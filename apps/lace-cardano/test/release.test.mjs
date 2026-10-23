@@ -305,6 +305,78 @@ describe('the release check', () => {
       assert.match(result.output, /not above the latest stable 0\.1\.0/);
     });
   });
+
+  describe('a package released on its own', () => {
+    let family;
+    before(() => {
+      const first = check(fixtureRoot(), 'lace-sdk@0.2.0');
+      family = first.tarballs
+        .filter(f => f.startsWith('laceio-'))
+        .map(f => path.join(first.out, f));
+    });
+    /** The family at 0.2.0, with the ledger package at `version`, pinning `pin`. */
+    const ledgerRelease = (version, pin) => {
+      const root = fixtureRoot();
+      const file = path.join(root, 'apps/lace-cardano-ledger/package.json');
+      const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+      manifest.version = version;
+      manifest.dependencies['@laceio/cardano'] = pin;
+      fs.writeFileSync(file, JSON.stringify(manifest, undefined, 2));
+      return root;
+    };
+
+    it('publishes that package alone, on the range of the release before it', () => {
+      const result = check(
+        ledgerRelease('0.2.1', '^0.2.0'),
+        '@laceio/cardano-ledger@0.2.1',
+        { PUBLISHED_TARBALLS: published(...family) },
+      );
+      assert.equal(result.status, 0, result.output);
+      assert.deepEqual(result.tarballs, [
+        'input-output-hk-lace-cardano-ledger-0.2.1.tgz',
+        'laceio-cardano-ledger-0.2.1.tgz',
+      ]);
+    });
+
+    it('refuses a range its release does not give, or a dependency npm lacks', () => {
+      const exact = check(
+        ledgerRelease('0.2.1', '0.2.0'),
+        '@laceio/cardano-ledger@0.2.1',
+        { PUBLISHED_TARBALLS: published(...family) },
+      );
+      assert.equal(exact.status, 1);
+      assert.match(
+        exact.output,
+        /pins @laceio\/cardano 0\.2\.0, but its release gives @laceio\/cardano@0\.2\.0 the range \^0\.2\.0/,
+      );
+      const unreleased = check(
+        ledgerRelease('0.2.1', '^0.2.0'),
+        '@laceio/cardano-ledger@0.2.1',
+        { PUBLISHED_TARBALLS: published() },
+      );
+      assert.equal(unreleased.status, 1);
+      assert.match(
+        unreleased.output,
+        /depends on @laceio\/cardano@0\.2\.0, which npm does not have: release @laceio\/cardano first/,
+      );
+    });
+
+    it('plans that package alone', () => {
+      const root = ledgerRelease('0.2.1', '^0.2.0');
+      const built = check(root, '@laceio/cardano-ledger@0.2.1', {
+        PUBLISHED_TARBALLS: published(...family),
+      });
+      assert.equal(built.status, 0, built.output);
+      assert.deepEqual(
+        plan({
+          tag: '@laceio/cardano-ledger@0.2.1',
+          root,
+          tarballs: built.out,
+        }).items.map(item => `${item.name}@${item.version} ${item.distTag}`),
+        ['@laceio/cardano-ledger@0.2.1 latest'],
+      );
+    });
+  });
 });
 
 describe('registry failures', () => {

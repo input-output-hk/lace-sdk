@@ -26,5 +26,20 @@
   "v2.swap.review.warning-beneficiary",
   "v2.swap.review.warning-non-script",
   "v2.swap.review.blocked-title",
-  "v2.swap.review.blocked-subtitle"
+  "v2.swap.review.blocked-subtitle",
+  "midnight.proof-server.local-host.description",
+  "v2.portfolio.midnight-banner.description",
+  "midnight.proof-server.custom.disclosure.title",
+  "midnight.proof-server.custom.disclosure.first-use",
+  "midnight.proof-server.custom.disclosure.reminder",
+  "midnight.proof-server.custom.transaction-notice",
+  "midnight.send-flow.processing.info",
+  "v2.send-flow.success.midnight-subtitle",
+  "midnight.send-flow.stage.preparing",
+  "midnight.send-flow.stage.proving",
+  "midnight.send-flow.stage.finalizing",
+  "midnight.send-flow.stage.submitting",
+  "midnight.send-flow.stage.inclusion",
+  "midnight.send-flow.stage.confirmation",
+  "midnight.send-flow.proof-material"
 ]

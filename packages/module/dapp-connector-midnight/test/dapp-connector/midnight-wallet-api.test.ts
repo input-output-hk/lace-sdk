@@ -17,25 +17,6 @@ import type { FeatureFlagProbe } from '@lace-contract/dapp-connector';
 import type { RemoteAuthenticator } from '@lace-lib/dapp-connector';
 import type { Mock } from 'vitest';
 
-// The payload builders are WASM; the provider's job here is to assemble the
-// right inputs and hand the bytes to the wallet, so they are stubbed.
-const ledgerMocks = vi.hoisted(() => {
-  const checkPayload = new Uint8Array([0xcc]);
-  const provingPayload = new Uint8Array([0xff]);
-  return {
-    checkPayload,
-    provingPayload,
-    createCheckPayload: vi.fn(() => checkPayload),
-    createProvingPayload: vi.fn(() => provingPayload),
-    parseCheckResult: vi.fn(() => [42n]),
-  };
-});
-vi.mock('@midnight-ntwrk/ledger-v8', () => ({
-  createCheckPayload: ledgerMocks.createCheckPayload,
-  createProvingPayload: ledgerMocks.createProvingPayload,
-  parseCheckResult: ledgerMocks.parseCheckResult,
-}));
-
 export const stubAuthenticator = () => {
   let isEnabled = false;
   return {
@@ -143,7 +124,12 @@ describe('MidnightWalletApi', () => {
         getVerifierKey: vi.fn().mockResolvedValue(keyMaterial.verifierKey),
       };
 
-      it('proves through the wallet with a payload built from the dApp key material', async () => {
+      beforeEach(() => {
+        vi.mocked(testWalletApi.checkCircuit).mockClear();
+        vi.mocked(testWalletApi.proveCircuit).mockClear();
+      });
+
+      it('checks then proves through the unchanged dApp prove API', async () => {
         (authenticator.requestAccess as Mock).mockResolvedValue(true);
         const decodedApi = await walletApi.connect(NetworkId.NetworkId.Preview);
         const provider = await decodedApi.getProvingProvider(
@@ -152,18 +138,34 @@ describe('MidnightWalletApi', () => {
 
         const proven = await provider.prove(preimage, 'circuit', 7n);
 
-        expect(ledgerMocks.createProvingPayload).toHaveBeenCalledWith(
-          preimage,
-          7n,
-          keyMaterial,
-        );
         expect(testWalletApi.proveCircuit).toHaveBeenCalledWith(
-          ledgerMocks.provingPayload,
+          {
+            serializedPreimage: preimage,
+            keyLocation: 'circuit',
+            overwriteBindingInput: 7n,
+            keyMaterial,
+          },
+          expect.any(AbortSignal),
         );
         expect(proven).toEqual(new Uint8Array([0xf0]));
+        expect(testWalletApi.checkCircuit).toHaveBeenCalledWith(
+          {
+            serializedPreimage: preimage,
+            keyLocation: 'circuit',
+            overwriteBindingInput: 7n,
+            keyMaterial,
+          },
+          expect.any(AbortSignal),
+        );
+        expect(
+          vi.mocked(testWalletApi.checkCircuit).mock.invocationCallOrder[0],
+        ).toBeLessThan(
+          vi.mocked(testWalletApi.proveCircuit).mock.invocationCallOrder[0],
+        );
+        expect(Object.keys(provider).sort()).toEqual(['check', 'prove']);
       });
 
-      it('checks through the wallet and parses the proof server result', async () => {
+      it('returns the check result from the wallet', async () => {
         (authenticator.requestAccess as Mock).mockResolvedValue(true);
         const decodedApi = await walletApi.connect(NetworkId.NetworkId.Preview);
         const provider = await decodedApi.getProvingProvider(
@@ -172,15 +174,13 @@ describe('MidnightWalletApi', () => {
 
         const result = await provider.check(preimage, 'circuit');
 
-        expect(ledgerMocks.createCheckPayload).toHaveBeenCalledWith(
-          preimage,
-          keyMaterial.ir,
-        );
         expect(testWalletApi.checkCircuit).toHaveBeenCalledWith(
-          ledgerMocks.checkPayload,
-        );
-        expect(ledgerMocks.parseCheckResult).toHaveBeenCalledWith(
-          new Uint8Array([0xc0]),
+          {
+            serializedPreimage: preimage,
+            keyLocation: 'circuit',
+            keyMaterial,
+          },
+          expect.any(AbortSignal),
         );
         expect(result).toEqual([42n]);
       });
@@ -195,10 +195,14 @@ describe('MidnightWalletApi', () => {
 
         await provider.prove(preimage, 'builtin');
 
-        expect(ledgerMocks.createProvingPayload).toHaveBeenCalledWith(
-          preimage,
-          undefined,
-          undefined,
+        expect(testWalletApi.proveCircuit).toHaveBeenCalledWith(
+          {
+            serializedPreimage: preimage,
+            keyLocation: 'builtin',
+            overwriteBindingInput: undefined,
+            keyMaterial: undefined,
+          },
+          expect.any(AbortSignal),
         );
       });
     });

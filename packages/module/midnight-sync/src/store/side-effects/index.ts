@@ -1,6 +1,7 @@
 import { merge } from 'rxjs';
 
 import { loadActivityDetails, updateActivities } from './activities';
+import { watchProofActivities, dismissProofActivity } from './proof-activities';
 import { migrateUnavailableProofServerSelection } from './proof-server-kill-switch';
 import {
   createClearWalletStateOnResync,
@@ -72,6 +73,8 @@ export const initializeSideEffects = createInitializeSideEffects(storage => [
   createResetSyncStateSideEffect(storage),
   resyncWalletOnConfigChangeFromFeatureFlags,
   migrateUnavailableProofServerSelection,
+  watchProofActivities,
+  dismissProofActivity,
   watchTeeAttestationProgress,
   clearTeeAttestationProgressOnNewTx,
 ]);

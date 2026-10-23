@@ -13,10 +13,15 @@
  * packed as the release packs it (scripts/pack.mjs), file for file: the
  * publish skips each registry that has the version, so a different build
  * would leave npm and GitHub Packages serving different contents under one
- * version. Run after the build of the channel the tag names:
+ * version. The SDK released on its own (`@laceio/sdk@X.Y.Z[-canary.N]`) is
+ * held to the same rules, and each pin on another package of the family
+ * must be the range its release gives (scripts/releases.mjs familyRange) on
+ * a version npm already has: the SDK releases after the packages it depends
+ * on. Run after the build of the channel the tag names:
  *
  * ```bash
  * RELEASE_TAG=lace-sdk@0.2.0 node scripts/check-release.ts
+ * RELEASE_TAG=@laceio/sdk@0.2.0 node scripts/check-release.ts
  * ```
  *
  * PREVIOUS_PACKAGE_DIR (an unpacked package) and PREVIOUS_VERSION replace the
@@ -38,29 +43,38 @@ import {
   republishProblems,
   stableReleaseProblems,
 } from './release-compat.ts';
+import { familyRange, PACKAGES } from './releases.mjs';
 
 const packageDirectory = path.resolve(import.meta.dirname, '..');
 const NAME = '@laceio/sdk';
 const NPM_REGISTRY = ['--@laceio:registry=https://registry.npmjs.org'];
 
 const tag = process.env.RELEASE_TAG ?? '';
-const tagMatch = /^lace-sdk@(\d+\.\d+\.\d+)(-canary\.\d+)?$/.exec(tag);
+const tagMatch =
+  /^(lace-sdk|@laceio\/sdk)@(\d+\.\d+\.\d+)(-canary\.\d+)?$/.exec(tag);
 if (!tagMatch) {
-  throw new Error(`RELEASE_TAG must be lace-sdk@X.Y.Z[-canary.N], not ${tag}`);
+  throw new Error(
+    `RELEASE_TAG must be lace-sdk@X.Y.Z[-canary.N] or @laceio/sdk@X.Y.Z[-canary.N], not ${tag}`,
+  );
 }
-const base = tagMatch[1];
-const version = base + (tagMatch[2] ?? '');
-const isCanary = tagMatch[2] !== undefined;
+/** Whether the SDK releases on its own, rather than with the family. */
+const isPackageRelease = tagMatch[1] === NAME;
+const base = tagMatch[2];
+const version = base + (tagMatch[3] ?? '');
+const isCanary = tagMatch[3] !== undefined;
 
 // The release stamps its version into the snapshot's package.json, so the
 // tag must name exactly that version; the development version main carries
 // never publishes. Checking here stops a mismatched tag before its release
 // goes public.
-const packageVersion = (
-  JSON.parse(
-    fs.readFileSync(path.join(packageDirectory, 'package.json'), 'utf8'),
-  ) as { version: string }
-).version;
+const manifestOf = (directory: string) =>
+  JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')) as {
+    name: string;
+    version: string;
+    dependencies?: Record<string, string>;
+  };
+const manifest = manifestOf(packageDirectory);
+const packageVersion = manifest.version;
 const isTagForPackageVersion = packageVersion === version;
 
 const npm = (args: string[], cwd?: string): string =>
@@ -71,14 +85,13 @@ const npm = (args: string[], cwd?: string): string =>
   }).trim();
 
 /**
- * Every version on npm, prereleases included, or none before the first
- * release. Read from the version list rather than the dist-tags, which a
- * prerelease can hold.
+ * Every version of `name` on npm, prereleases included, or none before the
+ * first release. Read from the version list rather than the dist-tags, which
+ * a prerelease can hold.
  */
-const publishedVersions = (): string[] => {
-  if (process.env.PREVIOUS_VERSION) return [process.env.PREVIOUS_VERSION];
+const versionsOf = (name: string): string[] => {
   try {
-    const versions = JSON.parse(npm(['view', NAME, 'versions', '--json'])) as
+    const versions = JSON.parse(npm(['view', name, 'versions', '--json'])) as
       | string[]
       | string;
     return Array.isArray(versions) ? versions : [versions];
@@ -89,6 +102,11 @@ const publishedVersions = (): string[] => {
     throw error;
   }
 };
+
+const publishedVersions = (): string[] =>
+  process.env.PREVIOUS_VERSION
+    ? [process.env.PREVIOUS_VERSION]
+    : versionsOf(NAME);
 
 const published = publishedVersions();
 /** The highest stable version on npm, or undefined before the first release. */
@@ -126,11 +144,40 @@ const unpackedBuild = (): string => {
 /** Whether npm already has this version: a re-run completing its publish. */
 const isPublished = published.includes(version);
 
+/**
+ * The SDK released on its own pins each package of the family it depends on
+ * at the range its release gives that package's stamped version, which npm
+ * must already have.
+ */
+const familyPinProblems = (): string[] =>
+  Object.entries(manifest.dependencies ?? {}).flatMap(([dependency, pin]) => {
+    const member = PACKAGES.find(({ name }) => name === dependency);
+    if (!member) return [];
+    const dependencyVersion = manifestOf(
+      path.resolve(packageDirectory, '../..', member.directory),
+    ).version;
+    const range = familyRange(dependencyVersion, isCanary);
+    if (pin !== range) {
+      return [
+        `${NAME} pins ${dependency} ${pin}, but its release gives ${dependency}@${dependencyVersion} the range ${range}`,
+      ];
+    }
+    return versionsOf(dependency).includes(dependencyVersion)
+      ? []
+      : [
+          `${NAME} depends on ${dependency}@${dependencyVersion}, which npm does not have: release ${dependency} first`,
+        ];
+  });
+
 const releaseProblems = (latest: string | undefined): string[] => {
   if (!isTagForPackageVersion) {
     return [
       `${tag} does not match apps/lace-sdk/package.json version ${packageVersion}: the release stamps its version into the snapshot (sdk-release.yml prepare), so a package.json that names another version is not this release's`,
     ];
+  }
+  if (isPackageRelease) {
+    const pins = familyPinProblems();
+    if (pins.length > 0) return pins;
   }
   // Compared with the rules when it first ran; now it must be the same files.
   if (isPublished) {

@@ -19,6 +19,7 @@ const store: LaceInit<LaceModuleStoreInit> = async props => ({
   preloadedState: {
     midnightContext: {
       ...initialState,
+      supportsWasmProver: props.runtime.app === 'lace-extension',
       defaultTestNetNetworkId:
         props.runtime.config.defaultMidnightTestnetNetworkId,
     },

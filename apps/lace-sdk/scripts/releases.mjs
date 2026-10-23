@@ -13,9 +13,23 @@
 //   node scripts/releases.mjs check                       refuse releases and tags that disagree
 //   node scripts/releases.mjs previous [--below X.Y.Z]    newest stable release (below X.Y.Z)
 //   node scripts/releases.mjs latest [--except TAG]       newest release, canary or stable (other than TAG)
+//   node scripts/releases.mjs highest                     the release of the highest version
 //   node scripts/releases.mjs reference --channel C [--except TAG]
 //                                                          the release a C release must differ from
+//   node scripts/releases.mjs packages [--json]           the family's packages, in dependency order
 //   node scripts/releases.mjs stamp <root> <version>      stamp the family's manifests
+//   node scripts/releases.mjs stamp <root> <version> --package <name> --with <name@version>...
+//                                                          stamp one package's release
+//
+// With `--package <name>`, `previous`, `latest` and `reference` answer for one
+// package of the family: its own `<name>@X.Y.Z` releases, and the family's
+// `lace-sdk@X.Y.Z` releases, which published every package at X.Y.Z. With
+// `--at <commit>`, they count only the releases whose tag that commit
+// contains (all tags fetched), and with `--published-by <tag>`, only those
+// published no later than that release, so a check of an existing release
+// reads the releases as they were when it was published. `highest` names the
+// release of the highest version among them, whatever the order they were
+// published in.
 //
 // `previous`, `latest` and `reference` print a tag, or nothing when there is none. The
 // releases come from LACE_SDK_RELEASES_FILE (as `fetch` writes it) when set,
@@ -45,6 +59,19 @@ export const FAMILY_DIRECTORIES = [
   'apps/lace-cardano',
   'apps/lace-cardano-ledger',
   'apps/lace-cardano-trezor',
+];
+
+/**
+ * The family's packages, each released under its own tags as npm names it:
+ * `@laceio/cardano@0.1.1`, `@laceio/cardano@0.1.2-canary.0`. In dependency
+ * order, which the release workflows version them in: a package after the
+ * packages it depends on, so its release can name their new versions.
+ */
+export const PACKAGES = [
+  { name: '@laceio/cardano', directory: 'apps/lace-cardano' },
+  { name: '@laceio/cardano-ledger', directory: 'apps/lace-cardano-ledger' },
+  { name: '@laceio/cardano-trezor', directory: 'apps/lace-cardano-trezor' },
+  { name: '@laceio/sdk', directory: 'apps/lace-sdk' },
 ];
 
 /** The version of the SDK's first stable release. */
@@ -91,6 +118,44 @@ export const parseReleaseTag = tag => {
   };
 };
 
+/**
+ * A package's release tag's parts, `<name>@X.Y.Z` or `<name>@X.Y.Z-canary.N`
+ * for a package of the family, or undefined for any other name.
+ */
+export const parsePackageReleaseTag = tag => {
+  const match = /^(@laceio\/[a-z-]+)@(\d+\.\d+\.\d+)(?:-canary\.(\d+))?$/.exec(
+    tag,
+  );
+  if (!match || !PACKAGES.some(({ name }) => name === match[1])) {
+    return undefined;
+  }
+  const canary = match[3] === undefined ? undefined : Number(match[3]);
+  return {
+    tag,
+    package: match[1],
+    base: match[2],
+    canary,
+    version: canary === undefined ? match[2] : `${match[2]}-canary.${canary}`,
+  };
+};
+
+/**
+ * A previous release as a package's summary and notes name it, as Markdown:
+ * the package's own version, and the family release that published it when
+ * the family released it (`@laceio/cardano@0.1.0` (released as
+ * `lace-sdk@0.1.0`)). Any other tag stands as it is.
+ */
+export const releaseName = (tag, name) => {
+  const family = name ? parseReleaseTag(tag) : undefined;
+  return family
+    ? `\`${name}@${family.version}\` (released as \`${tag}\`)`
+    : `\`${tag}\``;
+};
+
+/** A family release tag or a package's: the tags the release records hold. */
+const parseAnyReleaseTag = tag =>
+  parseReleaseTag(tag) ?? parsePackageReleaseTag(tag);
+
 /** Whether a release record's prerelease flag matches its tag's channel. */
 const isLabelled = (release, isPrerelease) =>
   Boolean(isPrerelease) === (release.canary !== undefined);
@@ -132,6 +197,53 @@ export const releasesOf = records => {
 };
 
 /**
+ * One package's releases among GitHub's release records, oldest first: its
+ * own published `<name>@` releases and the family's `lace-sdk@` releases,
+ * each of which published every package at its version. A version both
+ * name is the package's own. Refuses mislabelled records as releasesOf does.
+ */
+export const packageReleasesOf = (records, name) => {
+  if (!PACKAGES.some(member => member.name === name)) {
+    throw new Error(`${name} is not a package of the SDK's family`);
+  }
+  const family = releasesOf(records);
+  const own = records
+    .filter(({ isDraft }) => !isDraft)
+    .map(record => ({
+      record,
+      release: parsePackageReleaseTag(record.tagName),
+    }))
+    .filter(({ release }) => release?.package === name);
+  const mislabelled = own.filter(
+    ({ record, release }) => !isLabelled(release, record.isPrerelease),
+  );
+  if (mislabelled.length > 0) {
+    throw new Error(
+      `release records disagree with their tags: ${mislabelled
+        .map(
+          ({ record }) =>
+            `${record.tagName} is ${
+              record.isPrerelease ? '' : 'not '
+            }a prerelease`,
+        )
+        .join('; ')}`,
+    );
+  }
+  const releases = new Map(
+    family.map(release => [release.version, { ...release, package: name }]),
+  );
+  for (const { record, release } of own) {
+    releases.set(release.version, {
+      ...release,
+      publishedAt: record.publishedAt ?? '',
+    });
+  }
+  return [...releases.values()].sort((a, b) =>
+    compareVersions(parseVersion(a.version), parseVersion(b.version)),
+  );
+};
+
+/**
  * Where the release records and the protected tags disagree: a `lace-sdk@`
  * tag without a published release whose prerelease flag matches its name (a
  * bare tag, a draft, a release flipped to or from prerelease, or one
@@ -141,10 +253,10 @@ export const releasesOf = records => {
  * agree, rather than leave a release out and number the next one past it.
  */
 export const releaseRecordProblems = (records, tagNames) => {
-  const tags = new Set(tagNames.filter(name => parseReleaseTag(name)));
+  const tags = new Set(tagNames.filter(name => parseAnyReleaseTag(name)));
   const published = new Map(
     records
-      .filter(({ isDraft, tagName }) => !isDraft && parseReleaseTag(tagName))
+      .filter(({ isDraft, tagName }) => !isDraft && parseAnyReleaseTag(tagName))
       .map(record => [record.tagName, record]),
   );
   const problems = [];
@@ -154,7 +266,7 @@ export const releaseRecordProblems = (records, tagNames) => {
       problems.push(
         `${tag} is tagged but has no published release: publish its release, or, if it never published, delete the tag (gh api -X DELETE /repos/<repository>/git/refs/tags/${tag}; docs/publish-public.md, Resuming a partial SDK release)`,
       );
-    } else if (!isLabelled(parseReleaseTag(tag), record.isPrerelease)) {
+    } else if (!isLabelled(parseAnyReleaseTag(tag), record.isPrerelease)) {
       problems.push(
         `${tag}'s release is ${
           record.isPrerelease ? '' : 'not '
@@ -329,6 +441,79 @@ export const stampVersion = (root, version) => {
   });
 };
 
+/**
+ * The range one package of the family gives another it depends on: within
+ * `version`'s compatibility line (`^X.Y.Z`) for a stable release, or exactly
+ * `version` when the depending package's release is a canary, which previews
+ * against the very builds it was released with.
+ */
+export const familyRange = (version, isCanary) =>
+  isCanary ? version : `^${version}`;
+
+/**
+ * Stamps one package's release into the family's manifests under `root` (the
+ * release's snapshot): the package `name` at `version`, every other package at the
+ * version `others` gives it (its latest release the release commit contains),
+ * and each dependency of one on another as familyRange gives it. Refuses a
+ * manifest that does not name the development version, as stampVersion does.
+ * Returns `name@version` of each.
+ */
+export const stampPackage = (root, { name, version, others }) => {
+  parseVersion(version);
+  const isCanary = version.includes('-canary.');
+  const versionOf = new Map([...Object.entries(others), [name, version]]);
+  const manifests = FAMILY_DIRECTORIES.map(directory => {
+    const file = path.join(root, directory, 'package.json');
+    return { file, manifest: JSON.parse(fs.readFileSync(file, 'utf8')) };
+  });
+  for (const { manifest } of manifests) {
+    if (!versionOf.has(manifest.name)) {
+      throw new Error(
+        `${name}'s release names no version of ${manifest.name}: each package of the family needs its latest release`,
+      );
+    }
+    parseVersion(versionOf.get(manifest.name));
+  }
+  return manifests.map(({ file, manifest }) => {
+    if (manifest.version !== DEVELOPMENT_VERSION) {
+      throw new Error(
+        `${manifest.name} is at ${manifest.version}, not ${DEVELOPMENT_VERSION}: a release computes its version, so the manifest names none`,
+      );
+    }
+    manifest.version = versionOf.get(manifest.name);
+    for (const field of ['dependencies', 'peerDependencies']) {
+      for (const [dependency, range] of Object.entries(manifest[field] ?? {})) {
+        if (!versionOf.has(dependency)) continue;
+        if (range !== DEVELOPMENT_VERSION) {
+          throw new Error(
+            `${manifest.name} pins ${dependency} ${range}, not ${DEVELOPMENT_VERSION}: the release decides the range`,
+          );
+        }
+        manifest[field][dependency] = familyRange(
+          versionOf.get(dependency),
+          isCanary,
+        );
+      }
+    }
+    fs.writeFileSync(file, JSON.stringify(manifest, undefined, 2) + '\n');
+    return `${manifest.name}@${manifest.version}`;
+  });
+};
+
+/** Whether `commit` contains the commit `tag` names. */
+const contains = (commit, tag) => {
+  try {
+    execFileSync(
+      'git',
+      ['merge-base', '--is-ancestor', `refs/tags/${tag}`, commit],
+      { stdio: 'ignore' },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const repository = () =>
   process.env.GITHUB_REPOSITORY ||
   execFileSync(
@@ -348,7 +533,7 @@ export const fetchReleaseRecords = () =>
       '--paginate',
       `/repos/${repository()}/releases?per_page=100`,
       '--jq',
-      '.[] | select(.tag_name | startswith("lace-sdk@")) | {tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease, publishedAt: (.published_at // "")}',
+      '.[] | select(.tag_name | startswith("lace-sdk@") or startswith("@laceio/")) | {tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease, publishedAt: (.published_at // "")}',
     ],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
@@ -357,9 +542,14 @@ export const fetchReleaseRecords = () =>
     .map(line => JSON.parse(line));
 
 /** The SDK's releases: from LACE_SDK_RELEASES_FILE, or from the API. */
-/** This repository's `lace-sdk@` tags, from git (all tags fetched). */
+/**
+ * This repository's release tags, the family's `lace-sdk@` and the packages'
+ * `@laceio/`, from git (all tags fetched).
+ */
 export const gitTagNames = () =>
-  execFileSync('git', ['tag', '--list', `${TAG_PREFIX}*`], { encoding: 'utf8' })
+  execFileSync('git', ['tag', '--list', `${TAG_PREFIX}*`, '@laceio/*'], {
+    encoding: 'utf8',
+  })
     .split('\n')
     .filter(Boolean);
 
@@ -382,6 +572,22 @@ export const loadReleases = () => {
   return releasesOf(records);
 };
 
+/** One package's releases (packageReleasesOf), checked as loadReleases checks them. */
+export const loadPackageReleases = name => {
+  const records = process.env.LACE_SDK_RELEASES_FILE
+    ? JSON.parse(fs.readFileSync(process.env.LACE_SDK_RELEASES_FILE, 'utf8'))
+    : fetchReleaseRecords();
+  const problems = releaseRecordProblems(records, gitTagNames());
+  if (problems.length > 0) {
+    throw new Error(
+      `the SDK family's releases and tags disagree, so no version is computed:\n- ${problems.join(
+        '\n- ',
+      )}`,
+    );
+  }
+  return packageReleasesOf(records, name);
+};
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -390,9 +596,39 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       channel: { type: 'string' },
       except: { type: 'string' },
       out: { type: 'string' },
+      package: { type: 'string' },
+      at: { type: 'string' },
+      'published-by': { type: 'string' },
+      with: { type: 'string', multiple: true },
+      json: { type: 'boolean' },
     },
   });
   const [command] = positionals;
+  // When the release `--published-by` names was published; it must exist.
+  const publishedBy = () => {
+    const tag = values['published-by'];
+    if (!tag) return undefined;
+    const records = process.env.LACE_SDK_RELEASES_FILE
+      ? JSON.parse(fs.readFileSync(process.env.LACE_SDK_RELEASES_FILE, 'utf8'))
+      : fetchReleaseRecords();
+    const record = records.find(
+      ({ tagName, isDraft }) => tagName === tag && !isDraft,
+    );
+    if (!record?.publishedAt) {
+      throw new Error(`${tag} has no published release to count from`);
+    }
+    return record.publishedAt;
+  };
+  const releases = () => {
+    const until = publishedBy();
+    return (
+      values.package ? loadPackageReleases(values.package) : loadReleases()
+    )
+      .filter(release => !values.at || contains(values.at, release.tag))
+      .filter(
+        release => until === undefined || (release.publishedAt ?? '') <= until,
+      );
+  };
   const commands = {
     fetch: () => {
       const json = JSON.stringify(fetchReleaseRecords());
@@ -411,27 +647,44 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       for (const problem of problems) console.log(`::error::${problem}`);
       process.exit(1);
     },
-    previous: () =>
-      previousStable(loadReleases(), { below: values.below })?.tag,
+    previous: () => previousStable(releases(), { below: values.below })?.tag,
+    // Releases are listed in version order.
+    highest: () => releases().at(-1)?.tag,
     latest: () =>
-      latestRelease(
-        loadReleases().filter(release => release.tag !== values.except),
-      )?.tag,
+      latestRelease(releases().filter(release => release.tag !== values.except))
+        ?.tag,
     reference: () => {
       if (values.channel !== 'stable' && values.channel !== 'canary') {
         throw new Error('reference needs --channel stable or --channel canary');
       }
       return changeReference(
-        loadReleases().filter(release => release.tag !== values.except),
+        releases().filter(release => release.tag !== values.except),
         values.channel,
       )?.tag;
     },
-    stamp: () => stampVersion(positionals[1], positionals[2]).join('\n'),
+    packages: () => {
+      const names = PACKAGES.map(({ name }) => name);
+      return values.json ? JSON.stringify(names) : names.join(' ');
+    },
+    stamp: () =>
+      (values.package
+        ? stampPackage(positionals[1], {
+            name: values.package,
+            version: positionals[2],
+            others: Object.fromEntries(
+              (values.with ?? []).map(spec => {
+                const at = spec.lastIndexOf('@');
+                return [spec.slice(0, at), spec.slice(at + 1)];
+              }),
+            ),
+          })
+        : stampVersion(positionals[1], positionals[2])
+      ).join('\n'),
   };
   if (!Object.hasOwn(commands, command ?? '')) {
     // eslint-disable-next-line no-console -- usage
     console.error(
-      'usage: node scripts/releases.mjs fetch [--out <file>] | check | previous [--below X.Y.Z] | latest [--except TAG] | reference --channel stable|canary [--except TAG] | stamp <root> <version>',
+      'usage: node scripts/releases.mjs fetch [--out <file>] | check | packages [--json] | previous [--below X.Y.Z] | latest [--except TAG] | highest | reference --channel stable|canary [--except TAG] | stamp <root> <version> [--package <name> --with <name@version>...]; previous, latest, highest and reference take --package <name>, --at <commit> and --published-by <tag>',
     );
     process.exit(2);
   }

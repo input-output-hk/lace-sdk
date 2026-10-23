@@ -634,7 +634,7 @@ describe('midnight slice', () => {
   });
 
   describe('proof-server disclosure acknowledgement', () => {
-    it('treats older persisted state as unacknowledged and records only remote provider/version keys', () => {
+    it('treats older persisted state as unacknowledged and records custom and delegated endpoint/version keys', () => {
       const oldState = {
         ...initialState,
         proofServerDisclosureAcknowledgements: undefined,
@@ -651,7 +651,16 @@ describe('midnight slice', () => {
           url: 'http://localhost:6300',
         }),
       );
-      expect(local.proofServerDisclosureAcknowledgements).toBeUndefined();
+      expect(local.proofServerDisclosureAcknowledgements).toEqual({
+        'v1:local-host:http://localhost:6300': true,
+      });
+      const wasm = reducers.midnightContext(
+        oldState,
+        actions.midnightContext.acknowledgeProofServerDisclosure({
+          kind: 'in-process',
+        }),
+      );
+      expect(wasm.proofServerDisclosureAcknowledgements).toBeUndefined();
       const remote = TEMENOS_PROOF_SERVER_MODES['preprod']!;
       const acknowledged = reducers.midnightContext(
         oldState,
@@ -784,6 +793,55 @@ describe('midnight slice', () => {
           ).toEqual([{ kind: 'local-host', url: 'http://localhost:6300' }]);
         },
       );
+
+      it('offers WASM only with runtime support and restores the single saved selection', () => {
+        const state: WithNetworkTestState = {
+          midnightContext: {
+            ...initialState,
+            supportsWasmProver: true,
+            userNetworksConfigOverrides: {
+              ...initialState.userNetworksConfigOverrides,
+              [testNetworkId]: { proofServer: { kind: 'in-process' } },
+            },
+          },
+          network: networkState,
+          features: emptyFeaturesState,
+        };
+        const modes =
+          selectors.midnightContext.selectAllProofServerModes(state);
+        expect(modes[testNetworkId]).toEqual([
+          { kind: 'in-process' },
+          { kind: 'local-host', url: 'http://localhost:6300' },
+        ]);
+        expect(selectors.midnightContext.selectAllProofServerModes(state)).toBe(
+          modes,
+        );
+        expect(
+          selectors.midnightContext.selectNetworksConfig(state)[testNetworkId]
+            .proofServer,
+        ).toEqual({ kind: 'in-process' });
+        expect(
+          selectors.midnightContext.selectUnavailableProofServerNetworks(state),
+        ).toEqual([]);
+
+        const unsupportedState = {
+          ...state,
+          midnightContext: {
+            ...state.midnightContext,
+            supportsWasmProver: false,
+          },
+        };
+        expect(
+          selectors.midnightContext.selectNetworksConfig(unsupportedState)[
+            testNetworkId
+          ].proofServer,
+        ).toEqual({ kind: 'local-host', url: 'http://localhost:6300' });
+        expect(
+          selectors.midnightContext.selectUnavailableProofServerNetworks(
+            unsupportedState,
+          ),
+        ).toEqual([testNetworkId]);
+      });
 
       it('selectAllProofServerModes appends the baked Temenos mode on networks with an entry when its flag is enabled', () => {
         const state: WithNetworkTestState = {

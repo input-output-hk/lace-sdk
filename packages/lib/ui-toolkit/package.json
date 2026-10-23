@@ -18,7 +18,7 @@
     "@lace-lib/ur-transport": "*",
     "@lace-lib/util": "*",
     "@lace-lib/util-render": "*",
-    "@lodev09/react-native-true-sheet": "3.11.12",
+    "@lodev09/react-native-true-sheet": "3.11.18",
     "@shopify/flash-list": "^2.3.2",
     "bignumber.js": "^9.0.1",
     "expo-blur": "~57.0.3",

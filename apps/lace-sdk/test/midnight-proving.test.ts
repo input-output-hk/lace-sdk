@@ -7,7 +7,10 @@ import {
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { AccountId } from '@lace-contract/wallet-repo';
 import { createAttestedProofServerAccess } from '@lace-lib/vendor/attested-proving-service';
-import { createScopedProofServerAccess } from '@lace-lib/vendor/proof-server-transport';
+import {
+  createScopedProofServerAccess,
+  createCircuitProviderFromTransport,
+} from '@lace-lib/vendor/proof-server-transport';
 import {
   BehaviorSubject,
   defer,
@@ -100,7 +103,7 @@ const fixture = () => {
     prove: vi.fn(async () => new Uint8Array([2])),
   };
   const engine = {
-    proofServerTransport: transport,
+    proofCircuitProvider: createCircuitProviderFromTransport(transport),
   } as unknown as MidnightWallet;
   registry.next({ [accountId]: engine });
   return { wallet, registry, networks, transport, engine };
@@ -244,8 +247,14 @@ describe('account-bound circuit proving', () => {
     );
     for (const lookup of Object.values(keys))
       expect(lookup).toHaveBeenCalledWith('circuit');
-    expect(transport.check).toHaveBeenCalledWith(new Uint8Array([0xcc]));
-    expect(transport.prove).toHaveBeenCalledWith(new Uint8Array([0xff]));
+    expect(transport.check).toHaveBeenCalledWith(
+      new Uint8Array([0xcc]),
+      undefined,
+    );
+    expect(transport.prove).toHaveBeenCalledWith(
+      new Uint8Array([0xff]),
+      undefined,
+    );
   });
   it('retains the connector built-in-circuit fallback after a failed key lookup', async () => {
     const { wallet } = fixture();
@@ -321,10 +330,10 @@ describe('account-bound circuit proving', () => {
       })
     ).unwrap();
     const replacement = {
-      proofServerTransport: {
+      proofCircuitProvider: createCircuitProviderFromTransport({
         ...first.transport,
         prove: vi.fn(async () => new Uint8Array([7])),
-      },
+      }),
     } as unknown as MidnightWallet;
     first.registry.next({ [accountId]: replacement });
     await expect(circuit.prove(new Uint8Array(), 'c')).resolves.toEqual(
@@ -344,10 +353,10 @@ describe('account-bound circuit proving', () => {
         }),
       close,
     }));
-    engine.proofServerTransport = createAttestedProofServerAccess(
+    engine.proofCircuitProvider = createAttestedProofServerAccess(
       provider({ establishAttestedSession: establish }),
       () => undefined,
-    ).transport;
+    ).circuits;
     const circuit = (
       await getMidnightProvingProvider(wallet, {
         keyMaterialProvider: keyMaterialProvider(),
@@ -451,8 +460,8 @@ describe('operation-scoped proving progress', () => {
     expect(firstEvents).toEqual(before);
     expect(secondEvents.at(-1)).toEqual({
       type: 'phase',
-      phase: 'proving',
-      status: 'completed',
+      phase: 'transaction-finalizing',
+      status: 'started',
     });
     finish();
     expect((await pending).isOk()).toBe(true);
@@ -470,7 +479,7 @@ describe('proving timeouts', () => {
     };
     Object.assign(context.engine, {
       networkId,
-      proofServerTransport: transport,
+      proofCircuitProvider: createCircuitProviderFromTransport(transport),
       balanceFinalizedTransaction: vi.fn(() => of(recipe)),
       balanceUnboundTransaction: vi.fn(() => of(recipe)),
       transferTransaction: vi.fn(() => of(recipe)),

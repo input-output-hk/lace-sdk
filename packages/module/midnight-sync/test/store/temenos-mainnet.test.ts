@@ -76,6 +76,7 @@ describe('Temenos deployments', () => {
             pointerContractAddress:
               'a58974f1cacda177edfea3bdc76c1cd48d5e3107b9a543b9d65cee6b454c9122',
           }),
+          { fetchImpl: expect.any(Function) as typeof fetch },
         );
         expect(factory.mock.calls[0][0]).toHaveProperty(
           'indexerUrl',

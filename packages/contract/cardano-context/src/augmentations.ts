@@ -57,6 +57,13 @@ export type CardanoActivityUtxoMetadata = {
    * `applyInFlightUtxoAdjustments`). */
   producedOutputs: Cardano.Utxo[];
   /**
+   * Every reward withdrawal of the signed tx, unfiltered — PENDING activities
+   * only, so the rewards it moves into `producedOutputs` are not also counted
+   * as still withdrawable (see `pendingRewardWithdrawals`). Absent means no
+   * withdrawal, or an activity persisted before this field existed.
+   */
+  withdrawals?: Cardano.Withdrawal[];
+  /**
    * Outpoints of the confirmed tx's outputs paying addresses the account
    * owned at map time. Outpoints, not full outputs: the one consumer
    * (cardano-sync's missing-output staleness proof) tests membership only,

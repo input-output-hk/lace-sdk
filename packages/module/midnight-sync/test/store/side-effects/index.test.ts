@@ -28,6 +28,8 @@ const spies = vi.hoisted(() => {
     migrateUnavailableProofServerSelection: sideEffect(),
     watchTeeAttestationProgress: sideEffect(),
     clearTeeAttestationProgressOnNewTx: sideEffect(),
+    watchProofActivities: sideEffect(),
+    dismissProofActivity: sideEffect(),
     watchMidnightAccount: vi.fn(),
   };
 });
@@ -58,6 +60,10 @@ vi.mock('../../../src/store/side-effects/proof-server-kill-switch', () => ({
 vi.mock('../../../src/store/side-effects/tee-attestation-progress', () => ({
   watchTeeAttestationProgress: spies.watchTeeAttestationProgress,
   clearTeeAttestationProgressOnNewTx: spies.clearTeeAttestationProgressOnNewTx,
+}));
+vi.mock('../../../src/store/side-effects/proof-activities', () => ({
+  watchProofActivities: spies.watchProofActivities,
+  dismissProofActivity: spies.dismissProofActivity,
 }));
 vi.mock('../../../src/store/side-effects/watch', () => ({
   watchMidnightAccounts: vi.fn(() => spies.accountWalletWatcher),
@@ -143,6 +149,8 @@ describe('midnight-sync side-effect composition', () => {
     for (const sideEffect of [
       spies.resyncWalletOnConfigChangeFromFeatureFlags,
       spies.migrateUnavailableProofServerSelection,
+      spies.watchProofActivities,
+      spies.dismissProofActivity,
       spies.watchTeeAttestationProgress,
       spies.clearTeeAttestationProgressOnNewTx,
     ]) {
@@ -167,6 +175,8 @@ describe('midnight-sync side-effect composition', () => {
     for (const sideEffect of [
       spies.resyncWalletOnConfigChangeFromFeatureFlags,
       spies.migrateUnavailableProofServerSelection,
+      spies.watchProofActivities,
+      spies.dismissProofActivity,
       spies.watchTeeAttestationProgress,
       spies.clearTeeAttestationProgressOnNewTx,
     ]) {

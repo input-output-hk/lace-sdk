@@ -22,6 +22,7 @@
     "@lace-contract/tokens": "*",
     "@lace-contract/views": "*",
     "@lace-contract/wallet-repo": "*",
+    "@lace-lib/midnight-prover": "*",
     "@lace-lib/util": "*",
     "@lace-lib/util-render": "*",
     "@lace-lib/util-store": "*",

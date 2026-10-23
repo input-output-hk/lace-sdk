@@ -13,7 +13,14 @@ import {
 } from '../../src/store/send-proof-progress';
 
 import type { AttestedProverProvider } from '../../src/store/attested-proving-service';
+import type * as ledger from '@midnight-ntwrk/ledger-v8';
 import type { DefaultConfiguration } from '@midnightntwrk/wallet-sdk/facade';
+
+// Payload encoding needs a real preimage; this test only asserts routing.
+vi.mock('@midnight-ntwrk/ledger-v8', async importOriginal => ({
+  ...(await importOriginal<typeof ledger>()),
+  createProvingPayload: (preimage: Uint8Array) => preimage,
+}));
 
 const deferred = () => {
   let resolve!: () => void;
@@ -83,7 +90,10 @@ it('keeps the real send reducer pending when a concurrent dApp proof completes',
     await provingStarted.promise;
     expect(state.status).toBe('running');
     const pending = state;
-    await access.transport.prove(new Uint8Array([1]));
+    await access.circuits.prove({
+      serializedPreimage: new Uint8Array([1]),
+      keyLocation: 'fixture',
+    });
     expect(state).toBe(pending);
     // The dApp's facade finalization is also unscoped, not only /prove.
     await wallet.finalizeRecipe({
@@ -139,8 +149,8 @@ it('releases a failed transaction scope for retry without retaining its observer
   expect(first).toHaveBeenCalledTimes(firstEvents);
   expect(second).toHaveBeenLastCalledWith({
     type: 'phase',
-    phase: 'proving',
-    status: 'completed',
+    phase: 'transaction-finalizing',
+    status: 'started',
   });
   expect(close).toHaveBeenCalledTimes(2);
 });

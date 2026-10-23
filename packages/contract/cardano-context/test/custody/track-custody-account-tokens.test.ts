@@ -24,6 +24,7 @@ import { threeAccountCardanoWalletAccounts } from '../mocks';
 
 import type { CardanoCustodyAccountState } from '../../src';
 import type {
+  AccountRewardAccountDetailsMap,
   CardanoBip32AccountProps,
   CardanoCustodyAccountProps,
   CardanoMultiSigAccountProps,
@@ -133,6 +134,8 @@ describe('trackCustodyAccountTokens', () => {
           selectActiveCardanoAccounts$: cold<CardanoAccount[]>('a', {
             a: [cardanoCustodyAccount],
           }),
+          selectRewardAccountDetailsWithInFlight$:
+            cold<AccountRewardAccountDetailsMap>('a', { a: {} }),
         },
         cardanoCustody: {
           selectCardanoCustodyAccountState$: cold('a', {
@@ -144,6 +147,62 @@ describe('trackCustodyAccountTokens', () => {
       dependencies: { actions },
       assertion: sideEffect$ => {
         expectObservable(sideEffect$).toBe('a', { a: liveCustodyTokens });
+      },
+    }));
+  });
+
+  it('leaves out rewards a pending custody withdrawal already moved into its outputs', () => {
+    testSideEffect(trackCustodyAccountTokens, ({ cold, expectObservable }) => ({
+      stateObservables: {
+        cardanoContext: {
+          selectActiveCardanoAccounts$: cold<CardanoAccount[]>('a', {
+            a: [cardanoCustodyAccount],
+          }),
+          // The classified state keeps the raw 0.5 ADA; the balance view
+          // has none left, a pending transaction withdrew it.
+          selectRewardAccountDetailsWithInFlight$:
+            cold<AccountRewardAccountDetailsMap>('a', {
+              a: {
+                [custodyAccountId]: {
+                  rewardAccountInfo: {
+                    rewardsSum: BigNumber(500_000n),
+                    isActive: true,
+                    isRegistered: true,
+                    controlledAmount: BigNumber(0n),
+                    withdrawableAmount: BigNumber(0n),
+                  },
+                },
+              },
+            }),
+        },
+        cardanoCustody: {
+          selectCardanoCustodyAccountState$: cold('a', {
+            a: (accountId: AccountId) =>
+              accountId === custodyAccountId ? live : undefined,
+          }),
+        },
+      },
+      dependencies: { actions },
+      assertion: sideEffect$ => {
+        expectObservable(sideEffect$).toBe('a', {
+          a: custodyTokens([
+            {
+              address: CardanoPaymentAddress(custodyAddress),
+              tokens: [
+                {
+                  tokenId: LOVELACE_TOKEN_ID,
+                  available: BigNumber(7_000_000n),
+                  pending: BigNumber(0n),
+                },
+                {
+                  tokenId: TokenId(assetId),
+                  available: BigNumber(3n),
+                  pending: BigNumber(0n),
+                },
+              ],
+            },
+          ]),
+        });
       },
     }));
   });
@@ -166,6 +225,8 @@ describe('trackCustodyAccountTokens', () => {
             selectActiveCardanoAccounts$: cold<CardanoAccount[]>('a', {
               a: [cardanoCustodyAccount],
             }),
+            selectRewardAccountDetailsWithInFlight$:
+              cold<AccountRewardAccountDetailsMap>('a', { a: {} }),
           },
           cardanoCustody: {
             selectCardanoCustodyAccountState$: cold('abcd', {
@@ -201,6 +262,8 @@ describe('trackCustodyAccountTokens', () => {
             selectActiveCardanoAccounts$: cold<CardanoAccount[]>('a', {
               a: [cardanoCustodyAccount],
             }),
+            selectRewardAccountDetailsWithInFlight$:
+              cold<AccountRewardAccountDetailsMap>('a', { a: {} }),
           },
           cardanoCustody: {
             selectCardanoCustodyAccountState$: cold('ab', {
@@ -224,6 +287,8 @@ describe('trackCustodyAccountTokens', () => {
           selectActiveCardanoAccounts$: cold<CardanoAccount[]>('a', {
             a: [threeAccountCardanoWalletAccounts[0], cardanoCustodyAccount],
           }),
+          selectRewardAccountDetailsWithInFlight$:
+            cold<AccountRewardAccountDetailsMap>('a', { a: {} }),
         },
         cardanoCustody: {
           selectCardanoCustodyAccountState$: cold('a', { a: () => live }),

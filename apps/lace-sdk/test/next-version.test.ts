@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  compatibilityLine,
   FAMILY,
   nextRelease,
   nextStableVersion,
@@ -20,6 +21,7 @@ import {
 import {
   isDependencyFile,
   isShipped,
+  shippingPathsOf,
   pullRequestOf,
   renderNotes,
 } from '../scripts/release-scope';
@@ -30,12 +32,16 @@ import {
   changeReference,
   latestRelease,
   nextCanaryNumber,
+  PACKAGES,
+  packageReleasesOf,
+  parsePackageReleaseTag,
   parseReleaseTag,
   previousStable,
   promotedVersion,
   readReleaseConfig,
   releaseRecordProblems,
   releasesOf,
+  stampPackage,
   stampVersion,
 } from '../scripts/releases.mjs';
 
@@ -108,6 +114,43 @@ describe('bumpVersion', () => {
     expect(bumpVersion('1.4.2', 'breaking')).toBe('2.0.0');
     expect(bumpVersion('1.4.2', 'feature')).toBe('1.5.0');
     expect(bumpVersion('1.4.2', 'patch')).toBe('1.4.3');
+  });
+});
+
+describe('a family dependency whose line moves', () => {
+  const after = (from: string, to: string) =>
+    nextStableVersion({
+      previousVersion: '0.1.0',
+      previous: PREVIOUS,
+      next: declarations(UNCHANGED),
+      overrides: [],
+      dependencies: {
+        previous: new Map([['@laceio/cardano', from]]),
+        next: new Map([['@laceio/cardano', to]]),
+      },
+    });
+
+  it('reads the line a caret range stays within', () => {
+    expect(compatibilityLine('1.4.2')).toBe('1');
+    expect(compatibilityLine('0.3.1')).toBe('0.3');
+    expect(compatibilityLine('0.0.4')).toBe('0.0.4');
+    expect(compatibilityLine('0.3.0-canary.2')).toBe('0.3');
+  });
+
+  it('makes the release breaking, with no export to deprecate', () => {
+    expect(after('0.1.2', '0.2.0')).toMatchObject({
+      version: '0.2.0',
+      bump: 'breaking',
+      breaking: [],
+      undeprecated: [],
+      dependencies: ['@laceio/cardano@0.1.2→0.2.0'],
+    });
+  });
+
+  it('leaves a move within the line to the API diff', () => {
+    const within = after('0.1.2', '0.1.5');
+    expect(within).toMatchObject({ version: '0.1.1', bump: 'patch' });
+    expect(within.dependencies).toBeUndefined();
   });
 });
 
@@ -376,7 +419,21 @@ describe('nextRelease', () => {
       stable: stableAfter('0.1.0', UNCHANGED),
     });
     expect(release.problems).toEqual([
-      expect.stringContaining('lace-sdk@0.1.1 is already released'),
+      expect.stringContaining('0.1.1 is already released (lace-sdk@0.1.1)'),
+    ]);
+  });
+
+  it("refuses a package's version the family already released, and names the package's tag", () => {
+    const release = nextRelease({
+      channel: 'stable',
+      releases: tags('lace-sdk@0.1.0', 'lace-sdk@0.1.1'),
+      previous,
+      stable: stableAfter('0.1.0', UNCHANGED),
+      tagPrefix: '@laceio/cardano@',
+    });
+    expect(release.tag).toBe('@laceio/cardano@0.1.1');
+    expect(release.problems).toEqual([
+      expect.stringContaining('0.1.1 is already released (lace-sdk@0.1.1)'),
     ]);
   });
 
@@ -484,6 +541,34 @@ describe('release scope', () => {
     expect(isShipped('apps/lace-sdk/test/channel.mjs', reached)).toBe(false);
     expect(isShipped('apps/lace-sdk/MAINTAINING.md', reached)).toBe(false);
     expect(isShipped('packages/lib/ui/src/button.tsx', reached)).toBe(false);
+  });
+
+  it("counts, for one package, only what decides that package's output", () => {
+    const reached = new Set<string>();
+    const ledger = shippingPathsOf('apps/lace-cardano-ledger');
+    expect(
+      isShipped('apps/lace-cardano-ledger/src/index.ts', reached, ledger),
+    ).toBe(true);
+    expect(
+      isShipped('apps/lace-cardano-ledger/package.json', reached, ledger),
+    ).toBe(true);
+    // Another package's files ship that package, not this one.
+    expect(isShipped('apps/lace-sdk/src/cardano.ts', reached, ledger)).toBe(
+      false,
+    );
+    expect(isShipped('apps/lace-cardano/package.json', reached, ledger)).toBe(
+      false,
+    );
+    const sdk = shippingPathsOf('apps/lace-sdk');
+    expect(isShipped('apps/lace-sdk/scripts/build.sh', reached, sdk)).toBe(
+      true,
+    );
+    expect(isShipped('apps/lace-cardano/src/index.ts', reached, sdk)).toBe(
+      false,
+    );
+    // The workspace's TypeScript configuration decides every build.
+    expect(isShipped('tsconfig.base.json', reached, ledger)).toBe(true);
+    expect(isShipped('tsconfig.base.json', reached, sdk)).toBe(true);
   });
 
   it('renders the changes and the API diff', () => {
@@ -631,6 +716,16 @@ describe('the family', () => {
     expect(exports.get('@laceio/cardano/core:Address')?.signature).toContain(
       'bech32',
     );
+    // One package's exports alone, for its own release.
+    expect([...readFamilyExports(root, '@laceio/cardano').keys()]).toEqual([
+      '@laceio/cardano/core:Address',
+    ]);
+    expect([...readFamilyExports(root, '@laceio/sdk').keys()]).toEqual([
+      'index:sdk',
+    ]);
+    expect(() => readFamilyExports(root, '@laceio/other')).toThrow(
+      /not a package of the SDK's family/,
+    );
   });
 });
 
@@ -677,6 +772,56 @@ describe('stampVersion', () => {
     expect(() =>
       stampVersion(tree(DEVELOPMENT_VERSION, '0.1.0'), '0.2.0'),
     ).toThrow(/pins @laceio\/cardano 0\.1\.0/);
+  });
+
+  const others = {
+    '@laceio/sdk': '0.1.0',
+    '@laceio/cardano': '0.1.2',
+    '@laceio/cardano-trezor': '0.1.0',
+  };
+
+  it("stamps one package's release, the others at their latest releases", () => {
+    const root = tree(DEVELOPMENT_VERSION, DEVELOPMENT_VERSION);
+    expect(
+      stampPackage(root, {
+        name: '@laceio/cardano-ledger',
+        version: '0.1.1',
+        others,
+      }),
+    ).toEqual([
+      '@laceio/sdk@0.1.0',
+      '@laceio/cardano@0.1.2',
+      '@laceio/cardano-ledger@0.1.1',
+      '@laceio/cardano-trezor@0.1.0',
+    ]);
+    expect(read(root, 'apps/lace-cardano-ledger').dependencies).toEqual({
+      '@laceio/cardano': '^0.1.2',
+      other: '^1.0.0',
+    });
+  });
+
+  it("pins a canary's family dependencies exactly", () => {
+    const root = tree(DEVELOPMENT_VERSION, DEVELOPMENT_VERSION);
+    stampPackage(root, {
+      name: '@laceio/cardano-ledger',
+      version: '0.1.1-canary.0',
+      others: { ...others, '@laceio/cardano': '0.1.2-canary.3' },
+    });
+    expect(read(root, 'apps/lace-cardano-ledger').dependencies).toEqual({
+      '@laceio/cardano': '0.1.2-canary.3',
+      other: '^1.0.0',
+    });
+  });
+
+  it('refuses a release that leaves a package without a version', () => {
+    const { '@laceio/cardano': _, ...withoutCardano } = others;
+    expect(() =>
+      stampPackage(tree(DEVELOPMENT_VERSION, DEVELOPMENT_VERSION), {
+        name: '@laceio/cardano-ledger',
+        version: '0.1.1',
+        others: withoutCardano,
+      }),
+    ).toThrow(/names no version of @laceio\/cardano/);
   });
 });
 
@@ -942,5 +1087,130 @@ describe('the release family', () => {
     expect(roots.filter(root => root !== 'apps/lace-sdk')).toEqual(
       [...CARDANO_APPS].sort(),
     );
+  });
+});
+
+describe("a package's releases", () => {
+  const record = (tagName: string, isDraft = false) => ({
+    tagName,
+    isDraft,
+    isPrerelease: tagName.includes('-canary.'),
+    publishedAt: '',
+  });
+
+  it('read a tag as npm names the package and version', () => {
+    expect(parsePackageReleaseTag('@laceio/cardano@0.1.2-canary.3')).toEqual({
+      tag: '@laceio/cardano@0.1.2-canary.3',
+      package: '@laceio/cardano',
+      base: '0.1.2',
+      canary: 3,
+      version: '0.1.2-canary.3',
+    });
+    expect(parsePackageReleaseTag('@laceio/sdk@1.0.0')?.canary).toBeUndefined();
+    // Only the family's packages, and only releases and canaries.
+    for (const tag of [
+      '@laceio/other@0.1.0',
+      '@laceio/sdk@0.1.0-beta.1',
+      'lace-sdk@0.1.0',
+      '@cardano-sdk/core@0.47.0',
+    ]) {
+      expect(parsePackageReleaseTag(tag)).toBeUndefined();
+    }
+  });
+
+  it("take the package's own releases, and the family's, which published every package", () => {
+    const records = [
+      record('lace-sdk@0.1.0'),
+      record('lace-sdk@0.1.1-canary.0'),
+      record('@laceio/cardano@0.1.1'),
+      record('@laceio/sdk@0.1.2-canary.0'),
+      record('@laceio/cardano@0.1.2', true),
+    ];
+    expect(
+      packageReleasesOf(records, '@laceio/cardano').map(({ tag }) => tag),
+    ).toEqual([
+      'lace-sdk@0.1.0',
+      'lace-sdk@0.1.1-canary.0',
+      '@laceio/cardano@0.1.1',
+    ]);
+    expect(
+      packageReleasesOf(records, '@laceio/sdk').map(({ tag }) => tag),
+    ).toEqual([
+      'lace-sdk@0.1.0',
+      'lace-sdk@0.1.1-canary.0',
+      '@laceio/sdk@0.1.2-canary.0',
+    ]);
+    // The package's previous stable release and latest canary are its own.
+    const cardano = packageReleasesOf(records, '@laceio/cardano');
+    expect(previousStable(cardano)?.tag).toBe('@laceio/cardano@0.1.1');
+    expect(changeReference(cardano, 'canary')?.tag).toBe(
+      'lace-sdk@0.1.1-canary.0',
+    );
+    expect(
+      nextCanaryNumber(packageReleasesOf(records, '@laceio/sdk'), '0.1.2'),
+    ).toBe(1);
+  });
+
+  it("prefer the package's own release of a version the family also named", () => {
+    expect(
+      packageReleasesOf(
+        [record('lace-sdk@0.1.1'), record('@laceio/sdk@0.1.1')],
+        '@laceio/sdk',
+      ).map(({ tag }) => tag),
+    ).toEqual(['@laceio/sdk@0.1.1']);
+  });
+
+  it('refuse a mislabelled record, and a package outside the family', () => {
+    expect(() =>
+      packageReleasesOf(
+        [
+          {
+            tagName: '@laceio/cardano@0.1.2',
+            isDraft: false,
+            isPrerelease: true,
+          },
+        ],
+        '@laceio/cardano',
+      ),
+    ).toThrow(/disagree with their tags/);
+    expect(() => packageReleasesOf([], '@laceio/other')).toThrow(
+      /not a package of the SDK's family/,
+    );
+  });
+
+  it("are checked against their tags like the family's", () => {
+    const records = [record('lace-sdk@0.1.0'), record('@laceio/cardano@0.1.1')];
+    expect(
+      releaseRecordProblems(records, [
+        'lace-sdk@0.1.0',
+        '@laceio/cardano@0.1.1',
+      ]),
+    ).toEqual([]);
+    expect(releaseRecordProblems(records, ['lace-sdk@0.1.0'])).toEqual([
+      '@laceio/cardano@0.1.1 has a published release but no tag: restore the tag, or delete the release',
+    ]);
+    expect(
+      releaseRecordProblems(
+        [record('lace-sdk@0.1.0')],
+        ['lace-sdk@0.1.0', '@laceio/sdk@0.1.1'],
+      ),
+    ).toEqual([
+      expect.stringContaining(
+        '@laceio/sdk@0.1.1 is tagged but has no published release',
+      ),
+    ]);
+  });
+
+  it("names the family's packages by the manifests", () => {
+    const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
+    for (const { name, directory } of PACKAGES) {
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          path.join(repositoryRoot, directory, 'package.json'),
+          'utf8',
+        ),
+      ) as { name: string };
+      expect(manifest.name).toBe(name);
+    }
   });
 });

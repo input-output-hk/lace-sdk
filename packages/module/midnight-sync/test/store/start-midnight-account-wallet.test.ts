@@ -6,6 +6,7 @@ import {
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { AuthenticationCancelledError } from '@lace-contract/signer';
 import * as LaceSdkUtil from '@lace-lib/util';
+import { configureWasmProver } from '@lace-lib/vendor/wasm-proof-backend';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import * as WalletSdk from '@midnightntwrk/wallet-sdk';
 import * as WalletSdkDustWallet from '@midnightntwrk/wallet-sdk/dust';
@@ -140,6 +141,9 @@ const { zswapSecretKeysMock, dustSecretKeyMock } = vi.hoisted(() => ({
   dustSecretKeyMock: { clear: vi.fn() },
 }));
 vi.mock('@midnight-ntwrk/ledger-v8', () => ({
+  createProvingPayload: vi.fn((preimage: Uint8Array) => preimage),
+  createCheckPayload: vi.fn((preimage: Uint8Array) => preimage),
+  parseCheckResult: vi.fn(() => []),
   DustSecretKey: { fromSeed: vi.fn().mockReturnValue(dustSecretKeyMock) },
   ZswapSecretKeys: {
     fromSeed: vi.fn().mockReturnValue(zswapSecretKeysMock),
@@ -519,30 +523,50 @@ describe('startMidnightAccountWallet', () => {
       );
     });
 
-    it('injects the proving service and gives the facade no proof-server URL of its own', async () => {
-      const keyManager = createMockKeyManager({
-        keys$: of(createMockAccountKeys()),
-      });
+    it.each([
+      { kind: 'local-host', url: 'http://localhost:6300' },
+      { kind: 'in-process' },
+    ] as const)(
+      'injects the $kind service without a fallback server URL',
+      async proofServer => {
+        configureWasmProver(() => ({
+          check: async () => [],
+          prove: async () => new Uint8Array(),
+        }));
+        const keyManager = createMockKeyManager({
+          keys$: of(createMockAccountKeys()),
+        });
 
-      await firstValueFrom(
-        midnightSideEffectDependencies.startMidnightAccountWallet({
-          account:
-            midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
-          config,
-          store,
-          keyManager,
-        }),
-      );
+        await firstValueFrom(
+          midnightSideEffectDependencies.startMidnightAccountWallet({
+            account:
+              midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
+            config: { ...config, proofServer },
+            store,
+            keyManager,
+          }),
+        );
 
-      const initArgument = WalletFacadeInitMock.mock.calls[0]?.[0] as {
-        configuration: Record<string, unknown>;
-        provingService?: () => unknown;
-      };
-      expect(initArgument.provingService).toBeTypeOf('function');
-      expect(initArgument.configuration).not.toHaveProperty('provingServerUrl');
-    });
+        const initArgument = WalletFacadeInitMock.mock.calls[0]?.[0] as {
+          configuration: Record<string, unknown>;
+          provingService?: () => unknown;
+        };
+        expect(initArgument.provingService).toBeTypeOf('function');
+        expect(initArgument.configuration).not.toHaveProperty(
+          'provingServerUrl',
+        );
+      },
+    );
 
     describe('on a tee-delegated proof server', () => {
+      const createMockAttestedProver: CreateAttestedProver = () => ({
+        id: 'test',
+        phases: [],
+        operations: ['prove'],
+        establishAttestedSession: async () => {
+          throw new Error('Unexpected proving during wallet startup');
+        },
+      });
       const teeConfig: MidnightNetworkConfig = {
         ...config,
         proofServer: {
@@ -591,7 +615,7 @@ describe('startMidnightAccountWallet', () => {
               networkId,
             },
           } as unknown as InMemoryWalletAccount<MidnightAccountProps>;
-          const createAttestedProver = vi.fn<CreateAttestedProver>();
+          const createAttestedProver = vi.fn(createMockAttestedProver);
           const dependencies = createMidnightSideEffectDependencies({
             createAttestedProver,
           })({ runtime: {} } as Readonly<ModuleInitProps>, {
@@ -653,7 +677,7 @@ describe('startMidnightAccountWallet', () => {
       );
 
       it('starts when the loadout supplies an attested prover', async () => {
-        const createAttestedProver = vi.fn();
+        const createAttestedProver = vi.fn(createMockAttestedProver);
         const dependencies = createMidnightSideEffectDependencies({
           createAttestedProver,
         })({ runtime: {} } as Readonly<ModuleInitProps>, {
@@ -697,15 +721,24 @@ describe('startMidnightAccountWallet', () => {
           getLedgerIndexerUrl: expect.any(Function) as unknown,
         });
         await expect(
-          wallet.proofServerTransport.prove(new Uint8Array([1])),
+          wallet.proofCircuitProvider.prove({
+            serializedPreimage: new Uint8Array([1]),
+            keyLocation: 'midnight/test',
+          }),
         ).resolves.toEqual(new Uint8Array([7]));
         prove.mockRejectedValueOnce(new Error('channel failed'));
         await expect(
-          wallet.proofServerTransport.prove(new Uint8Array([2])),
+          wallet.proofCircuitProvider.prove({
+            serializedPreimage: new Uint8Array([2]),
+            keyLocation: 'midnight/test',
+          }),
         ).rejects.toThrow('channel failed');
         expect(close).toHaveBeenCalledTimes(2);
         await expect(
-          wallet.proofServerTransport.check(new Uint8Array([3])),
+          wallet.proofCircuitProvider.check({
+            serializedPreimage: new Uint8Array([3]),
+            keyLocation: 'midnight/test',
+          }),
         ).rejects.toThrow('not available');
         expect(prove).toHaveBeenCalledTimes(2);
         await firstValueFrom(wallet.stop());

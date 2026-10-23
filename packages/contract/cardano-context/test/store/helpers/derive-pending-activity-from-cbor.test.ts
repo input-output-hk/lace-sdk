@@ -579,6 +579,66 @@ describe('derivePendingActivityFromCbor', () => {
       );
       expect(cardano!.producedOutputs[0][1].value.coins).toBe(5_000_000n);
     });
+
+    it('records every body withdrawal, own or not, with exact quantities', () => {
+      const ownRewardAccount = Cardano.RewardAccount(
+        'stake_test1up7pvfq8zn4quy45r2g572290p9vf99mr9tn7r9xrgy2l2qdsf58d',
+      );
+      const otherRewardAccount = Cardano.RewardAccount(
+        'stake_test1upjghly04re6yrr3nh3ntp9en3p5flnxh2yf6camc3vfhwg6dhc5w',
+      );
+      const core = makeCoreTx({
+        inputs: [{ txId: PREV_TX_ID, index: 0 }],
+        outputs: [
+          {
+            address: Cardano.PaymentAddress(OWN_ADDRESS),
+            value: { coins: 5_000_000n },
+          },
+        ],
+        fee: 200_000n,
+        withdrawals: [
+          { stakeAddress: ownRewardAccount, quantity: 9_007_199_254_740_993n },
+          { stakeAddress: otherRewardAccount, quantity: 1_000_000n },
+        ],
+      });
+
+      const activity = derivePendingActivityFromCbor({
+        serializedTx: buildTxCbor(core),
+        accountId: ACCOUNT_ID,
+        accountAddresses: [OWN_ADDRESS],
+        accountUtxos: [],
+      });
+
+      expect(getCardanoInFlight(activity)?.withdrawals).toEqual(
+        expect.arrayContaining([
+          { stakeAddress: ownRewardAccount, quantity: 9_007_199_254_740_993n },
+          { stakeAddress: otherRewardAccount, quantity: 1_000_000n },
+        ]),
+      );
+      expect(getCardanoInFlight(activity)?.withdrawals).toHaveLength(2);
+    });
+
+    it('leaves withdrawals out when the body has none', () => {
+      const core = makeCoreTx({
+        inputs: [{ txId: PREV_TX_ID, index: 0 }],
+        outputs: [
+          {
+            address: Cardano.PaymentAddress(OWN_ADDRESS),
+            value: { coins: 5_000_000n },
+          },
+        ],
+        fee: 200_000n,
+      });
+
+      const activity = derivePendingActivityFromCbor({
+        serializedTx: buildTxCbor(core),
+        accountId: ACCOUNT_ID,
+        accountAddresses: [OWN_ADDRESS],
+        accountUtxos: [],
+      });
+
+      expect(getCardanoInFlight(activity)).not.toHaveProperty('withdrawals');
+    });
   });
 
   describe('custody accounts', () => {

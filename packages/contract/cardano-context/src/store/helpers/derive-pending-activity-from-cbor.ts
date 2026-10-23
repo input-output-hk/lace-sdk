@@ -56,6 +56,9 @@ export const derivePendingActivityFromCbor = ({
   const cardanoInFlight: CardanoActivityBlockchainSpecific = {
     consumedInputs: [...effects.consumedInputs],
     producedOutputs: [...effects.producedOutputs],
+    ...(effects.withdrawals.length > 0 && {
+      withdrawals: [...effects.withdrawals],
+    }),
     ...pendingActivityExtensionMetadata(extension),
   };
 

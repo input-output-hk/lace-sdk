@@ -7,7 +7,7 @@
 // (dependency-scope.ts), and the files of each package that decide its
 // output.
 //
-//   node scripts/release-scope.ts changed [<ref>]                 JSON: { ref, ships, files }
+//   node scripts/release-scope.ts changed [<ref>] [--package <name>] JSON: { ref, ships, files }
 //   node scripts/release-scope.ts notes [<ref>] [--api <json>] [--first-canary] [--out <file>]
 //   node scripts/release-scope.ts public-notes [<ref>] --api <json> [--out <file>]
 //   node scripts/release-scope.ts fragment-check <base>             exits 1 without a fragment
@@ -47,6 +47,7 @@ import {
   type Seed,
   signatureChanges,
 } from './dependency-scope.ts';
+import { dependencyVersions, movedDependencies } from './next-version.ts';
 import {
   CARDANO_APPS,
   cardanoReachedFiles,
@@ -56,7 +57,7 @@ import {
   reachedWorkspaceFiles,
 } from './reach.mjs';
 import { internalTermFindings } from './release-notes-check.ts';
-import { TAG_PREFIX } from './releases.mjs';
+import { PACKAGES, releaseName, TAG_PREFIX } from './releases.mjs';
 
 const repositoryRoot = path.resolve(packageDirectory, '../..');
 
@@ -68,7 +69,7 @@ const repositoryRoot = path.resolve(packageDirectory, '../..');
  * major sets the version. Tests, docs and the release tooling itself are left
  * out.
  */
-export const SHIPPING_PATHS: readonly string[] = [
+const SDK_SHIPPING_PATHS: readonly string[] = [
   'apps/lace-sdk/src/',
   'apps/lace-sdk/package.json',
   // The build target's command decides what the build runs.
@@ -86,18 +87,38 @@ export const SHIPPING_PATHS: readonly string[] = [
   'apps/lace-sdk/scripts/entries.mjs',
   'apps/lace-sdk/scripts/pack.mjs',
   'apps/lace-sdk/scripts/reach.mjs',
-  ...CARDANO_APPS.flatMap(app => [
-    `${app}/src/`,
-    `${app}/scripts/build.sh`,
-    `${app}/package.json`,
-    `${app}/project.json`,
-    `${app}/README.md`,
-    `${app}/LICENSE`,
-    `${app}/NOTICE`,
-    `${app}/tsdown.config.ts`,
-    `${app}/tsconfig.json`,
-    `${app}/tsconfig.dts.json`,
-  ]),
+  // Which @cardano-sdk imports the bundle and declarations import from
+  // @laceio/cardano instead: the subpaths its manifest exports.
+  'apps/lace-sdk/scripts/laceio-cardano.mjs',
+  'apps/lace-cardano/package.json',
+];
+
+/** A Cardano package's files that decide its published output. */
+const cardanoShippingPaths = (app: string): string[] => [
+  `${app}/src/`,
+  `${app}/scripts/build.sh`,
+  `${app}/package.json`,
+  `${app}/project.json`,
+  `${app}/README.md`,
+  `${app}/LICENSE`,
+  `${app}/NOTICE`,
+  `${app}/tsdown.config.ts`,
+  `${app}/tsconfig.json`,
+  `${app}/tsconfig.dts.json`,
+];
+
+/** The files that decide one package's published output, by its directory. */
+export const shippingPathsOf = (directory: string): string[] => [
+  ...(directory === 'apps/lace-sdk'
+    ? SDK_SHIPPING_PATHS
+    : cardanoShippingPaths(directory)),
+  'tsconfig.base.json',
+];
+
+/** The files that decide what any package of the family publishes. */
+export const SHIPPING_PATHS: readonly string[] = [
+  ...SDK_SHIPPING_PATHS,
+  ...CARDANO_APPS.flatMap(cardanoShippingPaths),
   'tsconfig.base.json',
 ];
 
@@ -122,6 +143,8 @@ export interface ShippedChange {
 export interface NotesApi {
   /** The release's tag, version and channel, for the public notes. */
   tag?: string;
+  /** The one package the release publishes; the whole family when absent. */
+  package?: string;
   version?: string;
   channel?: string;
   previous: string | null;
@@ -141,27 +164,41 @@ export interface NotesApi {
   };
 }
 
-/** Whether `file` (repository-relative) is part of what the SDK ships. */
-export const isShipped = (file: string, reached: ReadonlySet<string>) =>
+/**
+ * Whether `file` (repository-relative) is part of what the family ships, or
+ * with one package's `paths`, what that package ships.
+ */
+export const isShipped = (
+  file: string,
+  reached: ReadonlySet<string>,
+  paths: readonly string[] = SHIPPING_PATHS,
+) =>
   reached.has(file) ||
-  SHIPPING_PATHS.some(entry =>
+  paths.some(entry =>
     entry.endsWith('/') ? file.startsWith(entry) : file === entry,
   );
 
 /**
  * The workspace source the SDK's two builds and the Cardano packages reach,
+ * or with a package's `directory`, what that package's build reaches,
  * repository-relative.
  */
-export const reachedFiles = (): Set<string> =>
+export const reachedFiles = (directory?: string): Set<string> =>
   new Set(
     [
-      ...(['stable', 'canary'] as const).flatMap(channel =>
-        reachedWorkspaceFiles(
-          channelEntries(channel),
-          compilerOptions(channel),
-        ),
-      ),
-      ...cardanoReachedFiles(),
+      ...(directory === undefined || directory === 'apps/lace-sdk'
+        ? (['stable', 'canary'] as const).flatMap(channel =>
+            reachedWorkspaceFiles(
+              channelEntries(channel),
+              compilerOptions(channel),
+            ),
+          )
+        : []),
+      ...(directory === undefined
+        ? cardanoReachedFiles()
+        : directory === 'apps/lace-sdk'
+        ? []
+        : cardanoReachedFiles([directory])),
     ].map(file =>
       path.relative(repositoryRoot, file).split(path.sep).join('/'),
     ),
@@ -171,13 +208,42 @@ export const reachedFiles = (): Set<string> =>
 const FAMILY_APPS = ['apps/lace-sdk', ...CARDANO_APPS];
 
 /**
+ * What a release covers: the workspace source its builds reach, the paths
+ * that ship as they are, and the family packages whose manifests, sources
+ * and build tools seed its third-party dependencies.
+ */
+interface ReleaseScope {
+  reached: ReadonlySet<string>;
+  paths: readonly string[];
+  apps: readonly string[];
+}
+
+/** The whole family's scope: every package releases together. */
+const familyScope = (): ReleaseScope => ({
+  reached: reachedFiles(),
+  paths: SHIPPING_PATHS,
+  apps: FAMILY_APPS,
+});
+
+/** One family package's scope, from its directory. */
+const packageScope = (directory: string): ReleaseScope => ({
+  reached: reachedFiles(directory),
+  paths: shippingPathsOf(directory),
+  apps: [directory],
+});
+
+/**
  * The third-party packages the family's builds reach, as seeds to resolve in
  * a lockfile: each module the reached source and the family's own source
  * import, from the package directory that imports it, and what the family's
- * manifests at `ref` declare.
+ * manifests at `ref` declare; with `apps`, only those packages'.
  */
-const dependencySeeds = (ref: string, reached: ReadonlySet<string>): Seed[] => {
-  const ownSources = FAMILY_APPS.flatMap(app =>
+const dependencySeeds = (
+  ref: string,
+  reached: ReadonlySet<string>,
+  apps: readonly string[],
+): Seed[] => {
+  const ownSources = apps.flatMap(app =>
     fs
       .readdirSync(path.join(repositoryRoot, app, 'src'), { recursive: true })
       .map(file => `${app}/src/${String(file).split(path.sep).join('/')}`),
@@ -200,9 +266,10 @@ const dependencySeeds = (ref: string, reached: ReadonlySet<string>): Seed[] => {
     ...buildToolSeeds(
       ref,
       readAt<Lockfile>(ref, 'package-lock.json') ?? { packages: {} },
+      apps,
     ),
   );
-  for (const app of FAMILY_APPS) {
+  for (const app of apps) {
     const manifest = readAt<Record<string, Record<string, string>>>(
       ref,
       `${app}/package.json`,
@@ -261,10 +328,14 @@ const filesAt = (ref: string, directory: string): string[] => {
  * change to the build itself is compared like any other. A family app that
  * `ref` does not have yet builds nothing there.
  */
-const buildToolSeeds = (ref: string, lock: Lockfile): Seed[] => {
+const buildToolSeeds = (
+  ref: string,
+  lock: Lockfile,
+  apps: readonly string[],
+): Seed[] => {
   const owners = binaryOwners(lock);
   const read = (file: string) => textAt(ref, file);
-  return FAMILY_APPS.flatMap(app => {
+  return apps.flatMap(app => {
     const project = read(`${app}/project.json`);
     if (project === undefined) return [];
     return buildTargetSeeds({
@@ -294,10 +365,14 @@ const readAt = <T>(ref: string, file: string): T | undefined => {
   }
 };
 
-const signatureAt = (ref: string, reached: ReadonlySet<string>) =>
+const signatureAt = (
+  ref: string,
+  reached: ReadonlySet<string>,
+  apps: readonly string[],
+) =>
   lockSignature(
     readAt<Lockfile>(ref, 'package-lock.json') ?? { packages: {} },
-    dependencySeeds(ref, reached),
+    dependencySeeds(ref, reached, apps),
     readAt<{ overrides?: Record<string, unknown> }>(ref, 'package.json')
       ?.overrides,
   );
@@ -305,14 +380,17 @@ const signatureAt = (ref: string, reached: ReadonlySet<string>) =>
 /**
  * The third-party packages whose resolved entries, or the root overrides
  * that name them, differ between two commits, among those the family's
- * builds reach.
+ * builds reach, or with a package's scope, that package's builds reach.
  */
 export const dependencyChanges = (
   from: string,
   to: string,
-  reached: ReadonlySet<string> = reachedFiles(),
+  { reached, apps }: Omit<ReleaseScope, 'paths'> = familyScope(),
 ): string[] =>
-  signatureChanges(signatureAt(from, reached), signatureAt(to, reached));
+  signatureChanges(
+    signatureAt(from, reached, apps),
+    signatureAt(to, reached, apps),
+  );
 
 /**
  * The pull request a commit on the first-parent history merged: GitHub's
@@ -391,14 +469,40 @@ const changedFiles = (from: string, to: string): string[] =>
     .split('\n')
     .filter(Boolean);
 
-/** The shipped files that differ between `ref` and HEAD. */
+/**
+ * Whether a family package's project.json changed only around its build
+ * target: tags and dependency hints decide nothing the package publishes.
+ */
+export const isBuildTargetUnchanged = (
+  file: string,
+  before: (file: string) => ProjectJson | undefined,
+  after: (file: string) => ProjectJson | undefined,
+) =>
+  file.endsWith('/project.json') &&
+  FAMILY_APPS.includes(path.posix.dirname(file)) &&
+  JSON.stringify(before(file)?.targets?.build) ===
+    JSON.stringify(after(file)?.targets?.build);
+
+/**
+ * The shipped files that differ between `ref` and HEAD: the family's, or with
+ * one package's scope, that package's.
+ */
 export const shippedChanges = (
   ref: string,
-  reached: ReadonlySet<string> = reachedFiles(),
+  scope: ReleaseScope = familyScope(),
 ): string[] => {
+  const { reached, paths } = scope;
   const files = changedFiles(ref, 'HEAD');
   return [
-    ...files.filter(file => isShipped(file, reached)),
+    ...files.filter(
+      file =>
+        isShipped(file, reached, paths) &&
+        !isBuildTargetUnchanged(
+          file,
+          entry => readAt<ProjectJson>(ref, entry),
+          entry => readAt<ProjectJson>('HEAD', entry),
+        ),
+    ),
     ...workspaceManifestChanges({
       files,
       reached,
@@ -406,12 +510,26 @@ export const shippedChanges = (
       after: file => readAt<Manifest>('HEAD', file),
     }).map(entry => `manifest: ${entry}`),
     ...(files.some(isDependencyFile)
-      ? dependencyChanges(ref, 'HEAD', reached).map(
+      ? dependencyChanges(ref, 'HEAD', scope).map(
           entry => `dependency: ${entry}`,
         )
       : []),
   ];
 };
+
+/**
+ * The family dependencies of the package in `directory` whose range moved
+ * to a new compatibility line between two sets of versions (`name@version`,
+ * space-separated), as `dependency line: name@from→to`.
+ */
+export const dependencyLineChanges = (
+  directory: string,
+  since: string | undefined,
+  now: string | undefined,
+): string[] =>
+  movedDependencies(dependencyVersions(directory, since, now)).map(
+    moved => `dependency line: ${moved}`,
+  );
 
 /**
  * The commits on HEAD's first-parent history since `ref`, each with the
@@ -462,6 +580,8 @@ export const cleanTitle = (title: string): string =>
     .replaceAll(new RegExp(`\\s*\\[${TICKET}\\]`, 'gi'), '')
     .replaceAll(new RegExp(`\\(${TICKET}\\)`, 'gi'), '')
     .replaceAll(new RegExp(`\\b${TICKET}\\b[:/]?\\s*`, 'gi'), '')
+    // The separator a leading ticket left: `[LW-123] - …`.
+    .replace(/^\s*[-–—:]\s+/, '')
     .replaceAll(/\s{2,}/g, ' ')
     .trim();
 
@@ -510,11 +630,31 @@ export const FRAGMENT_KINDS = [
   'Security',
 ] as const;
 
+/**
+ * The packages a fragment can name (`custom.Package`): one package of the
+ * family by its id, or `all` for a change every package's users see.
+ */
+export const FRAGMENT_PACKAGES = [
+  'sdk',
+  'cardano',
+  'cardano-ledger',
+  'cardano-trezor',
+  'all',
+] as const;
+
 export interface Fragment {
   /** The fragment's path, repository-relative. */
   file: string;
   kind: (typeof FRAGMENT_KINDS)[number];
   body: string;
+  /** The packages whose release notes list it, by npm name. */
+  packages: string[];
+  /**
+   * Whether the fragment names its package. One written before fragments
+   * named a package reads as `all`, so it never stops a release's notes;
+   * the changelog check asks for the name on any fragment a change touches.
+   */
+  packageNamed: boolean;
   /**
    * The build the change is in: `canary` for a feature only the canary build
    * has, which a stable release's notes leave out.
@@ -545,14 +685,44 @@ export const parseFragment = (file: string, text: string): Fragment => {
       `${file}: custom.Build must be stable or canary, not ${String(build)}`,
     );
   }
+  const named =
+    custom.Package === undefined
+      ? 'all'
+      : FRAGMENT_PACKAGES.find(known => known === custom.Package);
+  if (!named) {
+    throw new Error(
+      `${file}: custom.Package must be one of ${FRAGMENT_PACKAGES.join(
+        ', ',
+      )}, not ${String(custom.Package)}`,
+    );
+  }
+  const packages =
+    named === 'all' ? PACKAGES.map(({ name }) => name) : [`@laceio/${named}`];
   const time =
     record.time instanceof Date
       ? record.time.toISOString()
       : typeof record.time === 'string' || typeof record.time === 'number'
       ? String(record.time)
       : '';
-  return { file, kind, body, build, time };
+  return {
+    file,
+    kind,
+    body,
+    packages,
+    packageNamed: custom.Package !== undefined,
+    build,
+    time,
+  };
 };
+
+/** The fragments the release notes of `name` list, or all of them for the family's. */
+export const fragmentsOf = (
+  fragments: readonly Fragment[],
+  name: string | undefined,
+): Fragment[] =>
+  name === undefined
+    ? [...fragments]
+    : fragments.filter(fragment => fragment.packages.includes(name));
 
 /** The fragment files that differ between `ref` and HEAD as `filter` selects. */
 const fragmentFilesSince = (ref: string, filter: 'A' | 'M', root: string) =>
@@ -591,16 +761,22 @@ export const fragmentsSince = (
   ).map(file => fragmentAtHead(file, root));
 
 /**
- * Those of `files` that a `lace-sdk@` tag's tree holds. A tag counts whether
- * or not its release was published: the check needs only git, and treating a
- * draft as released asks for a new fragment where an edit would have done.
+ * Those of `files` that a release tag's tree holds, the family's or a
+ * package's. A tag counts whether or not its release was published: the
+ * check needs only git, and treating a draft as released asks for a new
+ * fragment where an edit would have done.
  */
 const releasedFragmentFiles = (
   files: readonly string[],
   root: string,
 ): Set<string> => {
   const tags = git(
-    ['for-each-ref', '--format=%(refname)', `refs/tags/${TAG_PREFIX}*`],
+    [
+      'for-each-ref',
+      '--format=%(refname)',
+      `refs/tags/${TAG_PREFIX}*`,
+      'refs/tags/@laceio/',
+    ],
     root,
   )
     .split('\n')
@@ -671,36 +847,53 @@ const fragmentLines = (fragments: readonly Fragment[]): string[] =>
   });
 
 /**
- * A pull request's fragment problems: a change to what the family ships that
- * adds no fragment, nor edits one no release holds yet, and any fragment it
- * touches naming an internal term, which the public notes' leak-check would
- * refuse at release.
+ * A pull request's fragment problems: a change to what a package of the
+ * family ships that adds no fragment naming that package, nor edits one no
+ * release holds yet, and any fragment it touches naming an internal term,
+ * which the public notes' leak-check would refuse at release.
  */
 export const fragmentProblems = ({
   shipped,
   fragments,
   released = [],
 }: {
-  shipped: readonly string[];
+  /** What the pull request changes that each package ships, by npm name. */
+  shipped: Readonly<Record<string, readonly string[]>>;
   /** The fragments the pull request adds or edits. */
   fragments: readonly Fragment[];
   /** The edited fragments a release already holds, which count for nothing. */
   released?: readonly string[];
 }): string[] => [
-  ...(shipped.length > 0 &&
-  fragments.every(fragment => released.includes(fragment.file))
-    ? [
-        `This change reaches what the SDK family ships (${shipped
-          .slice(0, 5)
-          .join(', ')}${shipped.length > 5 ? ', …' : ''}) and adds ${
-          released.length > 0
-            ? `no changelog fragment: a release already holds ${released.join(
-                ', ',
-              )}, so an edit to it reaches no later release's notes`
-            : 'or edits no changelog fragment'
-        }. From apps/lace-sdk, run \`npx changie new\` and describe the change for the SDK's users, edit an unreleased fragment already describing it, or label the pull request \`skip-changelog\` when they would not notice it.`,
-      ]
-    : []),
+  ...Object.entries(shipped)
+    .filter(
+      ([name, files]) =>
+        files.length > 0 &&
+        !fragments.some(
+          fragment =>
+            fragment.packages.includes(name) &&
+            !released.includes(fragment.file),
+        ),
+    )
+    .map(([name, files]) => {
+      const held = fragments
+        .filter(fragment => fragment.packages.includes(name))
+        .map(fragment => fragment.file);
+      return `This change reaches what \`${name}\` ships (${files
+        .slice(0, 5)
+        .join(', ')}${files.length > 5 ? ', …' : ''}) and adds ${
+        held.length > 0
+          ? `no changelog fragment for it: a release already holds ${held.join(
+              ', ',
+            )}, so an edit to it reaches no later release's notes`
+          : 'or edits no changelog fragment for it'
+      }. From apps/lace-sdk, run \`npx changie new\`, choose its package, and describe the change for its users, edit an unreleased fragment already describing it, or label the pull request \`skip-changelog\` when they would not notice it.`;
+    }),
+  ...fragments
+    .filter(fragment => !fragment.packageNamed)
+    .map(
+      fragment =>
+        `${fragment.file} names no package; add custom.Package (sdk, cardano, cardano-ledger, cardano-trezor or all), which \`npx changie new\` asks for.`,
+    ),
   ...fragments.flatMap(fragment =>
     internalTermFindings(fragment.body).map(
       finding =>
@@ -721,7 +914,10 @@ const apiLines = (api: NotesApi): string[] => {
   if (api.channel === 'canary' && api.canary) {
     const { canary } = api;
     return [
-      `The canary build, compared with \`${canary.previous}\`'s:`,
+      `The canary build, compared with ${releaseName(
+        canary.previous,
+        api.package,
+      )}'s:`,
       '',
       `- Added: ${exportList(canary.added)}`,
       `- Removed: ${exportList(canary.removed)}`,
@@ -729,7 +925,9 @@ const apiLines = (api: NotesApi): string[] => {
       ...(api.previous && api.base
         ? [
             '',
-            `It previews \`${api.base}\`: the stable API takes a ${api.bump} change since \`${api.previous}\`.`,
+            `It previews \`${api.base}\`: the stable API takes a ${
+              api.bump
+            } change since ${releaseName(api.previous, api.package)}.`,
           ]
         : []),
     ];
@@ -737,8 +935,20 @@ const apiLines = (api: NotesApi): string[] => {
   if (!api.previous) {
     return [`The first release, with ${api.added.length} stable exports.`];
   }
+  const previous = releaseName(api.previous, api.package);
+  // A release that changes no export says so, rather than listing none
+  // three times.
+  if (
+    api.added.length === 0 &&
+    api.removed.length === 0 &&
+    api.changed.length === 0
+  ) {
+    return [
+      `Compared with ${previous}: a ${api.bump} change; no export changed.`,
+    ];
+  }
   return [
-    `Compared with \`${api.previous}\`: a ${api.bump} change.`,
+    `Compared with ${previous}: a ${api.bump} change.`,
     '',
     `- Added: ${exportList(api.added)}`,
     `- Removed: ${exportList(api.removed)}`,
@@ -759,6 +969,7 @@ export const renderNotes = ({
   api,
   fragments = [],
   firstCanary = false,
+  package: name,
 }: {
   ref: string | undefined;
   changes: readonly ShippedChange[];
@@ -767,7 +978,10 @@ export const renderNotes = ({
   fragments?: readonly Fragment[];
   /** The first canary, whose changes count from the latest stable `ref`. */
   firstCanary?: boolean;
+  /** The family package released on its own; the SDK's family otherwise. */
+  package?: string;
 }): string => {
+  const subject = name ? `\`${name}\`` : 'the SDK';
   const released = releasedFragments(fragments, api?.channel);
   const lines =
     released.length > 0
@@ -780,15 +994,21 @@ export const renderNotes = ({
   const code = changes.filter(change => !change.dependencies);
   const dependencies = changes.filter(change => change.dependencies);
   if (ref === undefined) {
-    lines.push("The SDK's first release.");
+    lines.push(
+      name ? `The first release of ${subject}.` : "The SDK's first release.",
+    );
   } else if (firstCanary) {
     lines.push(
-      `The SDK's first canary, with the changes since \`${ref}\`${
+      `${
+        name ? `The first canary of ${subject}` : "The SDK's first canary"
+      }, with the changes since ${releaseName(ref, name)}${
         changes.length === 0 ? ': none, beyond the canary features' : ':'
       }`,
     );
   } else if (changes.length === 0) {
-    lines.push(`No change to what the SDK ships since \`${ref}\`.`);
+    lines.push(
+      `No change to what ${subject} ships since ${releaseName(ref, name)}.`,
+    );
   } else if (code.length === 0) {
     lines.push('Dependency updates only.');
   }
@@ -824,9 +1044,14 @@ export const renderPublicNotes = (
   const version = api.version ?? '';
   const isCanary = api.channel === 'canary';
   const released = releasedFragments(fragments, api.channel);
+  // The docs' versions follow @laceio/sdk's, so only its stable releases have
+  // an archive of their own; another package's release links the latest docs.
   const docs = isCanary
     ? 'https://sdk.lace.io/canary/'
-    : `https://sdk.lace.io/v/${version}/`;
+    : api.package === undefined || api.package === '@laceio/sdk'
+    ? `https://sdk.lace.io/v/${version}/`
+    : 'https://sdk.lace.io/';
+  const packages = api.package ? [api.package] : RELEASED_PACKAGES;
   const lines = [
     `## ${api.tag ?? `lace-sdk@${version}`}`,
     '',
@@ -851,7 +1076,7 @@ export const renderPublicNotes = (
     '',
     '## Packages',
     '',
-    ...RELEASED_PACKAGES.map(
+    ...packages.map(
       name =>
         `- [\`${name}@${version}\`](https://www.npmjs.com/package/${name}/v/${version})`,
     ),
@@ -864,14 +1089,26 @@ export const renderPublicNotes = (
 /** The changes since `ref` that reached what the SDK ships. */
 export const shippedPullRequests = (
   ref: string,
-  reached: ReadonlySet<string> = reachedFiles(),
-): ShippedChange[] =>
-  firstParentCommits(ref)
+  scope: ReleaseScope = familyScope(),
+): ShippedChange[] => {
+  const { reached, paths } = scope;
+  return firstParentCommits(ref)
     .map(commit => {
       const { parent } = commit;
       // A reached workspace package's manifest ships like its source.
       const code = [
-        ...commit.files.filter(file => isShipped(file, reached)),
+        ...commit.files.filter(
+          file =>
+            isShipped(file, reached, paths) &&
+            !(
+              parent &&
+              isBuildTargetUnchanged(
+                file,
+                entry => readAt<ProjectJson>(parent, entry),
+                entry => readAt<ProjectJson>(commit.sha, entry),
+              )
+            ),
+        ),
         ...(parent
           ? workspaceManifestChanges({
               files: commit.files,
@@ -885,7 +1122,7 @@ export const shippedPullRequests = (
         code.length === 0 &&
         commit.parent &&
         commit.files.some(isDependencyFile)
-          ? dependencyChanges(commit.parent, commit.sha, reached)
+          ? dependencyChanges(commit.parent, commit.sha, scope)
           : [];
       return { commit, code, dependencies };
     })
@@ -903,6 +1140,7 @@ export const shippedPullRequests = (
         ...(code.length === 0 && { dependencies: true }),
       };
     });
+};
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { positionals, values } = parseArgs({
@@ -911,6 +1149,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       api: { type: 'string' },
       out: { type: 'string' },
       'first-canary': { type: 'boolean' },
+      dependencies: { type: 'string' },
+      'since-dependencies': { type: 'string' },
+      package: { type: 'string' },
     },
   });
   const [command, ref] = positionals;
@@ -927,13 +1168,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   ) {
     // eslint-disable-next-line no-console -- usage
     console.error(
-      'usage: node scripts/release-scope.ts changed [<ref>] | notes [<ref>] [--api <json>] [--first-canary] [--out <file>] | public-notes [<ref>] --api <json> [--out <file>] | fragment-check <base>',
+      'usage: node scripts/release-scope.ts changed [<ref>] [--package <name>] | notes [<ref>] [--package <name>] [--api <json>] [--first-canary] [--out <file>] | public-notes [<ref>] --api <json> [--out <file>] | fragment-check <base>',
     );
     process.exit(2);
   }
   if (command === 'fragment-check') {
     const problems = fragmentProblems({
-      shipped: shippedChanges(ref ?? ''),
+      shipped: Object.fromEntries(
+        PACKAGES.map(({ name, directory }) => [
+          name,
+          shippedChanges(ref ?? '', packageScope(directory)),
+        ]),
+      ),
       ...pullRequestFragments(ref ?? ''),
     });
     for (const problem of problems) {
@@ -942,16 +1188,47 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
     process.exit(problems.length > 0 ? 1 : 0);
   }
+  // With --package, one package's scope: what its own build reaches and the
+  // files that decide its output.
+  const member = values.package
+    ? PACKAGES.find(({ name }) => name === values.package)
+    : undefined;
+  if (values.package && !member) {
+    throw new Error(`${values.package} is not a package of the SDK's family`);
+  }
   const publicApi = command === 'public-notes' ? readApi() : undefined;
   const result = publicApi
-    ? renderPublicNotes(publicApi, fragmentsSince(ref))
+    ? renderPublicNotes(
+        publicApi,
+        fragmentsOf(fragmentsSince(ref), publicApi.package),
+      )
     : command === 'changed'
     ? (() => {
-        const files = ref ? shippedChanges(ref) : [];
+        // A package's declarations import the types of the family packages it
+        // depends on, which its own build does not reach: a range that moved
+        // to a new compatibility line since `ref` is a change it ships, or it
+        // would keep the old line beside a dependant that moved.
+        const files = !ref
+          ? []
+          : member
+          ? [
+              ...shippedChanges(ref, packageScope(member.directory)),
+              ...dependencyLineChanges(
+                path.join(repositoryRoot, member.directory),
+                values['since-dependencies'],
+                values.dependencies,
+              ),
+            ]
+          : shippedChanges(ref);
         const isShipping = ref === undefined || files.length > 0;
         return (
           JSON.stringify(
-            { ref: ref ?? null, ships: isShipping, files },
+            {
+              ...(member && { package: member.name }),
+              ref: ref ?? null,
+              ships: isShipping,
+              files,
+            },
             undefined,
             2,
           ) + '\n'
@@ -959,10 +1236,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       })()
     : renderNotes({
         ref,
-        changes: ref ? shippedPullRequests(ref) : [],
+        changes: !ref
+          ? []
+          : member
+          ? shippedPullRequests(ref, packageScope(member.directory))
+          : shippedPullRequests(ref),
         api: readApi(),
-        fragments: fragmentsSince(ref),
+        fragments: fragmentsOf(fragmentsSince(ref), member?.name),
         firstCanary: values['first-canary'] === true,
+        ...(member && { package: member.name }),
       });
   if (values.out) fs.writeFileSync(values.out, result);
   process.stdout.write(result);

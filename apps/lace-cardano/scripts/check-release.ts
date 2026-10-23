@@ -23,10 +23,17 @@
  *   has; npm makes a package's first version its `latest`, so a package's
  *   first release is stable.
  *
+ * A package released on its own (`@laceio/cardano-ledger@X.Y.Z[-canary.N]`)
+ * is held to the same rules alone, at the tag's version, and each pin on
+ * another package of the family must be the range the release gives it
+ * (apps/lace-sdk/scripts/releases.mjs familyRange) on a version npm already
+ * has: a package releases after the packages it depends on.
+ *
  * Run after the three packages are built, with the release's tag:
  *
  * ```bash
  * RELEASE_TAG=lace-sdk@0.1.0 node apps/lace-cardano/scripts/check-release.ts
+ * RELEASE_TAG=@laceio/cardano@0.1.2 node apps/lace-cardano/scripts/check-release.ts
  * ```
  *
  * RELEASE_TARBALLS names a directory to write the tarball of each package the
@@ -55,6 +62,8 @@ import {
   stableReleaseProblems,
   type ReleaseOverride,
 } from '../../lace-sdk/scripts/release-compat.ts';
+// eslint-disable-next-line @nx/enforce-module-boundaries
+import { familyRange } from '../../lace-sdk/scripts/releases.mjs';
 
 const out = process.env.RELEASE_TARBALLS;
 if (out) fs.mkdirSync(out, { recursive: true });
@@ -64,14 +73,21 @@ const repositoryRoot =
   path.resolve(import.meta.dirname, '../../..');
 
 const tag = process.env.RELEASE_TAG ?? '';
-const tagMatch = /^lace-sdk@(\d+\.\d+\.\d+(?:-canary\.(\d+))?)$/.exec(tag);
+const tagMatch =
+  /^(lace-sdk|@laceio\/cardano(?:-ledger|-trezor)?)@(\d+\.\d+\.\d+(?:-canary\.(\d+))?)$/.exec(
+    tag,
+  );
 if (!tagMatch) {
-  throw new Error(`RELEASE_TAG must be lace-sdk@X.Y.Z[-canary.N], not ${tag}`);
+  throw new Error(
+    `RELEASE_TAG must be lace-sdk@X.Y.Z[-canary.N] or a Cardano package's <name>@X.Y.Z[-canary.N], not ${tag}`,
+  );
 }
-/** The version every package of the release carries. */
-const releaseVersion = tagMatch[1] ?? '';
+/** The package released on its own, or undefined for the family's release. */
+const releasedPackage = tagMatch[1] === 'lace-sdk' ? undefined : tagMatch[1];
+/** The version the release publishes. */
+const releaseVersion = tagMatch[2] ?? '';
 /** Whether the release is a canary. */
-const isCanary = tagMatch[2] !== undefined;
+const isCanary = tagMatch[3] !== undefined;
 const NPM_REGISTRY = [
   `--@laceio:registry=${
     process.env.RELEASE_NPM_REGISTRY ?? 'https://registry.npmjs.org'
@@ -251,13 +267,42 @@ const names = new Set(
   PACKAGES.map(({ directory }) => manifestOf(directory).name),
 );
 
+/**
+ * The problems with a pin of a package released on its own on another
+ * package of the family: the range its release gives the version the
+ * snapshot stamps that package at, which npm must already have.
+ */
+const pinProblems = (name: string, dependency: string, pin: string) => {
+  const directory = PACKAGES.find(
+    entry => manifestOf(entry.directory).name === dependency,
+  )?.directory;
+  if (directory === undefined) return [];
+  const { version } = manifestOf(directory);
+  const range = familyRange(version, isCanary);
+  if (pin !== range) {
+    return [
+      `${name} pins ${dependency} ${pin}, but its release gives ${dependency}@${version} the range ${range}`,
+    ];
+  }
+  return publishedVersions(dependency).includes(version)
+    ? []
+    : [
+        `${name} depends on ${dependency}@${version}, which npm does not have: release ${dependency} first`,
+      ];
+};
+
 const problems: string[] = [];
 const verdicts: string[] = [];
-for (const { directory, entries } of PACKAGES) {
+const released = PACKAGES.filter(
+  ({ directory }) =>
+    releasedPackage === undefined ||
+    manifestOf(directory).name === releasedPackage,
+);
+for (const { directory, entries } of released) {
   const packageDirectory = path.join(repositoryRoot, directory);
   const { name, version, dependencies } = manifestOf(directory);
-  // The release stamps its version into every package and every pin on
-  // another package of the family; any other version is not this release's.
+  // The release stamps its version into the package it publishes, and its
+  // pins on the family; any other version is not this release's.
   if (version !== releaseVersion) {
     problems.push(
       `${name}@${version}: ${directory}/package.json must name this release's version ${releaseVersion}, which the release stamps into its snapshot`,
@@ -265,7 +310,10 @@ for (const { directory, entries } of PACKAGES) {
     continue;
   }
   for (const [dependency, pin] of Object.entries(dependencies ?? {})) {
-    if (names.has(dependency) && pin !== releaseVersion) {
+    if (!names.has(dependency)) continue;
+    if (releasedPackage !== undefined) {
+      problems.push(...pinProblems(name, dependency, pin));
+    } else if (pin !== releaseVersion) {
       problems.push(
         `${name} pins ${dependency} ${pin}, but this release's ${dependency} is ${releaseVersion}`,
       );
@@ -332,7 +380,9 @@ for (const { directory, entries } of PACKAGES) {
 if (problems.length > 0) {
   // eslint-disable-next-line no-console -- the release gate's verdict
   console.error(
-    `The Cardano packages cannot be released:\n- ${problems.join('\n- ')}`,
+    `${
+      releasedPackage ?? 'The Cardano packages'
+    } cannot be released:\n- ${problems.join('\n- ')}`,
   );
   process.exit(1);
 }

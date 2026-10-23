@@ -20,9 +20,13 @@ import {
 import { internalTermFindings } from '../scripts/release-notes-check';
 import {
   cleanTitle,
+  dependencyLineChanges,
   type Fragment,
   fragmentProblems,
+  fragmentsOf,
   fragmentsSince,
+  isBuildTargetUnchanged,
+  type NotesApi,
   parseFragment,
   pullRequestFragments,
   renderNotes,
@@ -175,6 +179,85 @@ describe('the manifests of reached workspace packages', () => {
         'packages/lib/other/package.json',
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("a family dependency's line", () => {
+  const app = (directory: string) =>
+    path.resolve(import.meta.dirname, '../..', directory);
+
+  it('ships a package whose range on a family dependency moves to a new line', () => {
+    expect(
+      dependencyLineChanges(
+        app('lace-sdk'),
+        '@laceio/cardano@0.1.3 @laceio/cardano-ledger@0.1.0',
+        '@laceio/cardano@0.2.0 @laceio/cardano-ledger@0.2.0',
+      ),
+    ).toEqual(['dependency line: @laceio/cardano@0.1.3→0.2.0']);
+    expect(
+      dependencyLineChanges(
+        app('lace-cardano-ledger'),
+        '@laceio/cardano@0.1.3',
+        '@laceio/cardano@0.2.0-canary.0',
+      ),
+    ).toEqual(['dependency line: @laceio/cardano@0.1.3→0.2.0-canary.0']);
+  });
+
+  it('ships nothing for a move within the line, or a package it does not depend on', () => {
+    expect(
+      dependencyLineChanges(
+        app('lace-sdk'),
+        '@laceio/cardano@0.1.3',
+        '@laceio/cardano@0.1.9',
+      ),
+    ).toEqual([]);
+    expect(
+      dependencyLineChanges(
+        app('lace-cardano'),
+        '@laceio/sdk@0.1.0',
+        '@laceio/sdk@0.2.0',
+      ),
+    ).toEqual([]);
+    expect(
+      dependencyLineChanges(app('lace-sdk'), undefined, undefined),
+    ).toEqual([]);
+  });
+});
+
+describe('a change to a family project.json', () => {
+  const CARDANO = 'apps/lace-cardano/project.json';
+  const before = {
+    tags: ['scope:sdk'],
+    targets: { build: { command: 'tsdown', options: { cwd: 'apps/x' } } },
+  };
+  const unchanged = (after: Record<string, unknown>, file = CARDANO) =>
+    isBuildTargetUnchanged(
+      file,
+      () => before,
+      () => after,
+    );
+
+  it('ships nothing when only the tags or dependency hints change', () => {
+    expect(
+      unchanged({
+        ...before,
+        tags: ['scope:sdk', 'package:public'],
+        implicitDependencies: ['!lace-sdk'],
+      }),
+    ).toBe(true);
+  });
+
+  it('ships when the build target changes', () => {
+    expect(
+      unchanged({
+        ...before,
+        targets: { build: { command: 'tsdown --minify' } },
+      }),
+    ).toBe(false);
+  });
+
+  it('leaves other projects to the shipping paths', () => {
+    expect(unchanged(before, 'packages/lib/vendor/project.json')).toBe(false);
   });
 });
 
@@ -400,6 +483,9 @@ describe('ticket references and internal terms', () => {
       'fix: keep the form in view',
     );
     expect(cleanTitle('LW-123: wallet sync')).toBe('wallet sync');
+    expect(cleanTitle('[LW-15002] - Sheet flow navigation')).toBe(
+      'Sheet flow navigation',
+    );
     // Unhyphenated and branch-name forms.
     expect(cleanTitle('feat: show the balance [LW 789]')).toBe(
       'feat: show the balance',
@@ -536,8 +622,89 @@ describe('the public release notes', () => {
     // Without its canary build's diff, a canary reads as before.
     const { canary: _, ...withoutDiff } = canary;
     expect(renderPublicNotes(withoutDiff)).toContain(
-      'Compared with `lace-sdk@0.1.0`: a patch change.',
+      'Compared with `lace-sdk@0.1.0`: a patch change; no export changed.',
     );
+  });
+
+  it("names a package's previous release by the package's own version", () => {
+    const api: NotesApi = {
+      tag: '@laceio/cardano@0.1.1',
+      package: '@laceio/cardano',
+      version: '0.1.1',
+      channel: 'stable',
+      previous: 'lace-sdk@0.1.0',
+      bump: 'patch',
+      added: [],
+      removed: [],
+      changed: [],
+      compatible: [],
+    };
+    // Its previous version was the family's release.
+    expect(renderPublicNotes(api)).toContain(
+      'Compared with `@laceio/cardano@0.1.0` (released as `lace-sdk@0.1.0`): a patch change; no export changed.',
+    );
+    expect(
+      renderNotes({
+        ref: 'lace-sdk@0.1.0',
+        changes: [],
+        package: '@laceio/cardano',
+      }),
+    ).toContain(
+      'No change to what `@laceio/cardano` ships since `@laceio/cardano@0.1.0` (released as `lace-sdk@0.1.0`).',
+    );
+    // Its own release names itself.
+    expect(
+      renderPublicNotes({
+        ...api,
+        tag: '@laceio/cardano@0.1.2',
+        version: '0.1.2',
+        previous: '@laceio/cardano@0.1.1',
+        changed: ['index:Serialization'],
+      }),
+    ).toContain('Compared with `@laceio/cardano@0.1.1`: a patch change.');
+  });
+
+  it('names a package released on its own', () => {
+    const notes = (ref?: string) =>
+      renderNotes({ ref, changes: [], package: '@laceio/cardano' });
+    expect(notes()).toContain('The first release of `@laceio/cardano`.');
+    expect(notes('@laceio/cardano@0.1.0')).toContain(
+      'No change to what `@laceio/cardano` ships since `@laceio/cardano@0.1.0`.',
+    );
+    expect(
+      renderNotes({
+        ref: '@laceio/cardano@0.1.0',
+        changes: [],
+        firstCanary: true,
+        package: '@laceio/cardano',
+      }),
+    ).toContain('The first canary of `@laceio/cardano`, with the changes');
+  });
+
+  it('name only the package released, and the docs its version has', () => {
+    const cardano = renderPublicNotes({
+      ...api,
+      tag: '@laceio/cardano@0.1.2',
+      version: '0.1.2',
+      package: '@laceio/cardano',
+    });
+    expect(cardano).toContain('## @laceio/cardano@0.1.2');
+    expect(cardano).toContain(
+      'https://www.npmjs.com/package/@laceio/cardano/v/0.1.2',
+    );
+    expect(cardano).not.toContain('@laceio/cardano-ledger');
+    expect(cardano).not.toContain('npmjs.com/package/@laceio/sdk/');
+    // The docs' versions follow @laceio/sdk's: another package's stable
+    // release links the latest docs, the SDK's its own archive.
+    expect(cardano).toContain('Docs: https://sdk.lace.io/\n');
+    expect(
+      renderPublicNotes({
+        ...api,
+        tag: '@laceio/sdk@0.1.2',
+        version: '0.1.2',
+        package: '@laceio/sdk',
+      }),
+    ).toContain('Docs: https://sdk.lace.io/v/0.1.2/');
   });
 
   it('never name a pull request, a commit or a SHA', () => {
@@ -557,26 +724,82 @@ describe('changelog fragments', () => {
   const fragment = (
     kind: Fragment['kind'],
     body: string,
-    { time, build = 'stable' }: { time: string; build?: Fragment['build'] },
+    {
+      time,
+      build = 'stable',
+      packageId = 'sdk',
+    }: { time: string; build?: Fragment['build']; packageId?: string },
   ) =>
     parseFragment(
       `apps/lace-sdk/.changes/fragments/${kind}-${time}.yaml`,
-      `kind: ${kind}\nbody: ${body}\ntime: ${time}\ncustom:\n    Build: ${build}\n`,
+      `kind: ${kind}\nbody: ${body}\ntime: ${time}\ncustom:\n    Package: ${packageId}\n    Build: ${build}\n`,
     );
 
   it('read the kind and body changie writes', () => {
     expect(
       parseFragment(
         'apps/lace-sdk/.changes/fragments/Added-1.yaml',
-        'kind: Added\nbody: |-\n    Grantees can be secp256k1 keys\n    for agent wallets\ntime: 2026-10-20T18:15:22.47633+01:00\ncustom:\n    Build: canary\n',
+        'kind: Added\nbody: |-\n    Grantees can be secp256k1 keys\n    for agent wallets\ntime: 2026-10-20T18:15:22.47633+01:00\ncustom:\n    Package: sdk\n    Build: canary\n',
       ),
     ).toEqual({
       file: 'apps/lace-sdk/.changes/fragments/Added-1.yaml',
       kind: 'Added',
       body: 'Grantees can be secp256k1 keys\nfor agent wallets',
+      packages: ['@laceio/sdk'],
+      packageNamed: true,
       build: 'canary',
       time: '2026-10-20T18:15:22.47633+01:00',
     });
+  });
+
+  it('read every package for `all`, and every package for a fragment that names none', () => {
+    expect(
+      fragment('Changed', 'Each package releases on its own', {
+        time: '1',
+        packageId: 'all',
+      }).packages,
+    ).toEqual([
+      '@laceio/cardano',
+      '@laceio/cardano-ledger',
+      '@laceio/cardano-trezor',
+      '@laceio/sdk',
+    ]);
+    // One written before fragments named a package lists in every package's
+    // notes, and the check asks a change that touches it to name one.
+    const unnamed = parseFragment(
+      'f.yaml',
+      'kind: Fixed\nbody: a fix\ncustom:\n    Build: stable\n',
+    );
+    expect(unnamed).toMatchObject({ packageNamed: false });
+    expect(unnamed.packages).toHaveLength(4);
+    expect(fragmentProblems({ shipped: {}, fragments: [unnamed] })).toEqual([
+      expect.stringContaining('names no package'),
+    ]);
+    expect(() =>
+      parseFragment(
+        'f.yaml',
+        'kind: Fixed\nbody: a fix\ncustom:\n    Package: wallet\n    Build: stable\n',
+      ),
+    ).toThrow('custom.Package must be one of sdk, cardano');
+  });
+
+  it("list in a package's notes only the fragments that name it", () => {
+    const fragments = [
+      fragment('Fixed', 'Signing keeps the change output', { time: '1' }),
+      fragment('Fixed', 'Fees round up', { time: '2', packageId: 'cardano' }),
+      fragment('Changed', 'Releases on its own', {
+        time: '3',
+        packageId: 'all',
+      }),
+    ];
+    const bodies = (name?: string) =>
+      fragmentsOf(fragments, name).map(({ body }) => body);
+    expect(bodies('@laceio/cardano')).toEqual([
+      'Fees round up',
+      'Releases on its own',
+    ]);
+    expect(bodies('@laceio/cardano-ledger')).toEqual(['Releases on its own']);
+    expect(bodies(undefined)).toHaveLength(3);
   });
 
   it('refuse an unknown kind, an empty body or no build', () => {
@@ -586,9 +809,12 @@ describe('changelog fragments', () => {
     expect(() => parseFragment('f.yaml', 'kind: Fixed\nbody: ""\n')).toThrow(
       'has no body',
     );
-    expect(() => parseFragment('f.yaml', 'kind: Fixed\nbody: a fix\n')).toThrow(
-      'custom.Build must be stable or canary',
-    );
+    expect(() =>
+      parseFragment(
+        'f.yaml',
+        'kind: Fixed\nbody: a fix\ncustom:\n    Package: sdk\n',
+      ),
+    ).toThrow('custom.Build must be stable or canary');
   });
 
   it("leave a canary-only change out of a stable release's notes", () => {
@@ -681,24 +907,26 @@ describe('changelog fragments', () => {
       [
         parseFragment(
           'f.yaml',
-          'kind: Changed\nbody: |-\n    One line\n    and the next\ncustom:\n    Build: stable\n',
+          'kind: Changed\nbody: |-\n    One line\n    and the next\ncustom:\n    Package: sdk\n    Build: stable\n',
         ),
       ],
     );
     expect(notes).toContain('- One line\n  and the next\n');
   });
 
+  const sdkShips = { '@laceio/sdk': ['apps/lace-sdk/src/index.ts'] };
+
   it('are required of a change to what ships, and of nothing else', () => {
     const fixed = [fragment('Fixed', 'A fix', { time: '1' })];
     expect(
       fragmentProblems({
-        shipped: ['apps/lace-sdk/src/index.ts'],
+        shipped: sdkShips,
         fragments: [],
       }),
     ).toEqual([expect.stringContaining('npx changie new')]);
     expect(
       fragmentProblems({
-        shipped: [],
+        shipped: {},
         fragments: [
           fragment('Fixed', 'Signing works again (LW-1234)', { time: '1' }),
         ],
@@ -706,18 +934,40 @@ describe('changelog fragments', () => {
     ).toEqual([expect.stringContaining('names an internal term')]);
     expect(
       fragmentProblems({
-        shipped: ['apps/lace-sdk/src/index.ts'],
+        shipped: sdkShips,
         fragments: fixed,
       }),
     ).toEqual([]);
-    expect(fragmentProblems({ shipped: [], fragments: [] })).toEqual([]);
+    expect(fragmentProblems({ shipped: {}, fragments: [] })).toEqual([]);
+  });
+
+  it('are required of each package the change reaches', () => {
+    const shipped = {
+      ...sdkShips,
+      '@laceio/cardano': ['packages/lib/cardano-core/src/index.ts'],
+      '@laceio/cardano-ledger': [],
+    };
+    expect(
+      fragmentProblems({
+        shipped,
+        fragments: [fragment('Fixed', 'A fix', { time: '1' })],
+      }),
+    ).toEqual([expect.stringContaining('`@laceio/cardano` ships')]);
+    expect(
+      fragmentProblems({
+        shipped,
+        fragments: [
+          fragment('Fixed', 'A fix', { time: '1', packageId: 'all' }),
+        ],
+      }),
+    ).toEqual([]);
   });
 
   it('count no edit to a fragment a release holds', () => {
     const fixed = [fragment('Fixed', 'A fix', { time: '1' })];
     expect(
       fragmentProblems({
-        shipped: ['apps/lace-sdk/src/index.ts'],
+        shipped: sdkShips,
         fragments: fixed,
         released: fixed.map(({ file }) => file),
       }),
@@ -732,7 +982,7 @@ describe('changelog fragments', () => {
       fs.mkdirSync(path.join(repository, directory), { recursive: true });
       fs.writeFileSync(
         path.join(repository, directory, name),
-        `kind: Fixed\nbody: ${body}\ntime: ${name}\ncustom:\n    Build: stable\n`,
+        `kind: Fixed\nbody: ${body}\ntime: ${name}\ncustom:\n    Package: sdk\n    Build: stable\n`,
       );
     };
     const commit = (repository: string, message: string) => {
@@ -748,6 +998,7 @@ describe('changelog fragments', () => {
      */
     const withRepository = (
       run: (repository: string, base: string) => void,
+      tag = 'lace-sdk@0.1.0-canary.1',
     ) => {
       const repository = fs.mkdtempSync(
         path.join(os.tmpdir(), 'sdk-fragments-'),
@@ -760,14 +1011,14 @@ describe('changelog fragments', () => {
         git(repository, 'config', 'tag.gpgsign', 'false');
         write(repository, 'Fixed-1.yaml', 'Signing keeps the change');
         commit(repository, 'a fix');
-        git(repository, 'tag', 'lace-sdk@0.1.0-canary.1');
+        git(repository, 'tag', tag);
         write(repository, 'Fixed-2.yaml', 'Fees round up');
         run(repository, commit(repository, 'another fix'));
       } finally {
         fs.rmSync(repository, { recursive: true, force: true });
       }
     };
-    const shipped = ['apps/lace-sdk/src/index.ts'];
+    const shipped = sdkShips;
     const bodiesSinceCanary = (repository: string) =>
       fragmentsSince('lace-sdk@0.1.0-canary.1', repository).map(
         ({ body }) => body,
@@ -797,6 +1048,16 @@ describe('changelog fragments', () => {
           'Signing keeps the change output',
         ]);
       });
+    });
+
+    it("count a package's own release as holding a fragment", () => {
+      withRepository((repository, base) => {
+        write(repository, 'Fixed-1.yaml', 'Signing keeps the change output');
+        commit(repository, 'refine the fix');
+        expect(pullRequestFragments(base, repository).released).toEqual([
+          `${directory}/Fixed-1.yaml`,
+        ]);
+      }, '@laceio/sdk@0.1.1-canary.0');
     });
 
     it('count an edit to a fragment no release holds', () => {
@@ -959,6 +1220,7 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
     const runStep = ({
       checkout,
       expect,
+      package: name = '',
       releases = [
         'lace-sdk@0.1.0',
         'lace-sdk@0.2.0-canary.1',
@@ -967,6 +1229,7 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
     }: {
       checkout: string;
       expect: string;
+      package?: string;
       releases?: readonly string[];
     }) => {
       const root = fs.mkdtempSync(
@@ -1029,6 +1292,7 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
               PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
               CHANNEL: 'canary',
               EXPECT: expect,
+              PACKAGE: name,
               REQUIRE_MAIN: 'false',
               CREATE_RELEASE: 'false',
               GH_TOKEN: '',
@@ -1049,6 +1313,57 @@ describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
         fs.rmSync(root, { recursive: true, force: true });
       }
     };
+
+    it("checks a dry run's release, which was never tagged, against every release", () => {
+      const result = runStep({
+        checkout: 'main',
+        expect: '@laceio/sdk@0.1.1-canary.0',
+        package: '@laceio/sdk',
+        releases: ['lace-sdk@0.1.0', '@laceio/cardano@0.1.1'],
+      });
+      expect(result.passed, result.output).toBe(true);
+      expect(result.output).toContain(
+        'dependencies=@laceio/cardano@0.1.1 @laceio/cardano-ledger@0.1.0 @laceio/cardano-trezor@0.1.0',
+      );
+    });
+
+    it("reads one package's own releases beside the family's", () => {
+      const releases = [
+        'lace-sdk@0.1.0',
+        '@laceio/cardano@0.1.1',
+        '@laceio/cardano@0.1.2-canary.0',
+      ];
+      const cardano = runStep({
+        checkout: 'main',
+        expect: '',
+        package: '@laceio/cardano',
+        releases,
+      });
+      expect(cardano.output).toContain('previous_tag=@laceio/cardano@0.1.1');
+      expect(cardano.output).toContain(
+        'scope_ref=@laceio/cardano@0.1.2-canary.0',
+      );
+      // What it depends on at that release, to find a range that moved.
+      expect(cardano.output).toContain(
+        'scope_dependencies=@laceio/cardano-ledger@0.1.0 @laceio/cardano-trezor@0.1.0 @laceio/sdk@0.1.0',
+      );
+      const sdk = runStep({
+        checkout: 'main',
+        expect: '',
+        package: '@laceio/sdk',
+        releases,
+      });
+      expect(sdk.output).toContain('previous_tag=lace-sdk@0.1.0');
+      expect(sdk.output).toContain('first_canary=true');
+      // A canary carries each other package at its latest release.
+      expect(sdk.output).toContain(
+        'dependencies=@laceio/cardano@0.1.2-canary.0 @laceio/cardano-ledger@0.1.0 @laceio/cardano-trezor@0.1.0',
+      );
+      // At its previous stable release, the family's, each was at 0.1.0.
+      expect(sdk.output).toContain(
+        'previous_dependencies=@laceio/cardano@0.1.0 @laceio/cardano-ledger@0.1.0 @laceio/cardano-trezor@0.1.0',
+      );
+    });
 
     it("passes a canary's own release event when it is the newest release", () => {
       const result = runStep({

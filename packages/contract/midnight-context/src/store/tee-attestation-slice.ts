@@ -45,9 +45,63 @@ export const teeAttestationSlice = createSlice({
     ): AttestationProgressState => {
       if (payload.operationId !== state.operationId) return state;
       const { event } = payload;
+      if (event.type === 'phase' && event.phase === 'proof-material')
+        return {
+          ...state,
+          proofMaterialRequests: Math.max(
+            0,
+            (state.proofMaterialRequests ?? 0) +
+              (event.status === 'started' ? 1 : -1),
+          ),
+        };
+      if (event.type === 'phase' && event.phase.startsWith('transaction-')) {
+        const ids = [
+          'preparing',
+          'proving',
+          'finalizing',
+          'submitting',
+          'inclusion',
+          'confirmation',
+        ];
+        const id = event.phase.slice('transaction-'.length);
+        const current =
+          state.transactionSteps ??
+          ids.map(id => ({ id, status: 'pending' as const }));
+        if (id === 'failed')
+          return {
+            ...state,
+            transactionSteps: current.map(step =>
+              step.status === 'running'
+                ? { ...step, status: 'failed' as const }
+                : step,
+            ),
+          };
+        const index = ids.indexOf(id);
+        if (index < 0) return state;
+        return {
+          ...state,
+          transactionSteps: current.map((step, index_) => ({
+            ...step,
+            // Submitted may recur after a block retraction: reset later stages.
+            status:
+              index_ < index
+                ? 'done'
+                : index_ > index
+                ? 'pending'
+                : event.status === 'completed'
+                ? 'done'
+                : event.status === 'failed'
+                ? 'failed'
+                : 'running',
+          })),
+        };
+      }
       switch (event.type) {
         case 'reset':
           return {
+            ...(state.transactionSteps
+              ? { transactionSteps: state.transactionSteps }
+              : {}),
             operationId: state.operationId,
             accountId: state.accountId,
             status: 'running',

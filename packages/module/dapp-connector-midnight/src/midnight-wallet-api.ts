@@ -1,4 +1,5 @@
 import { AuthenticatorErrorCode } from '@lace-contract/dapp-connector';
+import { createProverClient } from '@lace-lib/midnight-prover';
 import { ErrorCodes } from '@midnight-ntwrk/dapp-connector-api';
 
 import { APIError } from './api-error';
@@ -117,20 +118,44 @@ export class MidnightWalletApi {
       getUnshieldedAddress: this.#api.getUnshieldedAddress,
       getDustAddress: this.#api.getDustAddress,
       getProvingProvider: async (keyMaterialProvider: KeyMaterialProvider) => {
-        // Must stay a dynamic import: @midnight-ntwrk/ledger-v8 is WASM. A
-        // static import compiles it on every page the content scripts load
-        // on, and pages whose CSP lacks 'wasm-unsafe-eval' then abort the
-        // whole script before any wallet is injected.
-        const { createProvingProviderFromTransport } = await import(
-          './proof-server-transport'
-        );
-        return createProvingProviderFromTransport(
-          {
-            check: async payload => this.#api.checkCircuit(payload),
-            prove: async payload => this.#api.proveCircuit(payload),
-          },
-          keyMaterialProvider,
-        );
+        // Built-in circuits have no dApp key material, which surfaces as a
+        // failing lookup — the SDK's own http client treats that the same way.
+        const keyMaterial = async (keyLocation: string) => {
+          try {
+            const [proverKey, verifierKey, ir] = await Promise.all([
+              keyMaterialProvider.getProverKey(keyLocation),
+              keyMaterialProvider.getVerifierKey(keyLocation),
+              keyMaterialProvider.getZKIR(keyLocation),
+            ]);
+            return { proverKey, verifierKey, ir };
+          } catch {
+            return undefined;
+          }
+        };
+        const provider = createProverClient({
+          ensure: async () => {},
+          release: async () => {},
+          send: async command => this.#api.proofCommand(command),
+        }).provider();
+        return {
+          check: async (serializedPreimage, keyLocation) =>
+            provider.check({
+              serializedPreimage,
+              keyLocation,
+              keyMaterial: await keyMaterial(keyLocation),
+            }),
+          prove: async (
+            serializedPreimage,
+            keyLocation,
+            overwriteBindingInput,
+          ) =>
+            provider.checkAndProve({
+              serializedPreimage,
+              keyLocation,
+              overwriteBindingInput,
+              keyMaterial: await keyMaterial(keyLocation),
+            }),
+        };
       },
       getTxHistory: this.#api.getTxHistory,
       balanceUnsealedTransaction: this.#api.balanceUnsealedTransaction,

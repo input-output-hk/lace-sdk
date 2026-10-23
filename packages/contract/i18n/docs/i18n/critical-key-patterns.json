@@ -25,7 +25,10 @@
     "onboarding.in-memory.*recovery-phrase*",
     "tx-executor.building-error.insufficient-*",
     "collateral.sheet.not-enough-balance*",
-    "designation-flow.*"
+    "designation-flow.*",
+    "midnight.proof-server.custom.*",
+    "midnight.proof-server.local-host.description",
+    "v2.portfolio.midnight-banner.description"
   ],
   "pendingCriticalRestore": {
     "patterns": [

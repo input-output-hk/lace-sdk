@@ -12,4 +12,4 @@ export const reachedWorkspaceFiles: (
 ) => string[];
 export const workspacePackages: (files: string[], root: string) => string[];
 export const CARDANO_APPS: readonly string[];
-export const cardanoReachedFiles: () => string[];
+export const cardanoReachedFiles: (apps?: readonly string[]) => string[];

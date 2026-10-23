@@ -19,7 +19,9 @@ import uniqBy from 'lodash/uniqBy';
 
 import {
   applyInFlightUtxoAdjustments,
+  applyPendingRewardWithdrawals,
   ownPendingOutputs,
+  pendingRewardWithdrawals,
 } from '../apply-in-flight-utxo-adjustments';
 import {
   extensionActions,
@@ -943,6 +945,31 @@ const selectRewardAccountDetails = createSelector(
 
 const { selectPendingActivitiesByAccount } = activitiesSelectors.activities;
 
+/**
+ * Rewards each reward account has withdrawn in not-yet-settled transactions.
+ * A builder reads this to avoid withdrawing the same rewards twice; it must
+ * not derive a withdrawal amount from it.
+ */
+const selectPendingRewardWithdrawals = createSelector(
+  selectPendingActivitiesByAccount,
+  addressesSelectors.addresses.selectAllAddresses,
+  pendingRewardWithdrawals,
+);
+
+/**
+ * The BALANCE view of the reward details: withdrawable rewards minus those a
+ * pending transaction already moved into its outputs (see
+ * `applyPendingRewardWithdrawals`). For balance accounting only; screens and
+ * builders that need what the chain reports read
+ * {@link selectRewardAccountDetails}.
+ */
+const selectRewardAccountDetailsWithInFlight = createSelector(
+  selectRewardAccountDetails,
+  selectPendingRewardWithdrawals,
+  addressesSelectors.addresses.selectAllAddresses,
+  applyPendingRewardWithdrawals,
+);
+
 const EMPTY_CARDANO_ADDRESSES: CardanoPaymentAddress[] = [];
 const EMPTY_UTXOS: Cardano.Utxo[] = [];
 
@@ -1575,6 +1602,8 @@ export const cardanoContextSelectors = {
     selectAccountUnspendableUtxos,
     selectLastFetchedUtxoCacheKeyByAccount,
     selectRewardAccountDetails,
+    selectRewardAccountDetailsWithInFlight,
+    selectPendingRewardWithdrawals,
     selectAvailableAccountUtxos,
     selectAvailableAccountUtxosWithEligibleCollateral,
     selectCombinedTransactionHistory,

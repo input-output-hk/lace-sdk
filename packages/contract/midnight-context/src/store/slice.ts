@@ -25,6 +25,7 @@ import {
 import { getValidNetworkStringPayload } from '../utils';
 import { MidnightNetworkId } from '../value-objects';
 
+import { proofActivitySlice } from './proof-activity-slice';
 import { teeAttestationSlice } from './tee-attestation-slice';
 
 import type {
@@ -50,6 +51,7 @@ import type {
 export type { MidnightContextSliceState };
 
 export const initialState: MidnightContextSliceState = {
+  supportsWasmProver: false,
   proofServerDisclosureAcknowledgements: {},
   defaultTestNetNetworkId: NetworkId.NetworkId.Preview,
   defaultNetworksConfig: DEFAULT_NETWORKS_CONFIG,
@@ -243,6 +245,7 @@ const slice = createSlice({
     },
   },
   selectors: {
+    selectSupportsWasmProver: state => state.supportsWasmProver,
     selectProofServerDisclosureAcknowledgements: state =>
       state.proofServerDisclosureAcknowledgements,
     selectNetworksDefaultConfig: state => state.defaultNetworksConfig,
@@ -467,11 +470,18 @@ const selectIsTemenosProofServerEnabled = createSelector(
 const selectAllProofServerModes = createSelector(
   slice.selectors.selectNetworksDefaultConfig,
   selectRemoteProofServerOptions,
-  selectIsTemenosProofServerEnabled,
+  createSelector(
+    selectIsTemenosProofServerEnabled,
+    slice.selectors.selectSupportsWasmProver,
+    (isTemenosEnabled, supportsWasmProver) => ({
+      isTemenosEnabled,
+      supportsWasmProver,
+    }),
+  ),
   (
     defaultNetworksConfig,
     remoteProofServerOptions,
-    isTemenosEnabled,
+    { isTemenosEnabled, supportsWasmProver },
   ): Partial<Record<MidnightSDKNetworkId, ProofServerMode[]>> => {
     // The Temenos TEE entry is build-baked, never payload-delivered: the
     // boolean flag controls availability without supplying provider URLs.
@@ -479,8 +489,8 @@ const selectAllProofServerModes = createSelector(
     for (const [id, config] of Object.entries(defaultNetworksConfig)) {
       const networkId = id as MidnightSDKNetworkId;
       const modes: ProofServerMode[] = [];
-      // On-device kinds (today: just local-host; in-process / paired-device
-      // are added here once their capability checks land).
+      if (supportsWasmProver) modes.push({ kind: 'in-process' });
+      // Preserve the existing default; WASM is an explicit opt-in.
       modes.push(config.proofServer ?? defaultLocalProofServerMode);
       // Source-controlled delegated providers enabled by their boolean flag.
       for (const remote of remoteProofServerOptions[networkId] ?? []) {
@@ -574,6 +584,7 @@ const selectCurrentNetwork = createSelector(
 export const midnightContextReducers = {
   [slice.name]: slice.reducer,
   [teeAttestationSlice.name]: teeAttestationSlice.reducer,
+  [proofActivitySlice.name]: proofActivitySlice.reducer,
 };
 
 /**
@@ -590,6 +601,7 @@ export const midnightContextActions = {
   midnightContext: {
     ...slice.actions,
     ...teeAttestationSlice.actions,
+    ...proofActivitySlice.actions,
     resetSyncState,
   },
 };
@@ -598,6 +610,7 @@ export const midnightContextSelectors = {
   midnightContext: {
     ...slice.selectors,
     ...teeAttestationSlice.selectors,
+    ...proofActivitySlice.selectors,
     selectMidnightBlockchainNetworkId,
     selectNetworkId,
     selectInitialNetworkId,

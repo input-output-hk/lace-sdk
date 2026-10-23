@@ -12,6 +12,8 @@ import {
   type WithMnemonicWords,
 } from '@laceio/sdk/cardano';
 import * as rootEntry from '@laceio/sdk';
+import * as Domain from '@laceio/cardano/core';
+import { HexBlob as DomainHexBlob } from '@laceio/cardano/util';
 import {
   type Result,
   createLazyInMemoryVaultModule as createFromRoot,
@@ -86,3 +88,15 @@ const hostedSigner = createRemotePasskeySigner({
   signerUrl: 'https://signer.example',
 });
 void hostedSigner;
+
+// One Cardano domain layer: the SDK's types are @laceio/cardano's, so a value
+// typed by either is the other's, classes with private members included.
+// @ts-expect-error A number is not a transaction: @laceio/cardano resolves.
+0 satisfies Domain.Serialization.Transaction;
+declare const domainTransaction: Domain.Serialization.Transaction;
+domainTransaction satisfies Serialization.Transaction;
+declare const sdkTransaction: Serialization.Transaction;
+sdkTransaction satisfies Domain.Serialization.Transaction;
+declare const domainAddress: Domain.Cardano.Address;
+domainAddress satisfies Cardano.Address;
+DomainHexBlob('00') satisfies HexBlob;

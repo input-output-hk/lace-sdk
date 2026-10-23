@@ -15,11 +15,18 @@ versionExt: md
 versionFormat: '## {{.Version}}'
 kindFormat: '### {{.Kind}}'
 changeFormat: '- {{.Body}}'
-# Which build the change is in: `stable` for one both builds ship, `canary`
-# for one only the canary build has (a preview or experimental feature). A
-# stable release's notes leave out `canary` fragments; a feature that
-# graduates gets a `stable` fragment then.
 custom:
+  # Which package's users see the change: its release notes list the
+  # fragment. Each package releases on its own; `all` is for a change every
+  # package's users see, which every package's notes list.
+  - key: Package
+    label: Package (sdk, cardano, cardano-ledger, cardano-trezor, or all)
+    type: enum
+    enumOptions: [sdk, cardano, cardano-ledger, cardano-trezor, all]
+  # Which build the change is in: `stable` for one both builds ship, `canary`
+  # for one only the canary build has (a preview or experimental feature). A
+  # stable release's notes leave out `canary` fragments; a feature that
+  # graduates gets a `stable` fragment then.
   - key: Build
     label: Build (stable, or canary for a feature only the canary build has)
     type: enum
