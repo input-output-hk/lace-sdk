@@ -1,6 +1,6 @@
 {
   "name": "@laceio/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1-canary.3",
   "private": false,
   "homepage": "https://sdk.lace.io",
   "repository": {
@@ -45,7 +45,7 @@
     "dist"
   ],
   "dependencies": {
-    "@laceio/cardano": "^0.1.1",
+    "@laceio/cardano": "0.1.1",
     "@reduxjs/toolkit": "^2.6.1",
     "bignumber.js": "9.0.1",
     "lodash": "^4.17.21",
