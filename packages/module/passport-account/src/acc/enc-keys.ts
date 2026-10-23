@@ -4,6 +4,7 @@ import {
   EncryptionKeyMismatchError,
   isSealableX25519Key,
 } from '@lace-contract/passport';
+import { sha256 } from '@lace-lib/crypto';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import { x25519 } from '@noble/curves/ed25519.js';
 
@@ -18,6 +19,13 @@ import {
   sealGrantRecord,
 } from './envelopes';
 import { openInboxEntry, sealInboxEntry } from './inbox';
+import {
+  authorityOf,
+  derivesAuthority,
+  loadMaintenanceLedger,
+  signableChanges,
+  signMaintenanceUpdate,
+} from './maintenance-authority';
 import { sealGrantView } from './view-seal';
 
 import type { AccountSecrets } from './envelopes';
@@ -54,14 +62,14 @@ export type DeriveSecret = (params: {
 }) => Promise<Uint8Array>;
 
 /**
- * Runs `use` over this device's reader secret on one network, which
+ * Calls `run` with this device's reader secret on one network, which
  * exists for that use only and is zeroed before this settles, on success
- * and failure alike; `use` must not retain it.
+ * and failure alike; `run` must not retain it.
  */
 const withReaderSecret = async <T>(
   deriveSecret: DeriveSecret,
   networkId: string,
-  use: (readerSecret: Uint8Array) => Promise<T>,
+  run: (readerSecret: Uint8Array) => Promise<T>,
 ): Promise<T> => {
   const readerSecret = await deriveSecret({
     domain: READER_SECRET_DOMAIN,
@@ -69,7 +77,7 @@ const withReaderSecret = async <T>(
     length: KEY_LENGTH,
   });
   try {
-    return await use(readerSecret);
+    return await run(readerSecret);
   } finally {
     readerSecret.fill(0);
   }
@@ -88,7 +96,7 @@ const zeroSecrets = ({ secret, rosterKey }: AccountSecrets): void => {
 };
 
 /**
- * Opens the envelopes of a keyring with the reader secret and runs `use`
+ * Opens the envelopes of a keyring with the reader secret and runs `run`
  * over what they deliver. Every envelope is tried, so envelopes anyone
  * appended to this reader key cannot hide the live one, and the live
  * secrets are those of the oldest envelope that delivers the keyring's
@@ -105,7 +113,7 @@ const zeroSecrets = ({ secret, rosterKey }: AccountSecrets): void => {
 const withKeyring = async <T>(
   readerSecret: Uint8Array,
   { encKey, envelopes }: AccountKeyring,
-  use: (opened: OpenedKeyring) => Promise<T>,
+  run: (opened: OpenedKeyring) => Promise<T>,
 ): Promise<T> => {
   const encKeyHex = HexBytes.fromByteArray(encKey);
   const seen = new Set<string>();
@@ -139,10 +147,68 @@ const withKeyring = async <T>(
         "None of this device's envelopes opens the account's enc_key.",
       );
     }
-    return await use({ live, all: [live, ...earlier] });
+    return await run({ live, all: [live, ...earlier] });
   } finally {
     if (live) zeroSecrets(live);
     for (const secrets of earlier) zeroSecrets(secrets);
+  }
+};
+
+/**
+ * Opens every envelope of a keyring with the reader secret and runs `run`
+ * over the roster keys they deliver, each once: first the live one, which
+ * the envelope {@link withKeyring} takes as live delivers, then the
+ * others, newest first. Unlike the earlier secrets, no roster key is
+ * dropped: the one deriving the maintenance authority on chain may sit
+ * behind any number of envelopes anyone appended, so a flood costs the
+ * device time only. Roster keys are told apart by their
+ * sha256, so none is held as a string. Each secret is zeroed once its
+ * public key is checked, and every roster key before this settles.
+ *
+ * @throws {@link EncryptionKeyMismatchError} when no envelope delivers a
+ * secret deriving the keyring's `enc_key`.
+ */
+const withRosterKeys = async <T>(
+  readerSecret: Uint8Array,
+  { encKey, envelopes }: AccountKeyring,
+  run: (rosterKeys: Uint8Array[]) => Promise<T>,
+): Promise<T> => {
+  const encKeyHex = HexBytes.fromByteArray(encKey);
+  const distinct = new Map<string, Uint8Array>();
+  let live: Uint8Array | undefined;
+  try {
+    for (const envelope of envelopes) {
+      const secrets = await openDeviceEnvelope(readerSecret, envelope);
+      if (!secrets) continue;
+      const { secret, rosterKey } = secrets;
+      const fingerprint = HexBytes.fromByteArray(sha256(rosterKey));
+      const kept = distinct.get(fingerprint) ?? rosterKey;
+      if (kept === rosterKey) {
+        distinct.set(fingerprint, rosterKey);
+      } else {
+        rosterKey.fill(0);
+      }
+      try {
+        const publicKey = x25519.getPublicKey(secret);
+        if (HexBytes.fromByteArray(publicKey) === encKeyHex) live = kept;
+      } finally {
+        secret.fill(0);
+      }
+    }
+    if (!live) {
+      throw new EncryptionKeyMismatchError(
+        "None of this device's envelopes opens the account's enc_key.",
+      );
+    }
+    const liveRosterKey = live;
+    return await run([
+      liveRosterKey,
+      ...[...distinct.values()].filter(
+        rosterKey => rosterKey !== liveRosterKey,
+      ),
+    ]);
+  } finally {
+    for (const rosterKey of distinct.values()) rosterKey.fill(0);
   }
 };
 
@@ -281,9 +347,12 @@ const sealToReaders = async (
  * source yields only this device's reader secret; the account secret is
  * drawn at random by `createKeys` and otherwise exists only as opened
  * from the envelopes a call is handed, for that call alone. Every secret
- * is zeroed before the call that opened it settles, and only public
- * keys, inbox entries, opened coins and bookkeeping, and grant view seals
- * leave it.
+ * is zeroed before the call that opened it settles, except the hex and
+ * wasm copies of a ledger signing key, which the ledger API cannot zero.
+ * Only public keys, inbox entries, opened coins and bookkeeping, grant
+ * view seals, maintenance update signatures and whether a keyring holds
+ * the maintenance authority on chain leave it. The maintenance authority
+ * a roster key derives exists only inside the call that derives it.
  */
 export const encryptionKeyOver = (
   deriveSecret: DeriveSecret,
@@ -324,6 +393,10 @@ export const encryptionKeyOver = (
         };
         try {
           return {
+            authority: await authorityOf(
+              await loadMaintenanceLedger(),
+              secrets.rosterKey,
+            ),
             encKey: x25519.getPublicKey(secrets.secret),
             envelopes: await sealToReaders(sealedTo, secrets),
             registrations: kept
@@ -451,4 +524,30 @@ export const encryptionKeyOver = (
         };
       }),
     ),
+  signMaintenanceUpdate: async (
+    networkId,
+    { keyring, authority, counter, changes: requested },
+  ) => {
+    const changes = await signableChanges(requested);
+    const ledger = await loadMaintenanceLedger();
+    return withReaderSecret(deriveSecret, networkId, async readerSecret =>
+      withRosterKeys(readerSecret, keyring, async rosterKeys =>
+        signMaintenanceUpdate(ledger, {
+          address: keyring.account,
+          rosterKeys,
+          authority,
+          counter,
+          changes,
+        }),
+      ),
+    );
+  },
+  holdsMaintenanceAuthority: async (networkId, keyring, authority) => {
+    const ledger = await loadMaintenanceLedger();
+    return withReaderSecret(deriveSecret, networkId, async readerSecret =>
+      withRosterKeys(readerSecret, keyring, async rosterKeys =>
+        derivesAuthority(ledger, rosterKeys, authority),
+      ),
+    );
+  },
 });

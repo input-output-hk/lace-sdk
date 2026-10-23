@@ -91,6 +91,7 @@ const drawnKeys = {
   encKey: newKey,
   envelopes: [new Uint8Array(192).fill(0xd1)],
   registrations: [registration(0x77)],
+  authority: { tag: 'schnorr' as const, value: '7a'.repeat(32) },
 };
 
 const ledgerFor = (
@@ -217,6 +218,7 @@ describe('rotateEncKey', () => {
 
     await expect(rotateEncKey(props)).resolves.toMatchObject({
       encKey: newKey,
+      authority: drawnKeys.authority,
       keyring: { account: AccAddress(accountAddress), encKey: newKey },
     });
 

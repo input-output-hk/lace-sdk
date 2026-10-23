@@ -18,8 +18,14 @@ export type OpenInboxEntries = (
   entries: Uint8Array[],
 ) => Promise<(ShieldedCoin | null)[]>;
 
-/** The slice of the ledger binding the walk recomputes commitments with. */
-export type LedgerOutputs = Pick<typeof LedgerV9, 'ZswapOutput'>;
+/**
+ * The slice of the ledger binding the walk recomputes commitments and
+ * nullifiers with.
+ */
+export type LedgerZswap = Pick<
+  typeof LedgerV9,
+  'ZswapChainState' | 'ZswapInput' | 'ZswapOffer' | 'ZswapOutput'
+>;
 
 export type InboxWalkProps = {
   /** The account address, the recipient every held coin was committed to. */
@@ -27,19 +33,20 @@ export type InboxWalkProps = {
   ledgerState: Pick<Ledger, 'inbox_count' | 'inbox'>;
   indexer: Pick<
     IndexerClient,
-    'enumerateContractActions' | 'queryShieldedOutputs'
+    'enumerateContractActions' | 'queryShieldedEvents'
   >;
   openEntries: OpenInboxEntries;
   /** Ledger binding loader; defaults to the vendored ledger-v9 module. */
-  loadLedger?: () => Promise<LedgerOutputs>;
+  loadLedger?: () => Promise<LedgerZswap>;
 };
 
 /**
- * What an inbox walk found: every coin the account holds that chain data
- * confirms, the inbox entry each holding was read from in the same order,
- * which a key rotation re-encrypts, and how many entries were passed over
- * because they did not open, described a coin the chain never created
- * for the account, or could not be read at all.
+ * What an inbox walk found: every unspent coin the account holds that
+ * chain data confirms, the inbox entry each holding was read from in the
+ * same order, which a key rotation re-encrypts, and how many entries were
+ * passed over because they did not open, described a coin the chain never
+ * created for the account, or could not be read at all. A coin the
+ * account has spent is neither a holding nor counted as passed over.
  */
 export type InboxWalk = {
   holdings: ShieldedHolding[];
@@ -47,9 +54,26 @@ export type InboxWalk = {
   skippedEntries: number;
 };
 
-type Candidate = { coin: ShieldedCoin; commitment: string; entry: Uint8Array };
+type Candidate = {
+  coin: ShieldedCoin;
+  info: LedgerV9.ShieldedCoinInfo;
+  commitment: string;
+  entry: Uint8Array;
+};
 
-const defaultLoadLedger = async (): Promise<LedgerOutputs> =>
+/**
+ * What the chain recorded for the account: the tree index of every
+ * shielded output it received, by commitment, and the nullifier of every
+ * shielded coin the same transactions spent.
+ */
+type ChainHistory = {
+  outputs: Map<string, bigint>;
+  nullifiers: Set<string>;
+};
+
+const SCRATCH_BLOCK_TIME = new Date(0);
+
+const defaultLoadLedger = async (): Promise<LedgerZswap> =>
   import('@midnightntwrk/ledger-v9');
 
 /** The entries the contract holds, in inbox order, the Lace records included. */
@@ -73,48 +97,85 @@ export const inboxEntries = (
  * refuses to commit to is no candidate.
  */
 const toCandidate = (
-  { ZswapOutput }: LedgerOutputs,
+  { ZswapOutput }: LedgerZswap,
   address: string,
   { coin, entry }: { coin: ShieldedCoin; entry: Uint8Array },
 ): Candidate | null => {
+  const info: LedgerV9.ShieldedCoinInfo = {
+    type: HexBytes.fromByteArray(coin.color),
+    nonce: HexBytes.fromByteArray(coin.nonce),
+    value: coin.value,
+  };
   try {
-    const output = ZswapOutput.newContractOwned(
-      {
-        type: HexBytes.fromByteArray(coin.color),
-        nonce: HexBytes.fromByteArray(coin.nonce),
-        value: coin.value,
-      },
-      undefined,
-      address,
-    );
-    return { coin, commitment: output.commitment.toLowerCase(), entry };
+    const output = ZswapOutput.newContractOwned(info, undefined, address);
+    return { coin, info, commitment: output.commitment.toLowerCase(), entry };
   } catch {
     return null;
   }
 };
 
 /**
- * The tree index of every shielded output the chain created for the
- * account, by commitment, read from the ledger events of the transactions
- * that acted on the contract. A deposit is one such action, so its
- * transaction is among them.
+ * The nullifier each held coin's spend reveals, computed with the ledger's
+ * own input construction: a contract-owned input of the coin from the
+ * account, exactly what the contract builds when it spends one. A
+ * contract-owned nullifier binds the coin and the account address alone,
+ * never the coin's position, so the inputs are built over a scratch
+ * commitment tree holding just these coins rather than the chain's tree.
  */
-const receivedOutputs = async (
+const coinNullifiers = (
+  { ZswapChainState, ZswapInput, ZswapOffer, ZswapOutput }: LedgerZswap,
+  address: string,
+  held: Candidate[],
+): string[] => {
+  const tree = held
+    .reduce(
+      (state, { info }) =>
+        state.tryApply(
+          ZswapOffer.fromOutput(
+            ZswapOutput.newContractOwned(info, undefined, address),
+            info.type,
+            info.value,
+          ),
+        )[0],
+      new ZswapChainState(),
+    )
+    .postBlockUpdate(SCRATCH_BLOCK_TIME, 0n);
+  return held.map(({ info }, position) =>
+    ZswapInput.newContractOwned(
+      { ...info, mt_index: BigInt(position) },
+      undefined,
+      address,
+      tree,
+    ).nullifier.toLowerCase(),
+  );
+};
+
+/**
+ * The shielded outputs the chain created for the account and the
+ * nullifiers it recorded, read from the ledger events of the transactions
+ * that acted on the contract. A deposit is one such action, so its
+ * transaction is among them; so is every spend of a coin the account
+ * holds, because only the contract's own call can spend it.
+ */
+const chainHistory = async (
   address: string,
   indexer: InboxWalkProps['indexer'],
-): Promise<Map<string, bigint>> => {
+): Promise<ChainHistory> => {
   const actions = await indexer.enumerateContractActions(address);
   const hashes = [...new Set(actions.map(action => action.txHash))];
-  const outputs = await Promise.all(
-    hashes.map(async hash => indexer.queryShieldedOutputs(hash)),
+  const events = await Promise.all(
+    hashes.map(async hash => indexer.queryShieldedEvents(hash)),
   );
   const recipient = address.toLowerCase();
-  return new Map(
-    outputs
-      .flat()
-      .filter(output => output.contractAddress === recipient)
-      .map(output => [output.commitment, output.index]),
-  );
+  return {
+    outputs: new Map(
+      events
+        .flatMap(({ outputs }) => outputs)
+        .filter(output => output.contractAddress === recipient)
+        .map(output => [output.commitment, output.index]),
+    ),
+    nullifiers: new Set(events.flatMap(({ nullifiers }) => nullifiers)),
+  };
 };
 
 /**
@@ -124,8 +185,10 @@ const receivedOutputs = async (
  * encryption secrets, each coin that opens is verified by recomputing
  * its commitment and finding it among the outputs the chain created for
  * the account, and the index that output took in the commitment tree is
- * captured with it. Anyone can append any
- * bytes to the inbox, so an entry that does not open, or opens to a coin
+ * captured with it. A coin whose nullifier the same history recorded has
+ * been spent and is left out; nullifiers of other parties' inputs never
+ * match, since a contract-owned nullifier binds the account address.
+ * Anyone can append any bytes to the inbox, so an entry that does not open, or opens to a coin
  * the chain never created for this account, is skipped as noise and
  * counted, never raised. Two entries describing the same coin, as a
  * re-encryption after a key rotation leaves behind, yield one holding,
@@ -161,28 +224,37 @@ export const walkInbox = async ({
   if (candidates.every(candidate => candidate === null)) {
     return nothing(entries.length);
   }
-  const outputs = await receivedOutputs(address, indexer);
-  const holdings = new Map<string, ShieldedHolding>();
-  const holdingEntries = new Map<string, Uint8Array>();
+  const { outputs, nullifiers } = await chainHistory(address, indexer);
+  const held = new Map<string, { candidate: Candidate; index: bigint }>();
   let skippedEntries = 0;
   for (const candidate of candidates) {
-    const index = candidate && outputs.get(candidate.commitment);
+    const index = candidate ? outputs.get(candidate.commitment) : undefined;
     if (!candidate || index === undefined) {
       skippedEntries += 1;
       continue;
     }
-    if (holdings.has(candidate.commitment)) continue;
-    holdings.set(candidate.commitment, {
+    if (!held.has(candidate.commitment)) {
+      held.set(candidate.commitment, { candidate, index });
+    }
+  }
+  const confirmed = [...held.values()];
+  const spent =
+    nullifiers.size === 0
+      ? confirmed.map(() => false)
+      : coinNullifiers(
+          ledger,
+          address,
+          confirmed.map(({ candidate }) => candidate),
+        ).map(nullifier => nullifiers.has(nullifier));
+  const unspent = confirmed.filter((_, position) => !spent[position]);
+  return {
+    holdings: unspent.map(({ candidate, index }) => ({
       color: TokenColor(HexBytes.fromByteArray(candidate.coin.color)),
       value: candidate.coin.value.toString(),
       commitment: candidate.commitment,
       index: Number(index),
-    });
-    holdingEntries.set(candidate.commitment, candidate.entry);
-  }
-  return {
-    holdings: [...holdings.values()],
-    holdingEntries: [...holdingEntries.values()],
+    })),
+    holdingEntries: unspent.map(({ candidate }) => candidate.entry),
     skippedEntries,
   };
 };

@@ -6,6 +6,7 @@ import {
   GrantOriginMissingError,
   GrantRevocationPendingError,
   GrantSlot,
+  MaintenanceAuthorityMismatchError,
   UseCounter,
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
@@ -25,6 +26,7 @@ import {
   REVOKE_GRANT_CIRCUIT,
 } from '../acc/grant-circuits';
 import { MAX_INBOX_ENTRIES_PER_REQUEST } from '../acc/inbox';
+import { isSameAuthority } from '../acc/maintenance-authority';
 import {
   isPendingDeployment,
   lockChoiceMismatch,
@@ -56,6 +58,8 @@ import {
   decodeInboxEntries,
   decodeKeyring,
   decodeLiveReader,
+  decodeMaintenanceChanges,
+  decodeMaintenanceKey,
   decodeRecord,
   decodeRemovedDevice,
   encodeAccountKeys,
@@ -63,6 +67,7 @@ import {
   encodeBytes,
   encodeOpenedEntry,
   encodePoint,
+  encodeSignedMaintenanceUpdate,
   MalformedPayloadError,
 } from './codec';
 import { createCreationKeyEntries } from './creation-key-entries';
@@ -90,6 +95,8 @@ import type {
   GrantBookkeeping,
   GrantViewSealRequest,
   LiveDeviceReader,
+  MaintenanceChanges,
+  MaintenanceVerifyingKey,
   OpenedInboxEntry,
   RemovedDevice,
 } from '@lace-contract/passport';
@@ -170,13 +177,14 @@ type RotatedKey = { key: string; networkId: string };
 
 /**
  * A key this session drew: the network it is for, the `enc_key` it
- * replaces (none at creation), and whether the roster key was drawn
- * fresh with it.
+ * replaces (none at creation), whether the roster key was drawn fresh
+ * with it, and the maintenance authority that roster key derives.
  */
 type CreatedKey = {
   networkId: string;
   from: string | undefined;
   rotateRoster: boolean;
+  authority: MaintenanceVerifyingKey;
 };
 
 type HeldKeySession = {
@@ -190,7 +198,10 @@ type HeldKeySession = {
   createdKeys: Map<string, CreatedKey>;
   /** The inbox entries this session sealed, by hex, the only ones it may append. */
   producedEntries: Set<string>;
-  rotatedTo?: RotatedKey & { rotateRoster: boolean };
+  rotatedTo?: RotatedKey & {
+    rotateRoster: boolean;
+    authority: MaintenanceVerifyingKey;
+  };
   /** Whether the one revocation the approval covers was signed. */
   isRevocationSigned: boolean;
   /** Whether the descriptor's grant issue was signed, which its seal needs. */
@@ -241,6 +252,22 @@ const ROTATION_KINDS: ScopedKind[] = [
 const ROTATION_CIRCUITS = [ROTATE_ENC_KEY_CIRCUIT, APPEND_INBOX_CIRCUIT];
 
 /**
+ * What moves the maintenance authority after a fresh-roster rotation, and
+ * what an install of missing operations signs its verifier keys with.
+ */
+const MAINTENANCE_KINDS: ScopedKind[] = ['sign-maintenance-update'];
+
+/**
+ * What a fresh-roster rotation moves the maintenance authority with: the
+ * check, ahead of the rotation, that this device holds the authority on
+ * chain, and the replace that follows it.
+ */
+const ROSTER_AUTHORITY_KINDS: ScopedKind[] = [
+  ...MAINTENANCE_KINDS,
+  'holds-maintenance-authority',
+];
+
+/**
  * What each flow sends inside its session, read off the flows themselves.
  * Create-account resolves this device's keys, reads the record a previous
  * attempt left unfinished, draws the account keys, deploys and activates
@@ -257,7 +284,12 @@ const ROTATION_CIRCUITS = [ROTATE_ENC_KEY_CIRCUIT, APPEND_INBOX_CIRCUIT];
  * lands. A device removal also rotates the account keys, see
  * {@link ROTATION_KINDS}, and seals the new secret again to the live read
  * grants. A holdings read resolves this device's reader key and opens
- * inbox entries: it calls no circuit and touches no record. An enrolment
+ * inbox entries: it calls no circuit and touches no record. A removal
+ * also checks that this device holds the maintenance authority before it
+ * rotates and moves it to the new roster key after, see
+ * {@link ROSTER_AUTHORITY_KINDS}. An install resolves this device's reader key,
+ * finds its live envelope and signs the verifier key inserts of the
+ * operations its descriptor names; it calls no circuit either. An enrolment
  * that delivers the account keys, and a grant flow that shares or
  * withdraws the viewing secret, widen their scope, see {@link flowScope}.
  */
@@ -283,7 +315,12 @@ const FLOW_SCOPES: Record<SignerFlowKind, FlowScope> = {
   ]),
   'add-device': scope(GATED_CALL_KINDS, [ADD_DEVICE_CIRCUIT]),
   'remove-device': scope(
-    [...GATED_CALL_KINDS, ...ROTATION_KINDS, 'seal-view'],
+    [
+      ...GATED_CALL_KINDS,
+      ...ROTATION_KINDS,
+      ...ROSTER_AUTHORITY_KINDS,
+      'seal-view',
+    ],
     [REMOVE_DEVICE_CIRCUIT, ...ROTATION_CIRCUITS],
   ),
   'issue-grant': scope(
@@ -293,6 +330,11 @@ const FLOW_SCOPES: Record<SignerFlowKind, FlowScope> = {
   'revoke-grant': scope(GATED_CALL_KINDS, [REVOKE_GRANT_CIRCUIT]),
   'revoke-all-grants': scope(GATED_CALL_KINDS, [REVOKE_ALL_GRANTS_CIRCUIT]),
   'read-holdings': scope(['reader-public-key', ...KEYRING_KINDS, 'open-inbox']),
+  'install-operations': scope([
+    'reader-public-key',
+    ...KEYRING_KINDS,
+    ...MAINTENANCE_KINDS,
+  ]),
 };
 
 /** Whether a grant descriptor asks for a session that rotates the encryption key. */
@@ -304,12 +346,13 @@ const rotatesForGrant = (flow: DecodedSignerFlow): boolean =>
 
 /**
  * The account a session acts on as its descriptor names it: a device
- * flow's, an issue's and a revocation's. A creation, a sign-in and a
- * holdings read name none.
+ * flow's, an install's, an issue's and a revocation's. A creation, a
+ * sign-in and a holdings read name none.
  */
 const sessionAccount = (flow: DecodedSignerFlow): string | undefined => {
   switch (flow.kind) {
     case 'add-device':
+    case 'install-operations':
     case 'issue-grant':
     case 'remove-device':
     case 'revoke-all-grants':
@@ -328,8 +371,9 @@ const sessionAccount = (flow: DecodedSignerFlow): string | undefined => {
  * device's keys, the sealing of the account keys to the joining device
  * and the appends that deliver them, and, when its descriptor names the
  * device entries of a rotation ahead of it because a read grant is live,
- * by that rotation and the re-seal of the live read grants, the joining
- * device then sealed only the key the session rotated to; and for a read
+ * by that rotation, the check and move of the maintenance authority it
+ * calls for and the re-seal of the live read grants, the joining device then
+ * sealed only the key the session rotated to; and for a read
  * grant's issue or a
  * revocation that rotates the key by what the rotation sends, and for
  * one that seals the new secret again by the seal request. A grant
@@ -340,7 +384,13 @@ const flowScope = (flow: DecodedSignerFlow): FlowScope => {
   const base = FLOW_SCOPES[flow.kind];
   if (flow.kind === 'add-device' && flow.reader && flow.devices) {
     return scope(
-      [...base.kinds, ...ROTATION_KINDS, 'seal-view', 'seal-to-device'],
+      [
+        ...base.kinds,
+        ...ROTATION_KINDS,
+        ...ROSTER_AUTHORITY_KINDS,
+        'seal-view',
+        'seal-to-device',
+      ],
       [...base.circuits, ...ROTATION_CIRCUITS],
     );
   }
@@ -505,6 +555,7 @@ const bindFlow = async (
         flow.account,
         singleBytesArgumentCheck(flow.grantId),
       );
+    case 'install-operations':
     case 'revoke-all-grants':
       return accountArgumentCheck(flow.account, noArgumentCheck);
     case 'issue-grant': {
@@ -562,6 +613,7 @@ const rotationDevices = (flow: DecodedSignerFlow): string[] | undefined => {
     case 'revoke-all-grants':
       return flow.devices;
     case 'create-account':
+    case 'install-operations':
     case 'read-holdings':
     case 'sign-in':
       return undefined;
@@ -779,6 +831,44 @@ const derivesOwnGrantIds = async (
   });
 };
 
+/**
+ * Names the field a maintenance update strays from its approval on. An
+ * install signs only verifier key inserts, each of an operation its
+ * descriptor names and none twice. A device flow signs only the replace
+ * that follows the fresh-roster rotation it signed, over the keyring of
+ * the key the session rotated to, on the same network, and only towards
+ * the authority the roster key that rotation drew derives. The dApp
+ * chooses the envelopes of the keyring, so one sealing the rotated
+ * secret with a roster key of a grantee's could otherwise pass as live,
+ * and the authority the session drew is the only one the user approved
+ * handing to the devices listed. Which verifier keys an insert may carry
+ * the encryption key holds to itself.
+ */
+const unboundMaintenance = (
+  { flow, rotatedTo }: HeldKeySession,
+  { key, networkId }: RotatedKey,
+  changes: MaintenanceChanges,
+): string | undefined => {
+  if (flow.kind === 'install-operations') {
+    if (changes.kind !== 'insert-verifier-keys') return 'changes';
+    const named = new Set(flow.operations);
+    const signed = new Set<string>();
+    for (const [index, { operation }] of changes.inserts.entries()) {
+      if (!named.has(operation) || signed.has(operation)) {
+        return `changes.inserts[${index}]`;
+      }
+      signed.add(operation);
+    }
+    return undefined;
+  }
+  if (changes.kind !== 'replace-authority') return 'changes';
+  if (!rotatedTo?.rotateRoster || rotatedTo.key !== key) return 'keyring';
+  if (rotatedTo.networkId !== networkId) return 'networkId';
+  return isSameAuthority(changes.authority, rotatedTo.authority)
+    ? undefined
+    : 'changes.authority';
+};
+
 /** Whether two pending deployments are the same in every field. */
 const isSameDeployment = (
   left: PendingDeployment,
@@ -789,6 +879,8 @@ const isSameDeployment = (
   left.saltHex === right.saltHex &&
   left.authorityKey.tag === right.authorityKey.tag &&
   left.authorityKey.value === right.authorityKey.value &&
+  left.handoverAuthority.tag === right.handoverAuthority.tag &&
+  left.handoverAuthority.value === right.handoverAuthority.value &&
   left.operations.join(',') === right.operations.join(',') &&
   left.keyEntries.join(',') === right.keyEntries.join(',');
 
@@ -861,6 +953,24 @@ const isSameDeployment = (
  * envelopes through `find-live-envelope`, which answers only where in
  * the page the live one sits, so envelopes anyone appended to this
  * device's reader key cost the flow requests, never the live secret.
+ *
+ * A maintenance update is built and signed inside the encryption key,
+ * the same implementation a local passkey runs, which signs only with
+ * the authority a roster key of the keyring derives when that authority
+ * is the one the request says the chain holds, installs by a replace
+ * only the authority the live roster key derives, and inserts only the
+ * verifier keys the module pins for operations it deploys; it never
+ * signs bytes it is sent. The session holds it to its approval too: a
+ * removal, and an enrolment that rotates under a live read grant, sign
+ * only a replace, only over the keyring of the fresh-roster key the
+ * session rotated to, and only towards the authority the roster key that
+ * session drew derives, since the dApp picks the keyring's envelopes and
+ * so which roster key the encryption key takes as live; an install signs
+ * only inserts of the operations its descriptor names. A keyring none of whose roster keys
+ * derives the authority is answered null rather than refused, so the
+ * dApp pages the envelopes older than the live one beside it, since
+ * the roster key the authority was derived from may sit behind any
+ * number of envelopes anyone appended.
  *
  * An issue-grant descriptor is also re-derived before the session opens:
  * the scope digest from its scope and salt, and the grant id from its
@@ -1218,6 +1328,7 @@ export const createPassportSignerHandlers = ({
           key,
           networkId: created.networkId,
           rotateRoster: created.rotateRoster,
+          authority: created.authority,
         };
         if (created.from !== undefined) {
           await retiredKeys.link(
@@ -1270,7 +1381,7 @@ export const createPassportSignerHandlers = ({
     { grantId, account, readPublicKey }: GrantViewSealRequest,
   ): Promise<string | undefined> => {
     const { flow, rotatedTo } = held;
-    if (rotatedTo === undefined || rotatedTo.key !== key) return 'keyring';
+    if (rotatedTo?.key !== key) return 'keyring';
     if (rotatedTo.networkId !== networkId) return 'networkId';
     if (account !== sessionAccount(flow)) return 'account';
     if (flow.kind === 'issue-grant' && grantId === flow.grantId) {
@@ -1326,7 +1437,9 @@ export const createPassportSignerHandlers = ({
    * The pending deployment a creation's write leaves stored. Over a
    * complete record nothing is written. Only the origin that drew the
    * creation's keys writes a pending record over empty storage, carrying
-   * the whole deployment with the lock choice the descriptor names, and
+   * the whole deployment with the lock choice the descriptor names and
+   * the handover authority of keys this session drew, so the authority
+   * an unlocked account is handed to is one its roster key derives, and
    * only it writes over a pending one, under the lock choice that one
    * was started with, keeping that deployment as it is or dropping it to
    * complete the record.
@@ -1359,9 +1472,14 @@ export const createPassportSignerHandlers = ({
       return refuse(held, 'record.deployment');
     }
     if (stored?.deployment === undefined) {
-      return written.lockAccount === flow.lockAccount
+      if (written.lockAccount !== flow.lockAccount) {
+        return refuse(held, 'record.deployment.lockAccount');
+      }
+      return [...held.createdKeys.values()].some(({ authority }) =>
+        isSameAuthority(authority, written.handoverAuthority),
+      )
         ? written
-        : refuse(held, 'record.deployment.lockAccount');
+        : refuse(held, 'record.deployment.handoverAuthority');
     }
     return isPendingDeployment(stored.deployment) &&
       isSameDeployment(stored.deployment, written)
@@ -1565,6 +1683,7 @@ export const createPassportSignerHandlers = ({
         networkId,
         from: admitted ? encodeBytes(admitted.encKey) : undefined,
         rotateRoster: isFreshRoster,
+        authority: keys.authority,
       });
       produce(held, [...keys.envelopes, ...keys.registrations]);
       return encodeAccountKeys(keys);
@@ -1575,9 +1694,8 @@ export const createPassportSignerHandlers = ({
       const named = decodeLiveReader(reader, 'reader');
       if (
         flow.kind !== 'add-device' ||
-        !flow.reader ||
-        named.readerPublicKey !== flow.reader.readerPublicKey ||
-        named.devicePublicKey !== flow.reader.devicePublicKey ||
+        named.readerPublicKey !== flow.reader?.readerPublicKey ||
+        named.devicePublicKey !== flow.reader?.devicePublicKey ||
         named.counter !== 0n ||
         (await loadDeviceEntryDerivation()).deviceEntryOf(
           { address: flow.account, epoch: named.epoch },
@@ -1705,6 +1823,51 @@ export const createPassportSignerHandlers = ({
         seal: encodeBytes(delivery.seal),
         entry: encodeBytes(delivery.entry),
       };
+    },
+    'sign-maintenance-update': async ({
+      networkId,
+      keyring,
+      authority,
+      counter,
+      changes,
+    }) => {
+      const held = requireScopedRequest('sign-maintenance-update');
+      const request = {
+        authority: decodeMaintenanceKey(authority, 'authority'),
+        counter: decodeBigInt(counter, 'counter'),
+        changes: decodeMaintenanceChanges(changes, 'changes'),
+      };
+      const admitted = await admitKeyring(held, networkId, keyring);
+      const argument = unboundMaintenance(
+        held,
+        { key: encodeBytes(admitted.encKey), networkId },
+        request.changes,
+      );
+      if (argument !== undefined) refuse(held, argument);
+      try {
+        return encodeSignedMaintenanceUpdate(
+          await encryptionKey.signMaintenanceUpdate(networkId, {
+            ...request,
+            keyring: admitted,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof MaintenanceAuthorityMismatchError) return null;
+        throw error;
+      }
+    },
+    'holds-maintenance-authority': async ({
+      networkId,
+      keyring,
+      authority,
+    }) => {
+      const held = requireScopedRequest('holds-maintenance-authority');
+      const decoded = decodeMaintenanceKey(authority, 'authority');
+      return encryptionKey.holdsMaintenanceAuthority(
+        networkId,
+        await admitKeyring(held, networkId, keyring),
+        decoded,
+      );
     },
     'record-read': async (_payload, dappOrigin) => {
       const held = requireScopedRequest('record-read');

@@ -31,6 +31,7 @@ const pendingRecord: PassportAccountRecord = {
     lockAccount: true,
     saltHex: '07'.repeat(32),
     authorityKey: { tag: 'schnorr', value: 'authority-key' },
+    handoverAuthority: { tag: 'schnorr', value: 'cd'.repeat(32) },
     keyEntries: ['d1'.repeat(192)],
   },
 };

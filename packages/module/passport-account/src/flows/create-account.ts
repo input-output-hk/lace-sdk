@@ -37,8 +37,10 @@ const INITIAL_USE_COUNTER_VALUE = '0';
 /** The caller's choices for a new account. */
 export type CreateAccountInput = {
   /**
-   * Whether to retire the contract maintenance authority once activation
-   * completes; see {@link deployAccount} for what each choice trades.
+   * Whether the last deployment wave retires the contract maintenance
+   * authority, or hands it to the account's devices through the
+   * authority the roster key derives; see {@link deployAccount} for what
+   * each choice trades.
    */
   lockAccount: boolean;
 };
@@ -96,10 +98,12 @@ type Deployment = { deployed: DeployedAccount; pending: PendingDeployment };
 
 /**
  * Runs the deployment: a fresh one, which draws the account keys first,
- * deploys with their `enc_key` and records the pending deployment, with
- * this device's envelope and registration, as soon as the deploy lands
- * so an interruption can be resumed; or the remaining waves of a
- * recorded one, with the key entries it recorded.
+ * deploys with their `enc_key`, hands an unlocked account's maintenance
+ * to the authority their roster key derives, and records the pending
+ * deployment, with this device's envelope and registration, as soon as
+ * the deploy lands so an interruption can be resumed; or the remaining
+ * waves of a recorded one, with the key entries and the handover
+ * authority it recorded.
  */
 const deploy = async ({
   providers,
@@ -133,6 +137,7 @@ const deploy = async ({
     authoriser: passportAuthoriser,
     encPublicKey: keys.encKey,
     lockAccount,
+    handoverAuthority: keys.authority,
     onDeployed: async (address, deployment) => {
       progress.recorded = { ...deployment, keyEntries };
       await accountRecords.write({

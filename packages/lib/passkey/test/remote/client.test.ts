@@ -86,6 +86,21 @@ const REQUESTS: {
     account: 'cd'.repeat(32),
     readPublicKey: 'ef'.repeat(32),
   },
+  'sign-maintenance-update': {
+    networkId: 'undeployed',
+    keyring: KEYRING,
+    authority: { tag: 'schnorr', value: 'ab'.repeat(32) },
+    counter: '4',
+    changes: {
+      kind: 'insert-verifier-keys',
+      inserts: [{ operation: 'withdraw_unshielded', verifierKey: '0102' }],
+    },
+  },
+  'holds-maintenance-authority': {
+    networkId: 'undeployed',
+    keyring: KEYRING,
+    authority: { tag: 'schnorr', value: 'ab'.repeat(32) },
+  },
   'record-read': {},
   'record-write': { record: { sealed: 'aa' } },
   'record-exists': {},

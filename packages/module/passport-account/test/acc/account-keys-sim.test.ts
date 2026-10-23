@@ -10,9 +10,11 @@ import {
   AccAddress,
   DeviceRosterInvalidError,
   EncryptionKeyMismatchError,
+  MaintenanceAuthorityMismatchError,
   TokenColor,
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
+import * as ledgerV9 from '@midnightntwrk/ledger-v9';
 import { x25519 } from '@noble/curves/ed25519.js';
 import { jubjub } from '@noble/curves/misc.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,11 +24,13 @@ import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import {
   deviceEnvelopes,
   encodeDevicePublicKey,
+  MAX_KEYRING_SECRETS,
   sealDeviceEnvelope,
   sealDeviceRegistration,
 } from '../../src/acc/envelopes';
 import { sealInboxEntry } from '../../src/acc/inbox';
 import { inboxEntries } from '../../src/acc/inbox-walk';
+import { maintenanceUpdateOf } from '../../src/acc/maintenance-authority';
 import { JubjubDevice, randomJubjubScalar } from '../../src/acc/signer';
 import { createAccount } from '../../src/flows/create-account';
 import { addDevice, removeDevice } from '../../src/flows/devices';
@@ -50,11 +54,14 @@ import type {
   ShieldedOutputRecord,
 } from '../../src/infra/indexer';
 import type {
+  AccountKeyring,
   DeviceReader,
   GrantScopeInput,
+  MaintenanceVerifyingKey,
   PassportAccountInfo,
   ShieldedCoin,
 } from '@lace-contract/passport';
+import type { MaintenanceUpdate, Signature } from '@midnightntwrk/ledger-v9';
 
 const chain = vi.hoisted(() => ({
   sim: undefined as AccountSim | undefined,
@@ -63,6 +70,7 @@ const chain = vi.hoisted(() => ({
   outputs: new Map<string, ShieldedOutputRecord[]>(),
   afterCall: undefined as ((circuit: string) => Promise<void>) | undefined,
   failCircuit: undefined as string | undefined,
+  failMaintenance: false,
 }));
 
 const simulated = (): AccountSim => {
@@ -74,8 +82,10 @@ vi.mock('../../src/infra/indexer', () => ({
   createIndexerClient: () => ({
     queryContractState: async () => simulated().contractState(),
     enumerateContractActions: async () => chain.actions,
-    queryShieldedOutputs: async (txHash: string) =>
-      chain.outputs.get(txHash) ?? [],
+    queryShieldedEvents: async (txHash: string) => ({
+      outputs: chain.outputs.get(txHash) ?? [],
+      nullifiers: [],
+    }),
   }),
 }));
 vi.mock('../../src/infra/providers', () => ({
@@ -111,15 +121,18 @@ vi.mock('../../src/acc/deploy', () => ({
   deployAccount: async ({
     encPublicKey,
     lockAccount,
+    handoverAuthority,
     onDeployed,
   }: {
     encPublicKey: Uint8Array;
     lockAccount: boolean;
+    handoverAuthority: MaintenanceVerifyingKey;
     onDeployed: (address: string, pending: unknown) => Promise<void>;
   }) => {
     chain.sim = await AccountSim.create({
       encKey: encPublicKey,
       scalar: chain.scalar,
+      committee: lockAccount ? [] : [handoverAuthority],
     });
     const address = HexBytes.fromByteArray(chain.sim.address);
     await onDeployed(address, {
@@ -128,6 +141,7 @@ vi.mock('../../src/acc/deploy', () => ({
       verifierKeysDigest: '00'.repeat(32),
       saltHex: '00'.repeat(32),
       authorityKey: { tag: 'schnorr', value: '00' },
+      handoverAuthority: { tag: 'schnorr', value: 'cd'.repeat(32) },
     });
     return {
       address,
@@ -138,6 +152,20 @@ vi.mock('../../src/acc/deploy', () => ({
   },
   resumeAccountDeployment: async () => {
     throw new Error('No deployment is resumed here');
+  },
+  readMaintenanceAuthority: async () => simulated().maintenanceAuthority(),
+  submitMaintenanceUpdate: async ({
+    update,
+    signature,
+  }: {
+    update: MaintenanceUpdate;
+    signature: Signature;
+  }) => {
+    if (chain.failMaintenance) {
+      chain.failMaintenance = false;
+      throw new Error('The maintenance update was interrupted');
+    }
+    simulated().maintain(update.addSignature(0n, signature));
   },
 }));
 
@@ -272,6 +300,50 @@ const plantedRegistration = async (
   return registration;
 };
 
+/** A device's keyring over the account as the chain holds it, at `encKey` or the live one. */
+const keyringOf = async (
+  owner: Device,
+  account: PassportAccountInfo,
+  encKey = simulated().ledger().enc_key,
+): Promise<AccountKeyring> => ({
+  account: AccAddress(account.address),
+  encKey,
+  envelopes: deviceEnvelopes(
+    inboxEntries(simulated().ledger()),
+    ByteArray.fromHex(HexBytes((await readerOf(owner)).readerPublicKey)),
+  ),
+});
+
+/**
+ * Signs and applies the replace that keeps the authority a device's live
+ * roster key derives, as proof the device holds the authority.
+ */
+const maintainAs = async (
+  owner: Device,
+  account: PassportAccountInfo,
+  encKey?: Uint8Array,
+): Promise<void> => {
+  const { committee, counter } = simulated().maintenanceAuthority();
+  const [authority] = committee;
+  const changes = { kind: 'replace-authority', authority } as const;
+  const { signature } = await owner.encryptionKey.signMaintenanceUpdate(
+    network.networkId,
+    {
+      keyring: await keyringOf(owner, account, encKey),
+      authority,
+      counter,
+      changes,
+    },
+  );
+  simulated().maintain(
+    maintenanceUpdateOf(ledgerV9, {
+      address: AccAddress(account.address),
+      counter,
+      changes,
+    }).addSignature(0n, signature),
+  );
+};
+
 /** The entry a device's key derives at use counter 0 on the account. */
 const firstEntryOf = (owner: Device, account: PassportAccountInfo): string =>
   HexBytes.fromByteArray(
@@ -379,6 +451,7 @@ describe(
       chain.sim = undefined;
       chain.actions = [];
       chain.outputs = new Map();
+      chain.failMaintenance = false;
     });
 
     it('delivers the keys to a joining device, survives record loss, rebuilds grants and drops a removed device', async () => {
@@ -811,6 +884,7 @@ describe(
       joiner.store.adopt(freshRecord(account));
       const joinerIn = await signIn(joiner.context);
       expect(joinerIn.encKey).toBe(added.encKey);
+      await expect(maintainAs(joiner, account)).resolves.toBeUndefined();
 
       const revoked = await revokeGrant(
         { ...callInput(joinerIn), grantId: issued.grantId },
@@ -825,6 +899,151 @@ describe(
       );
       await expect(signIn(first.context)).resolves.toMatchObject({
         encKey: revoked.encKey,
+      });
+    });
+
+    it('moves the maintenance authority to the new roster key on a removal, out of reach of the removed device', async () => {
+      const first = device();
+      const second = device();
+      const { account, firstIn } = await twoDeviceAccount(first, second);
+      const before = simulated().maintenanceAuthority();
+      const encKeyBefore = simulated().ledger().enc_key;
+      await maintainAs(second, account);
+      const secondRow = firstIn.devices.find(row => !row.isLocal);
+
+      await removeDevice(
+        { ...callInput(firstIn), commitmentHex: secondRow!.commitmentHex },
+        first.context,
+      );
+
+      const after = simulated().maintenanceAuthority();
+      expect(after.committee).toHaveLength(1);
+      expect(after.committee).not.toEqual(before.committee);
+      expect(after.counter).toBe(before.counter + 2n);
+      await expect(maintainAs(first, account)).resolves.toBeUndefined();
+      await expect(
+        maintainAs(second, account, encKeyBefore),
+      ).rejects.toBeInstanceOf(MaintenanceAuthorityMismatchError);
+    });
+
+    it('moves the maintenance authority on a removal however many envelopes anyone sealed to the remover', async () => {
+      const first = device();
+      const second = device();
+      const { account, firstIn } = await twoDeviceAccount(first, second);
+      const readerPublicKey = ByteArray.fromHex(
+        HexBytes((await readerOf(first)).readerPublicKey),
+      );
+      for (let index = 0; index <= MAX_KEYRING_SECRETS; index++) {
+        await appendThroughDeposit(
+          await sealDeviceEnvelope(readerPublicKey, {
+            secret: x25519.utils.randomSecretKey(),
+            rosterKey: crypto.getRandomValues(new Uint8Array(32)),
+          }),
+        );
+      }
+      const before = simulated().maintenanceAuthority();
+      const secondRow = firstIn.devices.find(row => !row.isLocal);
+
+      await removeDevice(
+        { ...callInput(firstIn), commitmentHex: secondRow!.commitmentHex },
+        first.context,
+      );
+
+      const after = simulated().maintenanceAuthority();
+      expect(after.committee).not.toEqual(before.committee);
+      expect(after.counter).toBe(before.counter + 1n);
+      await expect(maintainAs(first, account)).resolves.toBeUndefined();
+    });
+
+    it('completes a removal run again after its maintenance update failed', async () => {
+      const first = device();
+      const second = device();
+      const { account, firstIn } = await twoDeviceAccount(first, second);
+      const before = simulated().maintenanceAuthority();
+      const commitmentHex = firstIn.devices.find(
+        row => !row.isLocal,
+      )!.commitmentHex;
+      chain.failMaintenance = true;
+
+      await expect(
+        removeDevice({ ...callInput(firstIn), commitmentHex }, first.context),
+      ).rejects.toThrow('interrupted');
+      expect(simulated().maintenanceAuthority()).toEqual(before);
+
+      await removeDevice(
+        { ...callInput(await signIn(first.context)), commitmentHex },
+        first.context,
+      );
+
+      const after = simulated().maintenanceAuthority();
+      expect(after.committee).not.toEqual(before.committee);
+      expect(after.counter).toBe(before.counter + 1n);
+      await expect(maintainAs(first, account)).resolves.toBeUndefined();
+      expect(
+        simulated()
+          .ledger()
+          .devices.member(ByteArray.fromHex(HexBytes(commitmentHex))),
+      ).toBe(false);
+    });
+
+    it('completes a removal run again after the authority moved but the device stayed', async () => {
+      const first = device();
+      const second = device();
+      const { account, firstIn } = await twoDeviceAccount(first, second);
+      const before = simulated().maintenanceAuthority();
+      const commitmentHex = firstIn.devices.find(
+        row => !row.isLocal,
+      )!.commitmentHex;
+      chain.failCircuit = 'remove_device_with_jubjub';
+
+      await expect(
+        removeDevice({ ...callInput(firstIn), commitmentHex }, first.context),
+      ).rejects.toThrow('interrupted');
+      const moved = simulated().maintenanceAuthority();
+      expect(moved.committee).not.toEqual(before.committee);
+      expect(moved.counter).toBe(before.counter + 1n);
+
+      await removeDevice(
+        { ...callInput(await signIn(first.context)), commitmentHex },
+        first.context,
+      );
+
+      const after = simulated().maintenanceAuthority();
+      expect(after.committee).not.toEqual(moved.committee);
+      expect(after.counter).toBe(before.counter + 2n);
+      await expect(maintainAs(first, account)).resolves.toBeUndefined();
+      expect(
+        simulated()
+          .ledger()
+          .devices.member(ByteArray.fromHex(HexBytes(commitmentHex))),
+      ).toBe(false);
+    });
+
+    it('leaves the empty committee of a locked account alone on a removal', async () => {
+      const first = device();
+      const second = device();
+      chain.scalar = first.scalar;
+      const created = await createAccount({ lockAccount: true }, first.context);
+      await addDevice(
+        {
+          ...callInput(created),
+          commitmentHex: firstEntryOf(second, created.account),
+          reader: await readerOf(second),
+        },
+        first.context,
+      );
+      const firstIn = await signIn(first.context);
+      const secondRow = firstIn.devices.find(row => !row.isLocal);
+
+      await removeDevice(
+        { ...callInput(firstIn), commitmentHex: secondRow!.commitmentHex },
+        first.context,
+      );
+
+      expect(simulated().maintenanceAuthority()).toEqual({
+        committee: [],
+        threshold: 1,
+        counter: 0n,
       });
     });
   },

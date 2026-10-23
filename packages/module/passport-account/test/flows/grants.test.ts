@@ -1640,9 +1640,10 @@ describe('read grants', () => {
       mocks.createIndexerClient.mockReturnValue({
         queryContractState,
         enumerateContractActions: vi.fn(async () => actions),
-        queryShieldedOutputs: vi.fn(
-          async (txHash: string) => outputs.get(txHash) ?? [],
-        ),
+        queryShieldedEvents: vi.fn(async (txHash: string) => ({
+          outputs: outputs.get(txHash) ?? [],
+          nullifiers: [],
+        })),
       });
       const simAccount: PassportAccountInfo = {
         ...account,

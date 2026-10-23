@@ -2,6 +2,7 @@ import {
   AccountContractMissingError,
   AuthorityNotRetiredError,
   CreationArtefactMismatchError,
+  MaintenanceAuthorityMismatchError,
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 
@@ -17,7 +18,8 @@ import {
   expectedVk,
   pureCircuits,
 } from './acc-module';
-import { GRANTEE_WITHDRAWAL_CIRCUITS } from './grant-circuits';
+import { DEPLOYED_OPERATIONS } from './deployed-operations';
+import { isSameAuthority } from './maintenance-authority';
 import { JubjubDevice } from './signer';
 import {
   assertVerifierKeyHeader,
@@ -29,65 +31,14 @@ import type { JubjubPoint, Witnesses } from './acc-module';
 import type { PendingDeployment } from './pending-deployment';
 import type { DeployWave, VerifierKeySizes } from './wave-plan';
 import type { Sleep } from '../infra/submit';
-import type { PassportAuthoriser } from '@lace-contract/passport';
+import type {
+  MaintenanceVerifyingKey,
+  PassportAuthoriser,
+} from '@lace-contract/passport';
 import type * as NetworkIdModule from '@midnight-ntwrk/midnight-js-network-id';
 import type * as Ledger from '@midnightntwrk/ledger-v9';
-import type { SigningKey } from '@midnightntwrk/ledger-v9';
 
 export type { PendingDeployment } from './pending-deployment';
-
-/** Gated circuit bases the contract exports once per authorisation arm. */
-const GATED_CIRCUIT_BASES = [
-  'withdraw_unshielded',
-  'append_inbox',
-  'withdraw_shielded',
-  'withdraw_shielded_to_contract',
-  'rotate_enc_key',
-  'add_device',
-  'remove_device',
-] as const;
-
-/** Every impure circuit of the jubjub arm, activation included. */
-const JUBJUB_ARM_CIRCUITS = [
-  'activate_initial_device',
-  ...GATED_CIRCUIT_BASES,
-].map(base => `${base}_with_jubjub`);
-
-/** Permissionless deposit circuits shared by all arms. */
-const SHARED_CIRCUITS = ['deposit_unshielded', 'deposit_shielded'];
-
-/** The grant lifecycle circuits, authorised by a jubjub device. */
-const GRANT_LIFECYCLE_BASES = [
-  'issue_grant',
-  'revoke_grant',
-  'revoke_all_grants',
-] as const;
-
-/**
- * The scoped grant circuits: the lifecycle a jubjub device authorises,
- * then the withdrawals of a jubjub grantee and of a secp256k1 grantee.
- */
-const GRANT_CIRCUITS = [
-  ...GRANT_LIFECYCLE_BASES.map(base => `${base}_with_jubjub`),
-  ...GRANTEE_WITHDRAWAL_CIRCUITS['jubjub-schnorr'],
-  ...GRANTEE_WITHDRAWAL_CIRCUITS['secp256k1-ecdsa'],
-];
-
-/**
- * The complete operation set this module deploys, in installation order:
- * the deposits, the jubjub device arm and the grant circuits. The device
- * arm is jubjub only: the compiled contract also carries k256 and P-256
- * device arms, their grant lifecycles and the recovery circuits, and none
- * of their verifier keys are installed, so on an account deployed here
- * only jubjub devices can ever authorise. A grant may name a jubjub or a
- * secp256k1 grantee, so the withdrawals of both grantee arms are
- * installed.
- */
-const DEPLOYED_OPERATIONS = [
-  ...SHARED_CIRCUITS,
-  ...JUBJUB_ARM_CIRCUITS,
-  ...GRANT_CIRCUITS,
-];
 
 const ACTIVATE_INITIAL_DEVICE_CIRCUIT = 'activate_initial_device_with_jubjub';
 
@@ -216,7 +167,7 @@ export const initialAccountPrivateState = (): AccountPrivateState => ({
 type UnprovenAccountDeploy = {
   public: { initialContractState: { serialize: () => Uint8Array } };
   private: {
-    signingKey: SigningKey;
+    signingKey: Ledger.SigningKey;
     initialPrivateState: AccountPrivateState;
   };
 };
@@ -252,11 +203,17 @@ export type DeployAccountProps = {
   /** Raw 32-byte X25519 public key the constructor stores as `enc_key`. */
   encPublicKey: Uint8Array;
   /**
-   * Whether to retire the contract maintenance authority in the last
-   * wave. Required with no default: the choice trades upgradability for
-   * custody and must be made explicitly. See {@link deployAccount}.
+   * Whether the last wave retires the contract maintenance authority
+   * rather than handing it to the account's devices. Required with no
+   * default: the choice trades upgradability for custody and must be
+   * made explicitly. See {@link deployAccount}.
    */
   lockAccount: boolean;
+  /**
+   * The maintenance authority the account's roster key derives, which
+   * the last wave of an unlocked account installs.
+   */
+  handoverAuthority: MaintenanceVerifyingKey;
   /**
    * Called once the deploy has landed and before the next wave is
    * submitted, with what a retry needs to finish the deployment. The
@@ -341,13 +298,13 @@ const deployedVerifierKeysDigest = async (): Promise<string> => {
 };
 
 /**
- * The verifier key of every roster operation, downloaded through the zk
+ * The verifier key of each of `operations`, downloaded through the zk
  * config provider so each one is checked against its pin and its header,
  * and the sizes the wave plan is computed from. The plan follows the
  * real keys, so a roster or key-size change re-plans itself.
  */
-const loadVerifierKeys = async (
-  providers: AccProviders,
+export const loadVerifierKeys = async (
+  providers: Pick<AccProviders, 'zkConfigProvider'>,
   operations: readonly string[],
 ): Promise<{ keys: Map<string, Uint8Array>; sizes: VerifierKeySizes }> => {
   const zkConfig = providers.zkConfigProvider as VerifierKeyProvider;
@@ -366,8 +323,12 @@ const loadVerifierKeys = async (
   return { keys, sizes };
 };
 
+/**
+ * Where the contract state is read from: the public data provider, the
+ * ledger the state is decoded with and the contract address.
+ */
 type ChainStateProps = {
-  providers: AccProviders;
+  providers: Pick<AccProviders, 'publicDataProvider'>;
   ledger: LedgerModule;
   address: string;
 };
@@ -404,6 +365,18 @@ const readContractState = async (
   chain.ledger.ContractState.deserialize(
     (await readProvidedState(chain)).serialize(),
   );
+
+/**
+ * The contract maintenance authority as it stands on chain: its
+ * committee, threshold and the counter the next update is built against.
+ *
+ * @throws {@link AccountContractMissingError} when the address holds no
+ * live contract.
+ */
+export const readMaintenanceAuthority = async (
+  chain: ChainStateProps,
+): Promise<Ledger.ContractMaintenanceAuthority> =>
+  (await readContractState(chain)).maintenanceAuthority;
 
 /**
  * Blocks until the indexer serves the contract the deploy created. The
@@ -444,13 +417,89 @@ const awaitAuthorityCounter = async (
   );
 };
 
+/** What {@link submitMaintenanceUpdate} submits and through which providers. */
+type SubmitMaintenanceUpdateProps = ChainStateProps & {
+  providers: AccProviders;
+  networkId: NetworkIdApi;
+  /** The update as it was signed, built against the on-chain counter. */
+  update: Ledger.MaintenanceUpdate;
+  /** The committee's one signature over the update's data. */
+  signature: Ledger.Signature;
+  /** Names the update in a failure. */
+  label: string;
+  /** Waits between chain polls; defaults to a real timer. */
+  sleep?: Sleep;
+};
+
+/**
+ * Submits one maintenance update carrying the signature of the sole
+ * committee member, at index 0, and blocks until the chain shows the
+ * counter its application advanced the authority to, so the next update
+ * or call is built against the advanced state.
+ *
+ * @throws when the update lands with a failing status, or when the
+ * counter never advances within the polling window.
+ */
+export const submitMaintenanceUpdate = async ({
+  providers,
+  ledger,
+  address,
+  networkId,
+  update,
+  signature,
+  label,
+  sleep = defaultSleep,
+}: SubmitMaintenanceUpdateProps): Promise<void> => {
+  const transaction = ledger.Transaction.fromParts(
+    networkId.getNetworkId(),
+    undefined,
+    undefined,
+    ledger.Intent.new(transactionTtl()).addMaintenanceUpdate(
+      update.addSignature(0n, signature),
+    ),
+  );
+  assertSubmitted(
+    label,
+    await submitTx(providers, { unprovenTx: transaction }),
+  );
+  await awaitAuthorityCounter(
+    { providers, ledger, address },
+    update.counter + 1n,
+    sleep,
+  );
+};
+
 type InstallWavesProps = ChainStateProps & {
+  providers: AccProviders;
   networkId: NetworkIdApi;
   waves: DeployWave[];
   verifierKeys: Map<string, Uint8Array>;
-  authorityKey: SigningKey;
+  authorityKey: Ledger.SigningKey;
+  /** The committee the wave that replaces the authority installs. */
+  successor: readonly MaintenanceVerifyingKey[];
   sleep: Sleep;
 };
+
+/**
+ * The committee that succeeds the deploy-time authority: none for a
+ * locked account, which retires it, or else the handover authority
+ * alone, so every device holding the roster key can sign maintenance.
+ */
+const successorOf = ({
+  lockAccount,
+  handoverAuthority,
+}: Pick<
+  PendingDeployment,
+  'handoverAuthority' | 'lockAccount'
+>): MaintenanceVerifyingKey[] => (lockAccount ? [] : [handoverAuthority]);
+
+/** Whether a committee on chain is exactly `expected`, member for member. */
+const isCommittee = (
+  committee: readonly MaintenanceVerifyingKey[],
+  expected: readonly MaintenanceVerifyingKey[],
+): boolean =>
+  committee.length === expected.length &&
+  committee.every((member, index) => isSameAuthority(member, expected[index]));
 
 const verifierKeyOf = (
   verifierKeys: Map<string, Uint8Array>,
@@ -465,9 +514,9 @@ const verifierKeyOf = (
  * Submits the maintenance waves in order, each one update carrying its
  * batch of verifier key inserts, signed by the maintenance authority key.
  * The counter is read from chain before every update because each
- * applied update advances it, and a wave that retires the authority
- * installs the unsatisfiable committee at the counter its own application
- * leaves behind.
+ * applied update advances it, and the wave that replaces the authority
+ * installs the successor committee, threshold one, at the counter its
+ * own application leaves behind.
  */
 const installWaves = async ({
   providers,
@@ -477,12 +526,12 @@ const installWaves = async ({
   waves,
   verifierKeys,
   authorityKey,
+  successor,
   sleep,
 }: InstallWavesProps): Promise<void> => {
   const chain = { providers, ledger, address };
   for (const [index, wave] of waves.entries()) {
-    const { maintenanceAuthority } = await readContractState(chain);
-    const counter = maintenanceAuthority.counter;
+    const { counter } = await readMaintenanceAuthority(chain);
     const updates: Ledger.SingleUpdate[] = wave.operations.map(operation =>
       verifierKeyInsert(
         ledger,
@@ -490,29 +539,26 @@ const installWaves = async ({
         verifierKeyOf(verifierKeys, operation),
       ),
     );
-    if (wave.retiresAuthority) {
+    if (wave.replacesAuthority) {
       updates.push(
         new ledger.ReplaceAuthority(
-          new ledger.ContractMaintenanceAuthority([], 1, counter + 1n),
+          new ledger.ContractMaintenanceAuthority(
+            [...successor],
+            1,
+            counter + 1n,
+          ),
         ),
       );
     }
     const update = new ledger.MaintenanceUpdate(address, updates, counter);
-    const signed = update.addSignature(
-      0n,
-      ledger.signData(authorityKey, update.dataToSign),
-    );
-    const waveTx = ledger.Transaction.fromParts(
-      networkId.getNetworkId(),
-      undefined,
-      undefined,
-      ledger.Intent.new(transactionTtl()).addMaintenanceUpdate(signed),
-    );
-    assertSubmitted(
-      `Verifier key wave ${index + 1} of ${waves.length}`,
-      await submitTx(providers, { unprovenTx: waveTx }),
-    );
-    await awaitAuthorityCounter(chain, counter + 1n, sleep);
+    await submitMaintenanceUpdate({
+      ...chain,
+      networkId,
+      update,
+      signature: ledger.signData(authorityKey, update.dataToSign),
+      label: `Verifier key wave ${index + 1} of ${waves.length}`,
+      sleep,
+    });
   }
 };
 
@@ -639,25 +685,28 @@ const toDeployedState = ({
  *
  * The maintenance authority's signing key is total custody: it can
  * replace any operation's verifier key and release the account's assets
- * around the device seam. `lockAccount` decides its fate, explicitly:
+ * around the device seam. The deploy-time key only signs the waves: the
+ * last wave always replaces it, and the key is dropped once the account
+ * is activated, held until then only for the duration of the flow and in
+ * the pending record a retry reads. `lockAccount` decides what replaces
+ * it, explicitly:
  *
- * - `true`: the last wave also replaces the authority with an
- *   unsatisfiable one (empty committee at threshold 1). No maintenance
- *   update can ever be signed again, so the device seam becomes the only
- *   way to move the account's assets. The cost is that the account can
- *   never receive a future arm's circuits.
- * - `false`: the deploy-time authority stays live on-chain, but this
- *   implementation discards its signing key once the account is
- *   activated; the key is held only for the duration of the flow and in
- *   the pending record a retry reads. Keeping the authority live is the
- *   caller's informed choice, accepted knowing the key amounts to full
- *   custody wherever it survives.
+ * - `true`: an unsatisfiable authority (empty committee at threshold 1).
+ *   No maintenance update can ever be signed again, so the device seam
+ *   becomes the only way to move the account's assets. The cost is that
+ *   the account can never receive a future arm's circuits.
+ * - `false`: `handoverAuthority` alone at threshold 1, the authority the
+ *   account's roster key derives. Every enrolled device that holds the
+ *   roster key can then sign maintenance updates through the encryption
+ *   key seam and grantees never can; a roster rotation rotates the
+ *   authority with it, so a removed device loses its upgrade rights.
  */
 export const deployAccount = async ({
   providers,
   authoriser,
   encPublicKey,
   lockAccount,
+  handoverAuthority,
   onDeployed,
   randomBytes = defaultRandomBytes,
   sleep = defaultSleep,
@@ -701,7 +750,6 @@ export const deployAccount = async ({
   const [deployWave, ...maintenanceWaves] = planDeployWaves(
     DEPLOYED_OPERATIONS,
     sizes,
-    { retireAuthority: lockAccount },
   );
 
   const deploy = new ledger.ContractDeploy(
@@ -731,6 +779,7 @@ export const deployAccount = async ({
     verifierKeysDigest,
     saltHex: HexBytes.fromByteArray(salt),
     authorityKey,
+    handoverAuthority,
   });
   await awaitContractIndexed({ providers, ledger, address }, sleep);
   await installWaves({
@@ -741,6 +790,7 @@ export const deployAccount = async ({
     waves: maintenanceWaves,
     verifierKeys,
     authorityKey,
+    successor: successorOf({ lockAccount, handoverAuthority }),
     sleep,
   });
 
@@ -758,25 +808,66 @@ export const deployAccount = async ({
 };
 
 /**
+ * Whether the chain shows the deploy-time authority already replaced by
+ * the committee the recorded lock choice installs, a retirement or a
+ * handover that landed, rather than still live.
+ *
+ * @throws {@link MaintenanceAuthorityMismatchError} when the committee
+ * is neither: the waves can no longer be signed and the record does not
+ * describe this contract.
+ */
+const isDeployAuthorityReplaced = ({
+  ledger,
+  address,
+  committee,
+  pending,
+}: {
+  ledger: LedgerModule;
+  address: string;
+  committee: readonly MaintenanceVerifyingKey[];
+  pending: PendingDeployment;
+}): boolean => {
+  if (isCommittee(committee, successorOf(pending))) return true;
+  if (
+    isCommittee(committee, [ledger.signatureVerifyingKey(pending.authorityKey)])
+  ) {
+    return false;
+  }
+  throw new MaintenanceAuthorityMismatchError(
+    `The maintenance authority of the account at ${address} is neither the deploy-time key nor the one its unfinished creation installs, so it cannot be resumed.`,
+  );
+};
+
+/**
  * Finishes a deployment whose waves were interrupted. The operations the
  * contract already holds are read from chain, the waves still missing
  * are planned from the pending roster and submitted, and the account is
  * returned with its activation call; a deployment that only missed its
  * activation plans no wave at all. A deployment the chain shows already
  * activated, because the creation died between its activation and its
- * final record write, installs nothing and is returned as activated. The
- * lock choice is the one made when the deployment began; a locked
- * deployment the chain shows activated is checked to have retired its
- * authority, since the flow retires it before it activates. A deployment
- * recorded under other verifier key pins than this build installs is
+ * final record write, installs nothing and is returned as activated once
+ * the chain shows its authority replaced. The lock choice and the
+ * handover authority are the ones recorded when the deployment began.
+ * The chain's authority is read as the deploy-time key still live, or as
+ * already replaced when it is the committee the recorded choice
+ * installs, a retirement or a handover that landed. An activated
+ * deployment whose deploy-time key is still live is refused under either
+ * choice: the flow replaces the authority before it activates, so the
+ * waves ran outside it and the verifier keys they installed are not
+ * known to be this build's. A deployment recorded under other verifier
+ * key pins than this build installs, or without a handover authority, is
  * refused before the chain is read.
  *
  * @throws {@link CreationArtefactMismatchError} when the recorded
- * verifier key digest is missing or is not this build's.
- * @throws {@link AuthorityNotRetiredError} when the deployment was to lock
- * the account and the chain shows it activated with the authority live.
+ * verifier key digest is missing or is not this build's, or when the
+ * record names no handover authority.
+ * @throws {@link MaintenanceAuthorityMismatchError} when the chain's
+ * authority is neither the deploy-time key nor the recorded successor.
+ * @throws {@link AuthorityNotRetiredError} when the chain shows the
+ * account activated with the deploy-time authority still live, whether it
+ * was to be locked or handed to its devices.
  * @throws {@link AuthorityRetiredError} when operations are missing but
- * the authority has already been retired, which no update can mend.
+ * the authority has already been replaced, which no update can mend.
  * @throws {@link AccountContractMissingError} when the address holds no
  * live contract.
  */
@@ -793,6 +884,11 @@ export const resumeAccountDeployment = async ({
       `The unfinished creation of the account at ${address} was started under other verifier key pins than this build installs, so it cannot be resumed.`,
     );
   }
+  if (!pending.handoverAuthority) {
+    throw new CreationArtefactMismatchError(
+      `The unfinished creation of the account at ${address} names no maintenance authority to hand over to, so it cannot be resumed.`,
+    );
+  }
   const [contracts, ledger, networkId, CompiledContract] =
     await importChainModules();
 
@@ -801,11 +897,17 @@ export const resumeAccountDeployment = async ({
   const provided = await readProvidedState(chain);
   const isActivated = decodeLedger(provided.data).booted;
   const onChain = ledger.ContractState.deserialize(provided.serialize());
-  const isAuthorityRetired =
-    onChain.maintenanceAuthority.committee.length === 0;
-  if (isActivated && pending.lockAccount && !isAuthorityRetired) {
+  const isAuthorityReplaced = isDeployAuthorityReplaced({
+    ledger,
+    address,
+    committee: onChain.maintenanceAuthority.committee,
+    pending,
+  });
+  if (isActivated && !isAuthorityReplaced) {
     throw new AuthorityNotRetiredError(
-      `The account at ${address} was created to be locked and is activated, but its maintenance authority is still live.`,
+      pending.lockAccount
+        ? `The account at ${address} was created to be locked and is activated, but its maintenance authority is still live.`
+        : `The account at ${address} was created to hand its maintenance authority to its devices, but is activated with the deploy-time authority still live.`,
     );
   }
   if (!isActivated) {
@@ -817,8 +919,7 @@ export const resumeAccountDeployment = async ({
       operations: pending.operations,
       sizes,
       installed: onChain.operations().map(String),
-      isAuthorityRetired,
-      retireAuthority: pending.lockAccount,
+      isAuthorityReplaced,
     });
     await installWaves({
       ...chain,
@@ -826,6 +927,7 @@ export const resumeAccountDeployment = async ({
       waves,
       verifierKeys,
       authorityKey: pending.authorityKey,
+      successor: successorOf(pending),
       sleep,
     });
   }

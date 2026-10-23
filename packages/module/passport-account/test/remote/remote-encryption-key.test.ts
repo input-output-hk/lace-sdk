@@ -1,6 +1,7 @@
 import {
   EncryptionKeyMismatchError,
   GrantId,
+  MaintenanceAuthorityMismatchError,
   GrantScopeSalt,
   GrantSlot,
   PrfUnsupportedError,
@@ -83,6 +84,7 @@ describe('createRemoteEncryptionKey', () => {
         encKey: '09'.repeat(32),
         envelopes: ['d1'.repeat(192)],
         registrations: [],
+        authority: { tag: 'schnorr', value: 'a7'.repeat(32) },
       })),
     };
     const encryptionKey = createRemoteEncryptionKey(client);
@@ -95,6 +97,7 @@ describe('createRemoteEncryptionKey', () => {
       encKey: new Uint8Array(32).fill(9),
       envelopes: [new Uint8Array(192).fill(0xd1)],
       registrations: [],
+      authority: { tag: 'schnorr', value: 'a7'.repeat(32) },
     });
     await encryptionKey.createKeys('undeployed', {
       devicePublicKey: '34'.repeat(32),
@@ -438,6 +441,113 @@ describe('createRemoteEncryptionKey', () => {
       ).rejects.toBeInstanceOf(errorClass);
     },
   );
+  describe('signMaintenanceUpdate', () => {
+    const authority = { tag: 'schnorr' as const, value: 'a7'.repeat(32) };
+    const signature = { tag: 'schnorr' as const, value: '5e'.repeat(64) };
+    const request = {
+      keyring,
+      authority,
+      counter: 4n,
+      changes: {
+        kind: 'insert-verifier-keys' as const,
+        inserts: [
+          { operation: 'withdraw_unshielded', verifierKey: Uint8Array.of(1) },
+        ],
+      },
+    };
+
+    it('asks the signer to sign the update the request names and decodes what it signed', async () => {
+      const client = {
+        request: vi.fn(async () => ({ signature, authority })),
+      };
+
+      await expect(
+        createRemoteEncryptionKey(client).signMaintenanceUpdate(
+          'undeployed',
+          request,
+        ),
+      ).resolves.toEqual({ signature, authority });
+      expect(client.request).toHaveBeenCalledExactlyOnceWith(
+        'sign-maintenance-update',
+        {
+          networkId: 'undeployed',
+          keyring: encodedKeyring,
+          authority,
+          counter: '4',
+          changes: {
+            kind: 'insert-verifier-keys',
+            inserts: [{ operation: 'withdraw_unshielded', verifierKey: '01' }],
+          },
+        },
+      );
+    });
+
+    it('rejects with MaintenanceAuthorityMismatchError when no envelope sent holds the authority', async () => {
+      const client = { request: vi.fn(async () => null) };
+
+      await expect(
+        createRemoteEncryptionKey(client).signMaintenanceUpdate(
+          'undeployed',
+          request,
+        ),
+      ).rejects.toBeInstanceOf(MaintenanceAuthorityMismatchError);
+      expect(client.request).toHaveBeenCalledOnce();
+    });
+
+    it('refuses a signature the signer answers malformed', async () => {
+      const client = {
+        request: vi.fn(async () => ({
+          signature: { tag: 'rsa', value: '5e' },
+        })),
+      };
+
+      await expect(
+        createRemoteEncryptionKey(client).signMaintenanceUpdate(
+          'undeployed',
+          request,
+        ),
+      ).rejects.toThrow(new MalformedPayloadError('signed.signature.tag'));
+    });
+  });
+
+  describe('holdsMaintenanceAuthority', () => {
+    const authority = { tag: 'schnorr' as const, value: 'a7'.repeat(32) };
+
+    it.each([true, false])(
+      'asks the signer whether the keyring holds the authority and answers %s',
+      async holds => {
+        const client = { request: vi.fn(async () => holds) };
+
+        await expect(
+          createRemoteEncryptionKey(client).holdsMaintenanceAuthority(
+            'undeployed',
+            keyring,
+            authority,
+          ),
+        ).resolves.toBe(holds);
+        expect(client.request).toHaveBeenCalledExactlyOnceWith(
+          'holds-maintenance-authority',
+          { networkId: 'undeployed', keyring: encodedKeyring, authority },
+        );
+      },
+    );
+
+    it.each([null, 'true', 1, {}])(
+      'refuses an answer that is not a boolean: %s',
+      async answer => {
+        const client = { request: vi.fn(async () => answer) };
+
+        await expect(
+          createRemoteEncryptionKey(client).holdsMaintenanceAuthority(
+            'undeployed',
+            keyring,
+            authority,
+          ),
+        ).rejects.toThrow(new MalformedPayloadError('holds'));
+      },
+    );
+  });
+
   describe('with more envelopes than one keyring carries', () => {
     const envelopeAt = (position: number): Uint8Array => {
       const envelope = new Uint8Array(192).fill(0xd1);
@@ -529,6 +639,159 @@ describe('createRemoteEncryptionKey', () => {
         'find-live-envelope',
         'find-live-envelope',
       ]);
+    });
+
+    /**
+     * A signer that finds the live envelope at `live` and signs only over
+     * a keyring holding the envelope at `signer`.
+     */
+    const signerSigningWith = (live: number, signer: number | undefined) => ({
+      request: vi.fn(async (kind: string, payload: unknown) => {
+        const sent = sentEnvelopes(payload);
+        if (kind === 'find-live-envelope') {
+          const position = sent.indexOf(hexOf(envelopeAt(live)));
+          return position === -1 ? null : position;
+        }
+        return signer !== undefined && sent.includes(hexOf(envelopeAt(signer)))
+          ? { signature: { tag: 'schnorr', value: '5e'.repeat(64) } }
+          : null;
+      }),
+    });
+    const maintenance = {
+      keyring: flooded,
+      authority: { tag: 'schnorr' as const, value: 'a7'.repeat(32) },
+      counter: 2n,
+      changes: {
+        kind: 'replace-authority' as const,
+        authority: { tag: 'schnorr' as const, value: 'b8'.repeat(32) },
+      },
+    };
+    const signingPages = (client: ReturnType<typeof signerSigningWith>) =>
+      client.request.mock.calls
+        .filter(([kind]) => kind === 'sign-maintenance-update')
+        .map(([, payload]) => sentEnvelopes(payload));
+
+    it('signs over the live envelope beside each run of the older ones in turn, each within one request, until one holds the authority', async () => {
+      const client = signerSigningWith(1, flooded.envelopes.length - 1);
+
+      await expect(
+        createRemoteEncryptionKey(client).signMaintenanceUpdate(
+          'undeployed',
+          maintenance,
+        ),
+      ).resolves.toEqual({
+        signature: { tag: 'schnorr', value: '5e'.repeat(64) },
+      });
+
+      const hexes = flooded.envelopes.map(envelope => hexOf(envelope));
+      const run = MAX_INBOX_ENTRIES_PER_REQUEST - 1;
+      expect(signingPages(client)).toEqual([
+        [hexes[1], ...hexes.slice(2, 2 + run)],
+        [hexes[1], ...hexes.slice(2 + run, 2 + run * 2)],
+        [hexes[1], ...hexes.slice(2 + run * 2)],
+      ]);
+    });
+
+    it('stops at the first keyring holding the authority', async () => {
+      const client = signerSigningWith(1, 2);
+
+      await createRemoteEncryptionKey(client).signMaintenanceUpdate(
+        'undeployed',
+        maintenance,
+      );
+
+      expect(signingPages(client)).toHaveLength(1);
+    });
+
+    it('rejects with MaintenanceAuthorityMismatchError once no older envelope holds the authority, never sending a newer one', async () => {
+      const client = signerSigningWith(3, undefined);
+
+      await expect(
+        createRemoteEncryptionKey(client).signMaintenanceUpdate(
+          'undeployed',
+          maintenance,
+        ),
+      ).rejects.toBeInstanceOf(MaintenanceAuthorityMismatchError);
+      const hexes = flooded.envelopes.map(envelope => hexOf(envelope));
+      const pages = signingPages(client);
+      expect(pages.flat()).not.toContain(hexes[0]);
+      expect(new Set(pages.flat())).toEqual(new Set(hexes.slice(3)));
+      expect(
+        pages.every(
+          page =>
+            page[0] === hexes[3] &&
+            page.length <= MAX_INBOX_ENTRIES_PER_REQUEST,
+        ),
+      ).toBe(true);
+    });
+
+    it('signs over the live envelope alone when it is the oldest', async () => {
+      const live = flooded.envelopes.length - 1;
+      const client = signerSigningWith(live, undefined);
+
+      await expect(
+        createRemoteEncryptionKey(client).signMaintenanceUpdate(
+          'undeployed',
+          maintenance,
+        ),
+      ).rejects.toBeInstanceOf(MaintenanceAuthorityMismatchError);
+      expect(signingPages(client)).toEqual([[hexOf(envelopeAt(live))]]);
+    });
+
+    /**
+     * A signer that finds the live envelope at `live` and answers that a
+     * keyring holds the authority only when it carries the envelope at
+     * `holder`.
+     */
+    const signerHoldingWith = (live: number, holder: number | undefined) => ({
+      request: vi.fn(async (kind: string, payload: unknown) => {
+        const sent = sentEnvelopes(payload);
+        if (kind === 'find-live-envelope') {
+          const position = sent.indexOf(hexOf(envelopeAt(live)));
+          return position === -1 ? null : position;
+        }
+        return holder !== undefined && sent.includes(hexOf(envelopeAt(holder)));
+      }),
+    });
+    const holdingPages = (client: ReturnType<typeof signerHoldingWith>) =>
+      client.request.mock.calls
+        .filter(([kind]) => kind === 'holds-maintenance-authority')
+        .map(([, payload]) => sentEnvelopes(payload));
+
+    it('asks over the live envelope beside each run of the older ones, each within one request, answering true at the first that holds the authority', async () => {
+      const client = signerHoldingWith(1, flooded.envelopes.length - 1);
+
+      await expect(
+        createRemoteEncryptionKey(client).holdsMaintenanceAuthority(
+          'undeployed',
+          flooded,
+          maintenance.authority,
+        ),
+      ).resolves.toBe(true);
+
+      const hexes = flooded.envelopes.map(envelope => hexOf(envelope));
+      const run = MAX_INBOX_ENTRIES_PER_REQUEST - 1;
+      expect(holdingPages(client)).toEqual([
+        [hexes[1], ...hexes.slice(2, 2 + run)],
+        [hexes[1], ...hexes.slice(2 + run, 2 + run * 2)],
+        [hexes[1], ...hexes.slice(2 + run * 2)],
+      ]);
+    });
+
+    it('answers false once no page holds the authority, never sending a newer envelope', async () => {
+      const client = signerHoldingWith(3, undefined);
+
+      await expect(
+        createRemoteEncryptionKey(client).holdsMaintenanceAuthority(
+          'undeployed',
+          flooded,
+          maintenance.authority,
+        ),
+      ).resolves.toBe(false);
+      const hexes = flooded.envelopes.map(envelope => hexOf(envelope));
+      const pages = holdingPages(client);
+      expect(pages.flat()).not.toContain(hexes[0]);
+      expect(new Set(pages.flat())).toEqual(new Set(hexes.slice(3)));
     });
 
     it.each([-1, 1.5, '0', MAX_INBOX_ENTRIES_PER_REQUEST])(

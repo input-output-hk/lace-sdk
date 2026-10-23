@@ -8,7 +8,8 @@
  * Only the network infrastructure is stood in for, as in the account keys
  * sim. The unshielded withdrawal is the one exercised because its balance
  * is a ledger mirror the permissionless deposit credits in process, while
- * the shielded twins need a held coin the simulated witness cannot supply.
+ * the shielded twins need a held coin the simulated witness serves only to
+ * the device withdrawal.
  */
 import { sha256 } from '@lace-lib/crypto';
 import { ByteArray, HexBytes } from '@lace-lib/util';
@@ -49,7 +50,7 @@ vi.mock('../../src/infra/indexer', () => ({
   createIndexerClient: () => ({
     queryContractState: async () => simulated().contractState(),
     enumerateContractActions: async () => [],
-    queryShieldedOutputs: async () => [],
+    queryShieldedEvents: async () => ({ outputs: [], nullifiers: [] }),
   }),
 }));
 vi.mock('../../src/infra/providers', () => ({
@@ -81,6 +82,7 @@ vi.mock('../../src/acc/deploy', () => ({
       verifierKeysDigest: '00'.repeat(32),
       saltHex: '00'.repeat(32),
       authorityKey: { tag: 'schnorr', value: '00' },
+      handoverAuthority: { tag: 'schnorr', value: 'cd'.repeat(32) },
     });
     return {
       address,

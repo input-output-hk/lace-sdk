@@ -1,3 +1,4 @@
+import { DEPLOYED_OPERATIONS } from '../acc/deployed-operations';
 import { MAX_DEVICE_ENTRIES } from '../acc/envelopes';
 
 import {
@@ -68,16 +69,28 @@ type DeviceFlow =
     };
 
 /**
+ * An install descriptor once read: the account it upgrades and the
+ * operations of the deployed roster whose verifier keys it installs, in
+ * the order the flow installs them.
+ */
+type InstallOperationsFlow = {
+  kind: 'install-operations';
+  account: AccAddress;
+  operations: string[];
+};
+
+/**
  * A flow descriptor as the signer holds it: each kind with exactly the
  * fields it binds, so a session check and a consent screen read them
  * without a second look. A revoke flow carries the `account` whose
  * grants it revokes, and `read` only when the revocation rotates that
  * account's encryption key; every rotating flow carries the device
  * entries whose devices the new secret may be sealed to. A creation
- * carries its lock choice.
+ * carries its lock choice, and an install the operations it installs.
  */
 export type DecodedSignerFlow =
   | DeviceFlow
+  | InstallOperationsFlow
   | IssueGrantFlow
   | { kind: 'create-account'; lockAccount: boolean }
   | { kind: 'read-holdings' | 'sign-in' }
@@ -87,6 +100,7 @@ export type DecodedSignerFlow =
 const FLOW_KINDS: ReadonlySet<string> = new Set<SignerFlowKind>([
   'add-device',
   'create-account',
+  'install-operations',
   'issue-grant',
   'read-holdings',
   'remove-device',
@@ -109,6 +123,7 @@ const DESCRIPTOR_FIELDS: readonly DescriptorField[] = [
   'reader',
   'devices',
   'lockAccount',
+  'operations',
 ];
 
 const ISSUE_GRANT_FIELDS: readonly DescriptorField[] = [
@@ -124,6 +139,7 @@ const ISSUE_GRANT_FIELDS: readonly DescriptorField[] = [
 /** The descriptor fields each flow kind carries; any other is refused. */
 const FLOW_FIELDS: Record<SignerFlowKind, ReadonlySet<DescriptorField>> = {
   'create-account': new Set(['lockAccount']),
+  'install-operations': new Set(['account', 'operations']),
   'read-holdings': new Set(),
   'sign-in': new Set(),
   'add-device': new Set(['commitmentHex', 'account', 'reader', 'devices']),
@@ -172,6 +188,34 @@ const decodeDevices = (
     throw new MalformedPayloadError(field);
   }
   return devices;
+};
+
+/**
+ * The operations an install names: at least one, each an operation of
+ * the deployed roster and none twice, so the user approves exactly the
+ * verifier keys the flow may install.
+ */
+const decodeInstallOperations = (value: unknown, field: string): string[] => {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > DEPLOYED_OPERATIONS.length
+  ) {
+    throw new MalformedPayloadError(field);
+  }
+  const operations = value.map((operation: unknown, index) => {
+    if (
+      typeof operation !== 'string' ||
+      !DEPLOYED_OPERATIONS.includes(operation)
+    ) {
+      throw new MalformedPayloadError(`${field}[${index}]`);
+    }
+    return operation;
+  });
+  if (new Set(operations).size !== operations.length) {
+    throw new MalformedPayloadError(field);
+  }
+  return operations;
 };
 
 /**
@@ -297,6 +341,15 @@ export const decodeSignerFlow = (value: unknown): DecodedSignerFlow => {
       return {
         kind: flowKind,
         lockAccount: decodeBoolean(fields.lockAccount, 'flow.lockAccount'),
+      };
+    case 'install-operations':
+      return {
+        kind: flowKind,
+        account: decodeAccount(fields.account, 'flow.account'),
+        operations: decodeInstallOperations(
+          fields.operations,
+          'flow.operations',
+        ),
       };
     case 'read-holdings':
     case 'sign-in':

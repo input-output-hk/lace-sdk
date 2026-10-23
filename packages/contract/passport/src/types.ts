@@ -70,12 +70,16 @@ export type Authorisation = {
  * flow that hands over the keys while a read grant is live rotates them
  * first. A flow that rotates the key carries `devices`, the live device entries, as 32-byte
  * lowercase hex, whose devices the new secret may be sealed to, the
- * removed one left out, so the user sees who keeps reading.
+ * removed one left out, so the user sees who keeps reading. An
+ * install-operations flow carries the `account` it upgrades and the
+ * `operations` whose verifier keys the account's maintenance authority
+ * signs in, in installation order.
  */
 export type KeySessionFlow = {
   kind:
     | 'add-device'
     | 'create-account'
+    | 'install-operations'
     | 'issue-grant'
     | 'read-holdings'
     | 'remove-device'
@@ -93,6 +97,7 @@ export type KeySessionFlow = {
   reader?: DeviceReader;
   devices?: string[];
   lockAccount?: boolean;
+  operations?: string[];
 };
 
 /**
@@ -227,17 +232,89 @@ export type RemovedDevice = {
   counter: bigint;
 };
 
+/** The signature schemes the ledger accepts a maintenance authority in. */
+export type MaintenanceSignatureKind = 'ecdsa' | 'schnorr';
+
+/**
+ * A verifying key of a contract maintenance authority as the ledger
+ * represents it: its signature kind and the hex-encoded key. Mirrors the
+ * ledger's own shape so it can be carried without the ledger's types.
+ */
+export type MaintenanceVerifyingKey = {
+  tag: MaintenanceSignatureKind;
+  value: string;
+};
+
+/**
+ * A signature over a maintenance update as the ledger represents it: its
+ * signature kind and the hex-encoded signature.
+ */
+export type MaintenanceSignature = {
+  tag: MaintenanceSignatureKind;
+  value: string;
+};
+
 /**
  * A fresh account secret as it leaves the key: its X25519 public key,
  * the `enc_key` a constructor or a rotation installs, one device
  * envelope per reader, and one device registration per reader when the
  * roster key is fresh too, none otherwise. Every item is a 192-byte
- * inbox entry.
+ * inbox entry. `authority` is the verifying key of the maintenance
+ * authority the delivered roster key derives, which every device holding
+ * that roster key can sign as: a rotation that keeps the roster key
+ * reports the same one, a fresh roster key a new one.
  */
 export type AccountKeys = {
   encKey: Uint8Array;
   envelopes: Uint8Array[];
   registrations: Uint8Array[];
+  authority: MaintenanceVerifyingKey;
+};
+
+/**
+ * One verifier key a maintenance update installs: the operation it
+ * verifies and the raw key bytes, which must match the key the module
+ * pins for that operation.
+ */
+export type MaintenanceVerifierKey = {
+  operation: string;
+  verifierKey: Uint8Array;
+};
+
+/**
+ * What a maintenance update changes: either it replaces the authority
+ * with `authority`, which must be the one the keyring's live roster key
+ * derives, or it installs the pinned verifier keys `inserts` lists, at
+ * least one.
+ */
+export type MaintenanceChanges =
+  | {
+      kind: 'insert-verifier-keys';
+      inserts: readonly MaintenanceVerifierKey[];
+    }
+  | { kind: 'replace-authority'; authority: MaintenanceVerifyingKey };
+
+/**
+ * A maintenance update to sign over the account keys: the `keyring` whose
+ * roster keys may derive the authority, the `authority` and `counter` the
+ * contract holds on chain, and the `changes` to make. The update is
+ * built by the key from these, never handed to it as bytes.
+ */
+export type MaintenanceUpdateRequest = {
+  keyring: AccountKeyring;
+  authority: MaintenanceVerifyingKey;
+  counter: bigint;
+  changes: MaintenanceChanges;
+};
+
+/**
+ * A maintenance update as signed by the authority the chain holds:
+ * the signature over the update's data, and `authority`, the verifying
+ * key a replace installs, absent for an update that keeps the authority.
+ */
+export type SignedMaintenanceUpdate = {
+  signature: MaintenanceSignature;
+  authority?: MaintenanceVerifyingKey;
 };
 
 /**
@@ -352,6 +429,24 @@ export type GrantViewDelivery = { seal: Uint8Array; entry: Uint8Array };
  * through the host. `sealView` seals the live secret towards a grantee's
  * read key as the container the scoped grants standard defines; the
  * secret leaves the seam only inside that container.
+ *
+ * The contract's maintenance authority of an unlocked account is the
+ * key every enrolled device derives from the roster key, see
+ * {@link AccountKeys}. `signMaintenanceUpdate` signs one update as a
+ * {@link MaintenanceUpdateRequest} names it, with the roster key, among
+ * every one the keyring's envelopes deliver, whose authority the chain
+ * holds, so envelopes anyone appends cannot hide it, and answers the
+ * signature and, for a replace, the authority it installs. It rejects
+ * with MaintenanceAuthorityMismatchError when no roster key derives that
+ * authority, and with MaintenanceUpdateRefusedError for changes it does
+ * not sign. A key that cannot sign maintenance updates leaves it out.
+ * `holdsMaintenanceAuthority` answers whether any roster key the
+ * keyring's envelopes deliver derives `authority`, the one key of the
+ * committee the chain holds, which a roster rotation checks before it
+ * changes anything, so a device that could not move the authority
+ * refuses before the rotation lands. Only the answer leaves the seam. A
+ * key that leaves it out has the rotation refuse only when it moves the
+ * authority.
  */
 export interface PassportEncryptionKey {
   readerPublicKey: (networkId: string) => Promise<Uint8Array>;
@@ -384,6 +479,15 @@ export interface PassportEncryptionKey {
     keyring: AccountKeyring,
     request: GrantViewSealRequest,
   ) => Promise<GrantViewDelivery>;
+  signMaintenanceUpdate?: (
+    networkId: string,
+    request: MaintenanceUpdateRequest,
+  ) => Promise<SignedMaintenanceUpdate>;
+  holdsMaintenanceAuthority?: (
+    networkId: string,
+    keyring: AccountKeyring,
+    authority: MaintenanceVerifyingKey,
+  ) => Promise<boolean>;
 }
 
 /**

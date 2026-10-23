@@ -59,6 +59,50 @@ describe('decodeSignerFlow', () => {
     );
   });
 
+  it('reads an install-operations descriptor as the account and the operations it installs', () => {
+    const operations = [
+      'withdraw_unshielded_with_grant_k256',
+      'withdraw_shielded_with_grant_k256',
+    ];
+
+    expect(
+      decodeSignerFlow({
+        kind: 'install-operations',
+        account: ACCOUNT,
+        operations,
+      }),
+    ).toEqual({ kind: 'install-operations', account: ACCOUNT, operations });
+  });
+
+  it.each<[string, unknown, string]>([
+    ['no operations', undefined, 'flow.operations'],
+    ['an empty list', [], 'flow.operations'],
+    [
+      'an operation outside the deployed roster',
+      ['recover_submit'],
+      'flow.operations[0]',
+    ],
+    ['an operation that is not a string', [7], 'flow.operations[0]'],
+    [
+      'an operation twice',
+      ['deposit_shielded', 'deposit_shielded'],
+      'flow.operations',
+    ],
+  ])(
+    'refuses an install-operations descriptor carrying %s',
+    (_name, operations, field) => {
+      expect(
+        refusalOf({ kind: 'install-operations', account: ACCOUNT, operations }),
+      ).toEqual(new MalformedPayloadError(field));
+    },
+  );
+
+  it('refuses operations on a flow that installs none', () => {
+    expect(
+      refusalOf({ kind: 'sign-in', operations: ['deposit_shielded'] }),
+    ).toEqual(new MalformedPayloadError('flow.operations'));
+  });
+
   it('reads a revoke-all-grants descriptor as the account it acts on', () => {
     expect(
       decodeSignerFlow({ kind: 'revoke-all-grants', account: ACCOUNT }),

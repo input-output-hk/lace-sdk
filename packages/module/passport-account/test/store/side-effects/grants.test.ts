@@ -250,6 +250,7 @@ const runFlowTest = ({
           removeDevice$: NEVER,
           signIn$: NEVER,
           issueGrant$: trigger$('issueGrant'),
+          installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
           revokeGrant$: trigger$('revokeGrant'),
           revokeAllGrants$: trigger$('revokeAllGrants'),

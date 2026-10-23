@@ -104,6 +104,7 @@ const runFlowTest = ({
           addDevice$: NEVER,
           createAccount$: NEVER,
           issueGrant$: NEVER,
+          installOperations$: NEVER,
           readShieldedHoldings$: hot(trigger, {
             t: actions.passport.readShieldedHoldings(),
           }),

@@ -6,6 +6,7 @@ import {
 } from '@lace-contract/passport';
 import { describe, expect, it } from 'vitest';
 
+import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
 import { MAX_INBOX_ENTRIES_PER_REQUEST } from '../../src/acc/inbox';
 import {
   decodeAccount,
@@ -24,6 +25,8 @@ import {
   decodeInboxEntries,
   decodeKeyring,
   decodeLiveReader,
+  decodeMaintenanceChanges,
+  decodeMaintenanceKey,
   decodeRemovedDevice,
   decodeOpenedEntries,
   decodePoint,
@@ -31,6 +34,7 @@ import {
   decodeRecord,
   decodeScopeSalt,
   decodeSealedEntries,
+  decodeSignedMaintenanceUpdate,
   decodeSlot,
   decodeViewDelivery,
   encodeAccountKeys,
@@ -39,9 +43,11 @@ import {
   encodeBytes,
   encodeKeyring,
   encodeLiveReader,
+  encodeMaintenanceChanges,
   encodeRemovedDevice,
   encodeOpenedEntry,
   encodePoint,
+  encodeSignedMaintenanceUpdate,
   MalformedPayloadError,
 } from '../../src/remote/codec';
 
@@ -233,6 +239,7 @@ describe('codec', () => {
       verifierKeysDigest: 'f0'.repeat(32),
       saltHex: '07'.repeat(32),
       authorityKey: { tag: 'schnorr', value: 'ab'.repeat(32) },
+      handoverAuthority: { tag: 'schnorr', value: 'cd'.repeat(32) },
       keyEntries,
     };
 
@@ -248,6 +255,7 @@ describe('codec', () => {
       'lockAccount',
       'verifierKeysDigest',
       'saltHex',
+      'handoverAuthority',
     ] as const) {
       expect(() =>
         decodeRecord(
@@ -502,6 +510,7 @@ describe('codec', () => {
       verifierKeysDigest: 'f0'.repeat(32),
       saltHex: '07'.repeat(32),
       authorityKey: { tag: 'schnorr', value: 'ab'.repeat(32) },
+      handoverAuthority: { tag: 'schnorr', value: 'cd'.repeat(32) },
       keyEntries: ['d1'.repeat(192), 'd2'.repeat(192)],
     };
     const pending = { ...record, deployment };
@@ -558,6 +567,43 @@ describe('codec', () => {
         'record',
       ),
     ).toThrow(new MalformedPayloadError('record.deployment.authorityKey'));
+    expect(() =>
+      decodeRecord(
+        {
+          ...record,
+          deployment: { ...deployment, handoverAuthority: undefined },
+        },
+        'record',
+      ),
+    ).toThrow(new MalformedPayloadError('record.deployment.handoverAuthority'));
+    expect(() =>
+      decodeRecord(
+        {
+          ...record,
+          deployment: {
+            ...deployment,
+            handoverAuthority: { tag: 'rsa', value: 'cd' },
+          },
+        },
+        'record',
+      ),
+    ).toThrow(
+      new MalformedPayloadError('record.deployment.handoverAuthority.tag'),
+    );
+    expect(() =>
+      decodeRecord(
+        {
+          ...record,
+          deployment: {
+            ...deployment,
+            handoverAuthority: { tag: 'schnorr', value: 'not hex' },
+          },
+        },
+        'record',
+      ),
+    ).toThrow(
+      new MalformedPayloadError('record.deployment.handoverAuthority.value'),
+    );
     expect(() =>
       decodeRecord(
         { ...record, deployment: { ...deployment, keyEntries: undefined } },
@@ -1115,11 +1161,12 @@ describe('account key codec', () => {
     );
   });
 
-  it('carries fresh account keys as hex and reads them back', () => {
+  it('carries fresh account keys as hex with their authority and reads them back', () => {
     const keys = {
       encKey,
       envelopes: [envelope],
       registrations: [registration],
+      authority: { tag: 'schnorr' as const, value: 'a7'.repeat(32) },
     };
 
     expect(decodeAccountKeys(encodeAccountKeys(keys), 'keys')).toEqual(keys);
@@ -1132,6 +1179,33 @@ describe('account key codec', () => {
     expect(() =>
       decodeAccountKeys({ ...encodeAccountKeys(keys), encKey: '07' }, 'keys'),
     ).toThrow(new MalformedPayloadError('keys.encKey'));
+    expect(() =>
+      decodeAccountKeys(
+        {
+          ...encodeAccountKeys(keys),
+          authority: { tag: 'ed25519', value: 'a7'.repeat(32) },
+        },
+        'keys',
+      ),
+    ).toThrow(new MalformedPayloadError('keys.authority.tag'));
+    expect(() =>
+      decodeAccountKeys(
+        {
+          ...encodeAccountKeys(keys),
+          authority: { tag: 'schnorr', value: 'A7'.repeat(32) },
+        },
+        'keys',
+      ),
+    ).toThrow(new MalformedPayloadError('keys.authority.value'));
+    expect(() =>
+      decodeAccountKeys(
+        {
+          ...encodeAccountKeys(keys),
+          authority: { tag: 'schnorr', value: '' },
+        },
+        'keys',
+      ),
+    ).toThrow(new MalformedPayloadError('keys.authority.value'));
   });
 
   it('reads a device delivery and a view delivery at their lengths only', () => {
@@ -1277,5 +1351,140 @@ describe('account key codec', () => {
         'grant',
       ),
     ).toThrow(new MalformedPayloadError('grant.granteePublicKey'));
+  });
+});
+
+describe('maintenance codec', () => {
+  const authority = { tag: 'schnorr' as const, value: 'a7'.repeat(32) };
+  const signature = { tag: 'schnorr' as const, value: '5e'.repeat(64) };
+
+  it('carries a replace and verifier key inserts, each key as hex, and reads them back', () => {
+    const replace = { kind: 'replace-authority' as const, authority };
+    const inserts = {
+      kind: 'insert-verifier-keys' as const,
+      inserts: [
+        { operation: 'withdraw_unshielded', verifierKey: Uint8Array.of(1, 2) },
+      ],
+    };
+
+    expect(encodeMaintenanceChanges(inserts)).toEqual({
+      kind: 'insert-verifier-keys',
+      inserts: [{ operation: 'withdraw_unshielded', verifierKey: '0102' }],
+    });
+    expect(
+      decodeMaintenanceChanges(encodeMaintenanceChanges(replace), 'changes'),
+    ).toEqual(replace);
+    expect(
+      decodeMaintenanceChanges(encodeMaintenanceChanges(inserts), 'changes'),
+    ).toEqual(inserts);
+  });
+
+  it.each([
+    [undefined, 'changes'],
+    [{ kind: 'remove-verifier-key', operation: 'x' }, 'changes'],
+    [{ kind: 'insert-verifier-keys' }, 'changes'],
+    [{ kind: 'insert-verifier-keys', inserts: ['01'] }, 'changes.inserts[0]'],
+    [
+      {
+        kind: 'insert-verifier-keys',
+        inserts: [{ operation: 7, verifierKey: '01' }],
+      },
+      'changes.inserts[0].operation',
+    ],
+    [
+      {
+        kind: 'insert-verifier-keys',
+        inserts: [{ operation: 'withdraw_unshielded', verifierKey: '' }],
+      },
+      'changes.inserts[0].verifierKey',
+    ],
+    [
+      {
+        kind: 'insert-verifier-keys',
+        inserts: [{ operation: 'withdraw_unshielded', verifierKey: 'AB' }],
+      },
+      'changes.inserts[0].verifierKey',
+    ],
+    [{ kind: 'replace-authority' }, 'changes.authority'],
+    [
+      {
+        kind: 'replace-authority',
+        authority: { tag: 'ed25519', value: 'a7' },
+      },
+      'changes.authority.tag',
+    ],
+    [
+      {
+        kind: 'replace-authority',
+        authority: { tag: 'schnorr', value: 'not hex' },
+      },
+      'changes.authority.value',
+    ],
+  ])('refuses malformed changes: %j', (changes, field) => {
+    expect(() => decodeMaintenanceChanges(changes, 'changes')).toThrow(
+      new MalformedPayloadError(field),
+    );
+  });
+
+  it('refuses more verifier key inserts than the deployed roster has operations', () => {
+    const insert = { operation: 'withdraw_unshielded', verifierKey: '01' };
+    const changes = {
+      kind: 'insert-verifier-keys',
+      inserts: Array.from(
+        { length: DEPLOYED_OPERATIONS.length + 1 },
+        () => insert,
+      ),
+    };
+
+    expect(() => decodeMaintenanceChanges(changes, 'changes')).toThrow(
+      new MalformedPayloadError('changes.inserts'),
+    );
+    expect(
+      decodeMaintenanceChanges(
+        { ...changes, inserts: changes.inserts.slice(1) },
+        'changes',
+      ),
+    ).toMatchObject({ kind: 'insert-verifier-keys' });
+  });
+
+  it('reads a maintenance key only as a known kind over non-empty lowercase hex', () => {
+    expect(decodeMaintenanceKey(authority, 'authority')).toEqual(authority);
+    expect(() =>
+      decodeMaintenanceKey({ tag: 'schnorr', value: '' }, 'authority'),
+    ).toThrow(new MalformedPayloadError('authority.value'));
+    expect(() =>
+      decodeMaintenanceKey({ tag: 'schnorr', value: 'A7' }, 'authority'),
+    ).toThrow(new MalformedPayloadError('authority.value'));
+    expect(() => decodeMaintenanceKey('a7', 'authority')).toThrow(
+      new MalformedPayloadError('authority'),
+    );
+  });
+
+  it('carries a signed update, the installed authority only when present, and null as null', () => {
+    expect(
+      decodeSignedMaintenanceUpdate(
+        encodeSignedMaintenanceUpdate({ signature }),
+        'signed',
+      ),
+    ).toEqual({ signature });
+    expect(
+      decodeSignedMaintenanceUpdate(
+        encodeSignedMaintenanceUpdate({ signature, authority }),
+        'signed',
+      ),
+    ).toEqual({ signature, authority });
+    expect(decodeSignedMaintenanceUpdate(null, 'signed')).toBeNull();
+    expect(() =>
+      decodeSignedMaintenanceUpdate({ authority }, 'signed'),
+    ).toThrow(new MalformedPayloadError('signed.signature'));
+    expect(() =>
+      decodeSignedMaintenanceUpdate(
+        { signature, authority: { tag: 'schnorr', value: 7 } },
+        'signed',
+      ),
+    ).toThrow(new MalformedPayloadError('signed.authority.value'));
+    expect(() => decodeSignedMaintenanceUpdate('5e', 'signed')).toThrow(
+      new MalformedPayloadError('signed'),
+    );
   });
 });

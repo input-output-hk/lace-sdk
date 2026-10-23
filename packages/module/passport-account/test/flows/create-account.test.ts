@@ -64,6 +64,7 @@ const readerPublicKey = new Uint8Array(32).fill(5);
 const encPublicKey = new Uint8Array(32).fill(2);
 const envelope = new Uint8Array(192).fill(0xd1);
 const registration = new Uint8Array(192).fill(0xd2);
+const authority = { tag: 'schnorr' as const, value: 'a7'.repeat(32) };
 const keyEntries = [envelope, registration].map(entry =>
   HexBytes.fromByteArray(entry),
 );
@@ -82,6 +83,7 @@ const deploymentProgress: Omit<PendingDeployment, 'keyEntries'> = {
   verifierKeysDigest: 'f0'.repeat(32),
   saltHex: '07'.repeat(32),
   authorityKey: { tag: 'schnorr', value: 'authority-key' },
+  handoverAuthority: authority,
 };
 const pendingDeployment: PendingDeployment = {
   ...deploymentProgress,
@@ -163,6 +165,7 @@ const createContext = ({
       encKey: encPublicKey,
       envelopes: [envelope],
       registrations: [registration],
+      authority,
     })),
     sealToDevice: vi.fn(),
     openInbox: vi.fn(),
@@ -283,6 +286,7 @@ describe('createAccount', () => {
       authoriser,
       encPublicKey,
       lockAccount: true,
+      handoverAuthority: authority,
       onDeployed: expect.any(Function) as unknown,
     });
     expect(mocks.resumeAccountDeployment).not.toHaveBeenCalled();
@@ -466,6 +470,39 @@ describe('createAccount', () => {
 
     release();
     await expect(created).resolves.toMatchObject({ localUseCounter: '2' });
+  });
+
+  it('hands an unlocked deployment the authority the delivered roster key derives and records it as the handover', async () => {
+    const { context, accountRecords } = createContext();
+    mocks.deployAccount.mockImplementationOnce(
+      async ({
+        onDeployed,
+        handoverAuthority,
+      }: {
+        onDeployed: OnDeployed;
+        handoverAuthority: PendingDeployment['handoverAuthority'];
+      }) => {
+        await onDeployed(accountAddress, {
+          ...deploymentProgress,
+          lockAccount: false,
+          handoverAuthority,
+        });
+        return deployedAccount();
+      },
+    );
+
+    await createAccount({ lockAccount: false }, context);
+
+    expect(mocks.deployAccount).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        lockAccount: false,
+        handoverAuthority: authority,
+      }),
+    );
+    expect(accountRecords.write).toHaveBeenNthCalledWith(1, {
+      ...expectedPendingRecord(),
+      deployment: { ...pendingDeployment, lockAccount: false },
+    });
   });
 
   it.each([true, false])(
@@ -850,6 +887,7 @@ describe('createAccount', () => {
         encKey: encPublicKey,
         envelopes: [envelope],
         registrations: [registration],
+        authority,
       };
     });
     const writtenInSession: boolean[] = [];

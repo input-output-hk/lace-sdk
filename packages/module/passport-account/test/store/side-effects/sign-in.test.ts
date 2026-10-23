@@ -88,6 +88,7 @@ const runFlowTest = ({ signIn = 's', flows, assertion }: FlowTest) => {
           addDevice$: NEVER,
           createAccount$: NEVER,
           issueGrant$: NEVER,
+          installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
           removeDevice$: NEVER,
           revokeAllGrants$: NEVER,

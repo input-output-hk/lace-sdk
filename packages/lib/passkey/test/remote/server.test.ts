@@ -378,6 +378,8 @@ describe('serveSignerRequests', () => {
         'seal-grant',
         'reencrypt-inbox',
         'seal-view',
+        'sign-maintenance-update',
+        'holds-maintenance-authority',
       ] as const) {
         await send(port, kind);
       }

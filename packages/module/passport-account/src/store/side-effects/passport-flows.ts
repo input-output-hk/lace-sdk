@@ -7,6 +7,7 @@ import type { CreateAccountInput } from '../../flows/create-account';
 import type { DeviceRoster } from '../../flows/devices';
 import type { GrantRoster, IssuedGrant } from '../../flows/grants';
 import type { ShieldedHoldings } from '../../flows/holdings';
+import type { InstalledOperations } from '../../flows/install-operations';
 import type { RecognisedAccount } from '../../flows/sign-in';
 import type { AccountCallInput, FlowAccountState } from '../../flows/types';
 import type { FlowEvent } from '../dependencies';
@@ -34,6 +35,8 @@ const REVOKE_GRANT_FALLBACK_ERROR_CODE = 'grant-revoke-failed';
 const REVOKE_ALL_GRANTS_FALLBACK_ERROR_CODE = 'grant-revoke-all-failed';
 /** Flow error code for holdings reads that carry no typed code of their own. */
 const READ_HOLDINGS_FALLBACK_ERROR_CODE = 'holdings-read-failed';
+/** Flow error code for installs that carry no typed code of their own. */
+const INSTALL_OPERATIONS_FALLBACK_ERROR_CODE = 'operations-install-failed';
 
 /**
  * Flows an account call may start from. 'error' is a settled state, not
@@ -57,6 +60,7 @@ type FlowStart = () => Observable<SideEffectAction>;
 type DevicePayload = { commitmentHex: string };
 type AddDevicePayload = DevicePayload & { reader?: DeviceReader };
 type RevokeGrantPayload = { grantId: GrantId };
+type InstallOperationsPayload = { operations: string[] };
 
 /**
  * A gated call over the account in state: how its flow is started from
@@ -335,6 +339,24 @@ const readShieldedHoldingsCall: AccountCallConfig<undefined, ShieldedHoldings> =
   };
 
 /**
+ * The installOperations flow behind its action, then 'ready'. A landed
+ * install changes nothing state holds, so it publishes nothing of its
+ * own.
+ */
+const installOperationsCall: AccountCallConfig<
+  InstallOperationsPayload,
+  InstalledOperations
+> = {
+  start: ({ operations }, { account }, dependencies) =>
+    dependencies.passportFlows.installOperations(
+      { account, operations },
+      dependencies,
+    ),
+  onDone: () => () => [],
+  fallbackCode: INSTALL_OPERATIONS_FALLBACK_ERROR_CODE,
+};
+
+/**
  * An account call behind its action, as the actions it publishes: what
  * the call left behind, then 'ready', or, when it fails, the actions
  * undoing what state may wrongly claim, then the error. The flow itself
@@ -418,7 +440,8 @@ const accountCallStarts = <Payload, Result>({
  * Runs whichever passport flow was requested: {@link runCreateAccount}
  * behind the createAccount action, {@link runSignIn} behind signIn, and
  * {@link runAccountCall} behind addDevice, removeDevice, issueGrant,
- * revokeGrant, revokeAllGrants and readShieldedHoldings.
+ * revokeGrant, revokeAllGrants, readShieldedHoldings and
+ * installOperations.
  *
  * Every flow owns the same account record, the same device key and the
  * same flow state, and each chain call resolves the account's use counter
@@ -452,6 +475,7 @@ export const runPassportFlow: SideEffect = (
     passport: {
       addDevice$,
       createAccount$,
+      installOperations$,
       issueGrant$,
       readShieldedHoldings$,
       removeDevice$,
@@ -505,6 +529,12 @@ export const runPassportFlow: SideEffect = (
     accountCallStarts({
       config: readShieldedHoldingsCall,
       trigger$: readShieldedHoldings$,
+      stateObservables,
+      dependencies,
+    }),
+    accountCallStarts({
+      config: installOperationsCall,
+      trigger$: installOperations$,
       stateObservables,
       dependencies,
     }),

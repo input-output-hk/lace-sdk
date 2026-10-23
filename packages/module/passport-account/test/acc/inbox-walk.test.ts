@@ -17,7 +17,7 @@ import type {
 } from '../../src/acc/inbox-walk';
 import type {
   ContractActionRecord,
-  ShieldedOutputRecord,
+  ShieldedTransactionEvents,
 } from '../../src/infra/indexer';
 import type { ShieldedCoin } from '@lace-contract/passport';
 
@@ -27,9 +27,12 @@ const coin = (value: bigint): ShieldedCoin => ({
   value,
 });
 
-const action = (txHash: string): ContractActionRecord => ({
+const action = (
+  txHash: string,
+  entryPoint = 'deposit_shielded',
+): ContractActionRecord => ({
   kind: 'ContractCall',
-  entryPoint: 'deposit_shielded',
+  entryPoint,
   txHash,
   identifiers: [`${txHash}-id`],
   blockHeight: 1,
@@ -38,19 +41,26 @@ const action = (txHash: string): ContractActionRecord => ({
 /**
  * An account with a known encryption key over the simulated contract,
  * an opener holding the matching secret, and an indexer whose history is
- * whatever the test deposited: each deposit lands in its own transaction
- * whose one shielded output carries the commitment the contract claimed,
- * at the next tree index.
+ * whatever the test deposited and spent: each deposit lands in its own
+ * transaction whose one shielded output carries the commitment the
+ * contract claimed, at the next tree index, and each spend in its own
+ * transaction whose one input carries the nullifier the contract claimed.
+ * A deposit also carries the nullifier of an unrelated user coin, as the
+ * depositor's own coin that pays for it does, unless it is made with
+ * `userInput` off.
  */
 const setup = async () => {
   const secretKey = x25519.utils.randomSecretKey();
   const publicKey = x25519.getPublicKey(secretKey);
   const sim = await AccountSim.create({ encKey: publicKey });
-  const outputsByTx = new Map<string, ShieldedOutputRecord[]>();
+  const eventsByTx = new Map<string, ShieldedTransactionEvents>();
   const actions: ContractActionRecord[] = [];
   let nextIndex = 10n;
 
-  const deposit = async (deposited: ShieldedCoin) => {
+  const deposit = async (
+    deposited: ShieldedCoin,
+    { userInput = true }: { userInput?: boolean } = {},
+  ) => {
     const commitment = await sim.deposit(
       deposited,
       await sealInboxEntry(publicKey, deposited),
@@ -59,14 +69,29 @@ const setup = async () => {
     actions.push(action(txHash));
     const index = nextIndex;
     nextIndex += 1n;
-    outputsByTx.set(txHash, [
-      {
-        commitment,
-        contractAddress: HexBytes.fromByteArray(sim.address),
-        index,
-      },
-    ]);
+    eventsByTx.set(txHash, {
+      outputs: [
+        {
+          commitment,
+          contractAddress: HexBytes.fromByteArray(sim.address),
+          index,
+        },
+      ],
+      nullifiers: userInput
+        ? [HexBytes.fromByteArray(crypto.getRandomValues(new Uint8Array(32)))]
+        : [],
+    });
     return { commitment, index: Number(index) };
+  };
+  const spend = async (spent: ShieldedCoin, { index }: { index: number }) => {
+    const nullifier = await sim.withdrawShielded(
+      { ...spent, mtIndex: BigInt(index) },
+      crypto.getRandomValues(new Uint8Array(32)),
+    );
+    const txHash = `tx-${actions.length}`;
+    actions.push(action(txHash, 'withdraw_shielded_with_jubjub'));
+    eventsByTx.set(txHash, { outputs: [], nullifiers: [nullifier] });
+    return nullifier;
   };
   const appendEntry = async (entry: Uint8Array) => {
     await sim.call('deposit_shielded', coin(1n), entry);
@@ -76,8 +101,9 @@ const setup = async () => {
   );
   const indexer: InboxWalkProps['indexer'] = {
     enumerateContractActions: vi.fn(async () => actions),
-    queryShieldedOutputs: vi.fn(
-      async (txHash: string) => outputsByTx.get(txHash) ?? [],
+    queryShieldedEvents: vi.fn(
+      async (txHash: string) =>
+        eventsByTx.get(txHash) ?? { outputs: [], nullifiers: [] },
     ),
   };
   const walk = async (overrides: Partial<InboxWalkProps> = {}) =>
@@ -89,7 +115,16 @@ const setup = async () => {
       ...overrides,
     });
 
-  return { sim, publicKey, deposit, appendEntry, openEntries, indexer, walk };
+  return {
+    sim,
+    publicKey,
+    deposit,
+    spend,
+    appendEntry,
+    openEntries,
+    indexer,
+    walk,
+  };
 };
 
 const holdingOf = (
@@ -224,9 +259,12 @@ describe('walkInbox', () => {
   it('ignores an output of the same commitment that another contract received', async () => {
     const { deposit, indexer, walk } = await setup();
     const { commitment, index } = await deposit(coin(6n));
-    vi.mocked(indexer.queryShieldedOutputs).mockResolvedValue([
-      { commitment, contractAddress: 'ff'.repeat(32), index: BigInt(index) },
-    ]);
+    vi.mocked(indexer.queryShieldedEvents).mockResolvedValue({
+      outputs: [
+        { commitment, contractAddress: 'ff'.repeat(32), index: BigInt(index) },
+      ],
+      nullifiers: [],
+    });
 
     await expect(walk()).resolves.toEqual({
       holdings: [],
@@ -238,9 +276,10 @@ describe('walkInbox', () => {
   it('ignores an output the same transaction created for a user', async () => {
     const { deposit, indexer, walk } = await setup();
     const { commitment, index } = await deposit(coin(6n));
-    vi.mocked(indexer.queryShieldedOutputs).mockResolvedValue([
-      { commitment, index: BigInt(index) },
-    ]);
+    vi.mocked(indexer.queryShieldedEvents).mockResolvedValue({
+      outputs: [{ commitment, index: BigInt(index) }],
+      nullifiers: [],
+    });
 
     await expect(walk()).resolves.toEqual({
       holdings: [],
@@ -261,6 +300,62 @@ describe('walkInbox', () => {
     });
   });
 
+  it('leaves out a coin the account has spent, with the entry it was read from', async () => {
+    const { deposit, spend, walk, sim } = await setup();
+    const spent = coin(5n);
+    const kept = coin(8n);
+    const spentDeposit = await deposit(spent);
+    const keptDeposit = await deposit(kept);
+    await spend(spent, spentDeposit);
+
+    await expect(walk()).resolves.toEqual({
+      holdings: [holdingOf(kept, keptDeposit)],
+      holdingEntries: [sim.ledger().inbox.lookup(1n)],
+      skippedEntries: 0,
+    });
+  });
+
+  it('leaves out a spent coin however many entries describe it', async () => {
+    const { deposit, spend, appendEntry, publicKey, walk } = await setup();
+    const spent = coin(5n);
+    const spentDeposit = await deposit(spent);
+    await appendEntry(await sealInboxEntry(publicKey, spent));
+    await spend(spent, spentDeposit);
+
+    await expect(walk()).resolves.toEqual({
+      holdings: [],
+      holdingEntries: [],
+      skippedEntries: 0,
+    });
+  });
+
+  it('keeps every coin when the recorded nullifiers, such as those of a depositor, belong to no coin of the account', async () => {
+    const { deposit, walk } = await setup();
+    const kept = coin(6n);
+    const keptDeposit = await deposit(kept);
+
+    await expect(walk()).resolves.toMatchObject({
+      holdings: [holdingOf(kept, keptDeposit)],
+      skippedEntries: 0,
+    });
+  });
+
+  it('computes no nullifier when the history records no spend', async () => {
+    const { deposit, walk } = await setup();
+    await deposit(coin(1n), { userInput: false });
+    const ledger = await import('@midnightntwrk/ledger-v9');
+    const newContractOwned = vi.fn(ledger.ZswapInput.newContractOwned);
+    const loadLedger = vi.fn(async () => ({
+      ...ledger,
+      ZswapInput: { ...ledger.ZswapInput, newContractOwned },
+    })) as unknown as NonNullable<InboxWalkProps['loadLedger']>;
+
+    await expect(walk({ loadLedger })).resolves.toMatchObject({
+      skippedEntries: 0,
+    });
+    expect(newContractOwned).not.toHaveBeenCalled();
+  });
+
   it('reads each transaction of the history once, however many actions it carries', async () => {
     const { deposit, indexer, walk } = await setup();
     await deposit(coin(1n));
@@ -271,9 +366,7 @@ describe('walkInbox', () => {
 
     await walk();
 
-    expect(indexer.queryShieldedOutputs).toHaveBeenCalledExactlyOnceWith(
-      'tx-0',
-    );
+    expect(indexer.queryShieldedEvents).toHaveBeenCalledExactlyOnceWith('tx-0');
   });
 
   it('answers an empty inbox without opening anything or reading the history', async () => {

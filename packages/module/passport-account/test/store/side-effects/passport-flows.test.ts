@@ -76,6 +76,11 @@ vi.mock('../../../src/acc/gated-call', () => ({
 }));
 vi.mock('../../../src/acc/deploy', () => ({
   deployAccount: mocks.deployAccount,
+  readMaintenanceAuthority: async () => ({
+    committee: [],
+    threshold: 1,
+    counter: 0n,
+  }),
 }));
 vi.mock('../../../src/acc/use-counter', () => ({
   resolveUseCounter: mocks.resolveUseCounter,
@@ -263,6 +268,7 @@ const createHarness = (withStoredRecord = true, roster?: ChainRoster) => {
         addDevice$,
         createAccount$,
         issueGrant$,
+        installOperations$: NEVER,
         readShieldedHoldings$: NEVER,
         removeDevice$,
         revokeAllGrants$,
@@ -494,6 +500,7 @@ beforeEach(async () => {
         lockAccount: false,
         saltHex: '00'.repeat(32),
         authorityKey: { tag: 'schnorr', value: '00'.repeat(32) },
+        handoverAuthority: { tag: 'schnorr', value: 'cd'.repeat(32) },
       });
       return {
         address: accountAddress,
@@ -712,6 +719,7 @@ const runGateTest = ({
           addDevice$: trigger$('addDevice'),
           createAccount$: trigger$('createAccount'),
           issueGrant$: trigger$('issueGrant'),
+          installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
           removeDevice$: trigger$('removeDevice'),
           revokeAllGrants$: trigger$('revokeAllGrants'),

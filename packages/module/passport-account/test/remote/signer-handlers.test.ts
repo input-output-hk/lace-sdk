@@ -8,8 +8,10 @@ import {
   GrantRevocationPendingError,
   GrantScopeInvalidError,
   GrantSlot,
+  MaintenanceUpdateRefusedError,
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
+import * as ledgerV9 from '@midnightntwrk/ledger-v9';
 import { x25519 } from '@noble/curves/ed25519.js';
 import { jubjub } from '@noble/curves/misc.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +39,10 @@ import {
   openInboxEntry,
   sealInboxEntry,
 } from '../../src/acc/inbox';
+import {
+  authorityOf,
+  maintenanceUpdateOf,
+} from '../../src/acc/maintenance-authority';
 import { bytesToBigIntLE, JUBJUB_R, JubjubDevice } from '../../src/acc/signer';
 import { createPasskeyEncryptionKey } from '../../src/ceremony/encryption-key';
 import { MalformedPayloadError } from '../../src/remote/codec';
@@ -133,6 +139,7 @@ type EncodedAccountKeys = {
   encKey: string;
   envelopes: string[];
   registrations: string[];
+  authority: { tag: 'ecdsa' | 'schnorr'; value: string };
 };
 
 /** The keyring of a key a session drew: its own envelope of it. */
@@ -168,13 +175,24 @@ const setup = (options: Partial<CreatePassportSignerHandlersProps> = {}) => {
 
 type Handlers = ReturnType<typeof setup>['handlers'];
 
-/** A pending deployment carrying the given key entries. */
-const pendingDeployment = (keyEntries: string[]) => ({
+/** An authority no session of these tests draws. */
+const UNDRAWN_AUTHORITY = { tag: 'schnorr', value: 'cd'.repeat(32) } as const;
+
+/**
+ * A pending deployment carrying the given key entries and handing the
+ * account to `handoverAuthority`, which a creation's first write must
+ * have drawn in its session.
+ */
+const pendingDeployment = (
+  keyEntries: string[],
+  handoverAuthority: EncodedAccountKeys['authority'] = UNDRAWN_AUTHORITY,
+) => ({
   operations: ['add_device_with_jubjub'],
   lockAccount: false,
   verifierKeysDigest: 'f0'.repeat(32),
   saltHex: '11'.repeat(32),
   authorityKey: { tag: 'schnorr', value: '22'.repeat(32) },
+  handoverAuthority,
   keyEntries,
 });
 
@@ -451,6 +469,7 @@ describe('createPassportSignerHandlers', () => {
 
     it('marks a pending record on its sealed envelope and reports it pending without a session', async () => {
       const { handlers, stored } = setup();
+      const keys = await openCreation(handlers);
       const pendingRecord: PassportAccountRecord = {
         ...record,
         deployment: {
@@ -459,11 +478,11 @@ describe('createPassportSignerHandlers', () => {
           verifierKeysDigest: 'f0'.repeat(32),
           saltHex: '07'.repeat(32),
           authorityKey: { tag: 'schnorr', value: 'ab'.repeat(32) },
+          handoverAuthority: keys.authority,
           keyEntries: ['d1'.repeat(192)],
         },
       };
 
-      await openCreation(handlers);
       await handlers['record-write']({ record: pendingRecord }, DAPP_ORIGIN);
       await expect(handlers['record-read']({}, DAPP_ORIGIN)).resolves.toEqual(
         pendingRecord,
@@ -1344,6 +1363,48 @@ describe('createPassportSignerHandlers', () => {
     });
   });
 
+  describe('install-operations flow', () => {
+    const INSTALL_OPERATIONS: SignerFlow = {
+      kind: 'install-operations',
+      account: ACCOUNT,
+      operations: ['withdraw_unshielded_with_grant_k256'],
+    };
+
+    it('serves this device reader key and refuses every key, record and circuit request, naming the kind', async () => {
+      const { handlers, keySource } = await setupInSession(
+        INSTALL_OPERATIONS,
+        DAPP_ORIGIN,
+      );
+      const deviceSecret = vi.spyOn(keySource, 'deviceSecret');
+
+      await expect(
+        handlers['reader-public-key']({ networkId: NETWORK_ID }),
+      ).resolves.toEqual(expect.any(String));
+      for (const kind of [
+        'device-public-key',
+        'device-commitments',
+        'record-read',
+        'record-write',
+        'create-keys',
+        'open-inbox',
+        'reencrypt-inbox',
+        'seal-view',
+      ] as const) {
+        await expect(
+          (handlers[kind] as (payload: unknown) => Promise<unknown>)({}),
+        ).rejects.toThrow(new FlowScopeError('install-operations', { kind }));
+      }
+      await expect(
+        handlers.authorise(addDeviceAuthorisation, DAPP_ORIGIN),
+      ).rejects.toThrow(
+        new FlowScopeError('install-operations', { kind: 'authorise' }),
+      );
+
+      expect(deviceSecret).not.toHaveBeenCalled();
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+  });
+
   describe('read-holdings flow', () => {
     const READ_HOLDINGS: SignerFlow = { kind: 'read-holdings' };
     const coin = {
@@ -2189,6 +2250,7 @@ describe('account key sessions', () => {
             verifierKeysDigest: 'f0'.repeat(32),
             saltHex: '11'.repeat(32),
             authorityKey: { tag: 'schnorr', value: '22'.repeat(32) },
+            handoverAuthority: keys.authority,
             keyEntries: [keys.envelopes[0], keys.registrations[0]],
           },
         },
@@ -2235,6 +2297,7 @@ describe('account key sessions', () => {
             verifierKeysDigest: 'f0'.repeat(32),
             saltHex: '11'.repeat(32),
             authorityKey: { tag: 'schnorr', value: '22'.repeat(32) },
+            handoverAuthority: keys.authority,
             keyEntries: [planted],
           },
         },
@@ -2271,10 +2334,13 @@ describe('account key sessions', () => {
   it('refuses a later flow changing the address of a stored record, pending or complete', async () => {
     const { handlers } = setup();
     const moved = { ...record, address: 'ad'.repeat(32) };
-    await openCreation(handlers);
+    const keys = await openCreation(handlers);
     await handlers['record-write'](
       {
-        record: { ...record, deployment: pendingDeployment([]) },
+        record: {
+          ...record,
+          deployment: pendingDeployment([], keys.authority),
+        },
       },
       DAPP_ORIGIN,
     );
@@ -2339,10 +2405,13 @@ describe('account key sessions', () => {
 
   it('refuses a creation writing over a complete record it finds stored', async () => {
     const { handlers } = setup();
-    await openCreation(handlers);
+    const keys = await openCreation(handlers);
     await handlers['record-write'](
       {
-        record: { ...record, deployment: pendingDeployment([]) },
+        record: {
+          ...record,
+          deployment: pendingDeployment([], keys.authority),
+        },
       },
       DAPP_ORIGIN,
     );
@@ -2378,7 +2447,10 @@ describe('account key sessions', () => {
     const kept = [keys.envelopes[0], keys.registrations[0]];
     await handlers['record-write'](
       {
-        record: { ...record, deployment: pendingDeployment(kept) },
+        record: {
+          ...record,
+          deployment: pendingDeployment(kept, keys.authority),
+        },
       },
       DAPP_ORIGIN,
     );
@@ -3054,6 +3126,436 @@ describe('account key sessions', () => {
       new FlowScopeError('remove-device', { argument: 'keyring.encKey' }),
     );
     await handlers['flow-close'](FLOW_COMPLETED);
+  });
+
+  describe('maintenance updates', () => {
+    const OTHER_AUTHORITY = {
+      tag: 'schnorr' as const,
+      value: '02'.repeat(33),
+    };
+    const replaceOf = (
+      keyring: ReturnType<typeof keyringOf>,
+      onChain: EncodedAccountKeys['authority'],
+      installed: EncodedAccountKeys['authority'],
+    ) => ({
+      networkId: NETWORK_ID,
+      keyring,
+      authority: onChain,
+      counter: '3',
+      changes: { kind: 'replace-authority' as const, authority: installed },
+    });
+
+    it('moves the authority of a removal to the fresh roster key only once the rotation was signed, signing with the old one', async () => {
+      const { handlers } = setup();
+      const { keys, registrations } = await enrolled(handlers);
+      await handlers['flow-open']({ flow: REMOVE_LEAVER });
+      const drawn = (await handlers['create-keys'](
+        {
+          networkId: NETWORK_ID,
+          devicePublicKey: ownDeviceKey(),
+          keyring: keyringOf(keys),
+          registrations,
+          readers: [liveOf(JOINER)],
+          rotateRoster: true,
+        },
+        DAPP_ORIGIN,
+      )) as EncodedAccountKeys;
+      const rotated = {
+        account: ACCOUNT,
+        encKey: drawn.encKey,
+        envelopes: [drawn.envelopes[0], keys.envelopes[0]],
+      };
+      const replace = replaceOf(rotated, keys.authority, drawn.authority);
+
+      await expect(
+        handlers['sign-maintenance-update'](replace),
+      ).rejects.toThrow(
+        new FlowScopeError('remove-device', { argument: 'keyring' }),
+      );
+      await handlers.authorise(rotateOf(drawn.encKey), DAPP_ORIGIN);
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...replace,
+          changes: {
+            kind: 'insert-verifier-keys',
+            inserts: [{ operation: 'withdraw_unshielded', verifierKey: '01' }],
+          },
+        }),
+      ).rejects.toThrow(
+        new FlowScopeError('remove-device', { argument: 'changes' }),
+      );
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...replace,
+          keyring: keyringOf(keys),
+        }),
+      ).rejects.toThrow(
+        new FlowScopeError('remove-device', { argument: 'keyring' }),
+      );
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...replace,
+          networkId: 'devnet',
+        }),
+      ).rejects.toThrow(
+        new FlowScopeError('remove-device', { argument: 'networkId' }),
+      );
+      await expect(
+        handlers['sign-maintenance-update'](
+          replaceOf(rotated, keys.authority, keys.authority),
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('remove-device', { argument: 'changes.authority' }),
+      );
+      await expect(
+        handlers['sign-maintenance-update'](
+          replaceOf(rotated, OTHER_AUTHORITY, drawn.authority),
+        ),
+      ).resolves.toBeNull();
+      const signed = (await handlers['sign-maintenance-update'](replace)) as {
+        signature: ledgerV9.Signature;
+        authority: EncodedAccountKeys['authority'];
+      };
+      await handlers['flow-close'](FLOW_COMPLETED);
+
+      expect(signed.authority).toEqual(drawn.authority);
+      expect(drawn.authority).not.toEqual(keys.authority);
+      const update = maintenanceUpdateOf(ledgerV9, {
+        address: ACCOUNT,
+        counter: 3n,
+        changes: { kind: 'replace-authority', authority: drawn.authority },
+      });
+      expect(
+        ledgerV9.verifySignature(
+          keys.authority,
+          update.dataToSign,
+          signed.signature,
+        ),
+      ).toBe(true);
+    });
+
+    it('moves the authority of an enrolment that rotates under a live read grant', async () => {
+      const { handlers } = setup();
+      const keys = await drawAccountKeys(handlers);
+      await handlers['flow-open']({
+        flow: { ...ADD_JOINER, devices: [OWN_ENTRY] },
+      });
+      const rotated = (await handlers['create-keys'](
+        {
+          networkId: NETWORK_ID,
+          devicePublicKey: ownDeviceKey(),
+          keyring: keyringOf(keys),
+          registrations: keys.registrations,
+          rotateRoster: true,
+        },
+        DAPP_ORIGIN,
+      )) as EncodedAccountKeys;
+      await handlers.authorise(rotateOf(rotated.encKey), DAPP_ORIGIN);
+
+      await expect(
+        handlers['sign-maintenance-update'](
+          replaceOf(
+            {
+              account: ACCOUNT,
+              encKey: rotated.encKey,
+              envelopes: [rotated.envelopes[0], keys.envelopes[0]],
+            },
+            keys.authority,
+            rotated.authority,
+          ),
+        ),
+      ).resolves.toMatchObject({ authority: rotated.authority });
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    /**
+     * A keyring whose newest envelope delivers the rotated secret, opened
+     * by `holder` from `delivered`, with a roster key of an attacker's,
+     * ahead of the genuine envelope of the key it rotated from, and the
+     * authority that roster key derives.
+     */
+    const forgedKeyring = async (
+      handlers: Handlers,
+      { delivered, holder }: { delivered: string; holder: Uint8Array },
+      { rotatedTo, from }: { rotatedTo: string; from: string },
+    ) => {
+      const opened = await openDeviceEnvelope(
+        holder,
+        ByteArray.fromHex(HexBytes(delivered)),
+      );
+      if (!opened) throw new Error('The delivered envelope did not open.');
+      const rosterKey = crypto.getRandomValues(new Uint8Array(32));
+      const forged = await sealDeviceEnvelope(
+        ByteArray.fromHex(
+          HexBytes(
+            (await handlers['reader-public-key']({
+              networkId: NETWORK_ID,
+            })) as string,
+          ),
+        ),
+        { secret: opened.secret, rosterKey },
+      );
+      return {
+        keyring: {
+          account: ACCOUNT,
+          encKey: rotatedTo,
+          envelopes: [HexBytes.fromByteArray(forged), from],
+        },
+        authority: await authorityOf(ledgerV9, rosterKey),
+      };
+    };
+
+    it('refuses the replace of a removal towards a roster key a grantee sealed with the rotated secret', async () => {
+      const { handlers } = setup();
+      const { keys, registrations } = await enrolled(handlers);
+      await handlers['flow-open']({ flow: REMOVE_LEAVER });
+      const drawn = (await handlers['create-keys'](
+        {
+          networkId: NETWORK_ID,
+          devicePublicKey: ownDeviceKey(),
+          keyring: keyringOf(keys),
+          registrations,
+          readers: [liveOf(JOINER)],
+          rotateRoster: true,
+        },
+        DAPP_ORIGIN,
+      )) as EncodedAccountKeys;
+      await handlers.authorise(rotateOf(drawn.encKey), DAPP_ORIGIN);
+      const forged = await forgedKeyring(
+        handlers,
+        { delivered: drawn.envelopes[1], holder: joiner },
+        { rotatedTo: drawn.encKey, from: keys.envelopes[0] },
+      );
+
+      await expect(
+        handlers['sign-maintenance-update'](
+          replaceOf(forged.keyring, keys.authority, forged.authority),
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('remove-device', { argument: 'changes.authority' }),
+      );
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it('refuses the replace of a rotating enrolment towards a roster key a grantee sealed with the rotated secret', async () => {
+      const { handlers } = setup();
+      const keys = await drawAccountKeys(handlers);
+      await handlers['flow-open']({
+        flow: { ...ADD_JOINER, devices: [OWN_ENTRY] },
+      });
+      const rotated = (await handlers['create-keys'](
+        {
+          networkId: NETWORK_ID,
+          devicePublicKey: ownDeviceKey(),
+          keyring: keyringOf(keys),
+          registrations: keys.registrations,
+          rotateRoster: true,
+        },
+        DAPP_ORIGIN,
+      )) as EncodedAccountKeys;
+      await handlers.authorise(rotateOf(rotated.encKey), DAPP_ORIGIN);
+      const delivery = (await handlers['seal-to-device']({
+        networkId: NETWORK_ID,
+        keyring: keyringOf(rotated),
+        reader: liveOf(JOINER),
+      })) as { envelope: string };
+      const forged = await forgedKeyring(
+        handlers,
+        { delivered: delivery.envelope, holder: joiner },
+        { rotatedTo: rotated.encKey, from: keys.envelopes[0] },
+      );
+
+      await expect(
+        handlers['sign-maintenance-update'](
+          replaceOf(forged.keyring, keys.authority, forged.authority),
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('add-device', { argument: 'changes.authority' }),
+      );
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it.each<[string, SignerFlow]>([
+      ['sign-in', { kind: 'sign-in' }],
+      ['read-holdings', { kind: 'read-holdings' }],
+      ['create-account', CREATE_ACCOUNT],
+      ['add-device', ADD_DEVICE],
+      ['add-device', ADD_JOINER],
+    ])(
+      'refuses the maintenance kind to a flow that moves no authority, touching no key: %s',
+      async (kind, flow) => {
+        const { handlers, keySource } = await setupInSession(flow, DAPP_ORIGIN);
+        const deriveSecret = vi.spyOn(keySource, 'deriveSecret');
+
+        await expect(
+          handlers['sign-maintenance-update'](
+            {} as Parameters<Handlers['sign-maintenance-update']>[0],
+          ),
+        ).rejects.toThrow(
+          new FlowScopeError(kind, { kind: 'sign-maintenance-update' }),
+        );
+        expect(deriveSecret).not.toHaveBeenCalled();
+        await handlers['flow-close'](FLOW_COMPLETED);
+      },
+    );
+
+    it('answers a removal before its rotation whether its keyring holds the authority on chain, and nothing else', async () => {
+      const { handlers } = setup();
+      const { keys } = await enrolled(handlers);
+      await handlers['flow-open']({ flow: REMOVE_LEAVER });
+      const ask = async (
+        authority: unknown,
+        keyring: unknown = keyringOf(keys),
+      ) =>
+        handlers['holds-maintenance-authority']({
+          networkId: NETWORK_ID,
+          keyring,
+          authority,
+        } as Parameters<Handlers['holds-maintenance-authority']>[0]);
+
+      await expect(ask(keys.authority)).resolves.toBe(true);
+      await expect(ask(OTHER_AUTHORITY)).resolves.toBe(false);
+      await expect(ask({ tag: 'rsa', value: '02' })).rejects.toThrow(
+        new MalformedPayloadError('authority.tag'),
+      );
+      await expect(
+        ask(keys.authority, { ...keyringOf(keys), account: 'ad'.repeat(32) }),
+      ).rejects.toThrow(
+        new FlowScopeError('remove-device', { argument: 'keyring.account' }),
+      );
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it('answers an enrolment that rotates under a live read grant before its rotation', async () => {
+      const { handlers } = setup();
+      const keys = await drawAccountKeys(handlers);
+      await handlers['flow-open']({
+        flow: { ...ADD_JOINER, devices: [OWN_ENTRY] },
+      });
+
+      await expect(
+        handlers['holds-maintenance-authority']({
+          networkId: NETWORK_ID,
+          keyring: keyringOf(keys),
+          authority: keys.authority,
+        }),
+      ).resolves.toBe(true);
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it.each<[string, SignerFlow]>([
+      ['sign-in', { kind: 'sign-in' }],
+      ['read-holdings', { kind: 'read-holdings' }],
+      ['create-account', CREATE_ACCOUNT],
+      ['add-device', ADD_DEVICE],
+      ['add-device', ADD_JOINER],
+      [
+        'install-operations',
+        {
+          kind: 'install-operations',
+          account: ACCOUNT,
+          operations: ['withdraw_unshielded_with_grant_k256'],
+        },
+      ],
+    ])(
+      'refuses the authority check to a flow that rotates no roster, touching no key: %s',
+      async (kind, flow) => {
+        const { handlers, keySource } = await setupInSession(flow, DAPP_ORIGIN);
+        const deriveSecret = vi.spyOn(keySource, 'deriveSecret');
+
+        await expect(
+          handlers['holds-maintenance-authority'](
+            {} as Parameters<Handlers['holds-maintenance-authority']>[0],
+          ),
+        ).rejects.toThrow(
+          new FlowScopeError(kind, { kind: 'holds-maintenance-authority' }),
+        );
+        expect(deriveSecret).not.toHaveBeenCalled();
+        await handlers['flow-close'](FLOW_COMPLETED);
+      },
+    );
+
+    it('signs for an install only inserts of the operations its descriptor names, each pinned, before any key is touched', async () => {
+      const { handlers, keySource } = setup();
+      const keys = await drawAccountKeys(handlers);
+      await handlers['flow-open'](
+        {
+          flow: {
+            kind: 'install-operations',
+            account: ACCOUNT,
+            operations: ['withdraw_unshielded_with_grant_k256'],
+          },
+        },
+        DAPP_ORIGIN,
+      );
+      const deriveSecret = vi.spyOn(keySource, 'deriveSecret');
+      const insertOf = (...operations: string[]) => ({
+        networkId: NETWORK_ID,
+        keyring: keyringOf(keys),
+        authority: keys.authority,
+        counter: '3',
+        changes: {
+          kind: 'insert-verifier-keys' as const,
+          inserts: operations.map(operation => ({
+            operation,
+            verifierKey: '01'.repeat(16),
+          })),
+        },
+      });
+
+      await expect(
+        handlers['sign-maintenance-update'](insertOf('withdraw_unshielded')),
+      ).rejects.toThrow(
+        new FlowScopeError('install-operations', {
+          argument: 'changes.inserts[0]',
+        }),
+      );
+      await expect(
+        handlers['sign-maintenance-update'](
+          insertOf(
+            'withdraw_unshielded_with_grant_k256',
+            'withdraw_unshielded_with_grant_k256',
+          ),
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('install-operations', {
+          argument: 'changes.inserts[1]',
+        }),
+      );
+      await expect(
+        handlers['sign-maintenance-update'](
+          replaceOf(keyringOf(keys), keys.authority, keys.authority),
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('install-operations', { argument: 'changes' }),
+      );
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...insertOf('withdraw_unshielded_with_grant_k256'),
+          changes: { kind: 'remove-verifier-key' },
+        } as unknown as Parameters<Handlers['sign-maintenance-update']>[0]),
+      ).rejects.toThrow(new MalformedPayloadError('changes'));
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...insertOf('withdraw_unshielded_with_grant_k256'),
+          counter: '-1',
+        }),
+      ).rejects.toThrow(new MalformedPayloadError('counter'));
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...insertOf('withdraw_unshielded_with_grant_k256'),
+          authority: { tag: 'schnorr', value: '' },
+        }),
+      ).rejects.toThrow(new MalformedPayloadError('authority.value'));
+      await expect(
+        handlers['sign-maintenance-update'](
+          insertOf('withdraw_unshielded_with_grant_k256'),
+        ),
+      ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
+
+      expect(deriveSecret).not.toHaveBeenCalled();
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
   });
 
   it('answers a rotating flow the coins and devices it opens, never grant records', async () => {
@@ -4151,11 +4653,22 @@ describe('record guards', () => {
       slot: GrantSlot(slot),
     });
 
-  /** Stores a pending record through a creation started from the dApp origin. */
-  const seedPending = async (handlers: Handlers): Promise<void> => {
-    await openCreation(handlers);
-    await handlers['record-write']({ record: pendingRecord }, DAPP_ORIGIN);
+  /**
+   * Stores a pending record through a creation started from the dApp
+   * origin, handing the account to the authority its keys derive, and
+   * answers the record stored.
+   */
+  const seedPending = async (
+    handlers: Handlers,
+  ): Promise<PassportAccountRecord & { deployment: typeof deployment }> => {
+    const keys = await openCreation(handlers);
+    const seeded = {
+      ...record,
+      deployment: { ...deployment, handoverAuthority: keys.authority },
+    };
+    await handlers['record-write']({ record: seeded }, DAPP_ORIGIN);
     await handlers['flow-close'](FLOW_COMPLETED);
+    return seeded;
   };
 
   /** Reads the stored record back the way its creation sees it. */
@@ -4184,7 +4697,7 @@ describe('record guards', () => {
 
   it('keeps the stored deployment through every write of a flow that does not create', async () => {
     const { handlers } = setup();
-    await seedPending(handlers);
+    const seeded = await seedPending(handlers);
     await handlers['flow-open']({ flow: { kind: 'sign-in' } }, OTHER_ORIGIN);
 
     for (const changed of [
@@ -4209,7 +4722,7 @@ describe('record guards', () => {
 
     await expect(handlers['record-exists']({})).resolves.toBe('pending');
     await expect(readAsCreation(handlers)).resolves.toEqual({
-      ...pendingRecord,
+      ...seeded,
       localUseCounter: '9',
     });
   });
@@ -4239,7 +4752,12 @@ describe('record guards', () => {
     const keys = await openCreation(handlers);
     const kept = [keys.envelopes[0], keys.registrations[0]];
     await handlers['record-write'](
-      { record: { ...record, deployment: pendingDeployment(kept) } },
+      {
+        record: {
+          ...record,
+          deployment: pendingDeployment(kept, keys.authority),
+        },
+      },
       DAPP_ORIGIN,
     );
     await handlers['flow-close'](FLOW_COMPLETED);
@@ -4277,16 +4795,24 @@ describe('record guards', () => {
     ).rejects.toThrow(
       new FlowScopeError('create-account', { argument: 'origin' }),
     );
-    await handlers['create-keys'](
+    const keys = (await handlers['create-keys'](
       { networkId: NETWORK_ID, devicePublicKey: ownDeviceKey() },
       DAPP_ORIGIN,
-    );
+    )) as EncodedAccountKeys;
+    const drawn = {
+      ...record,
+      deployment: { ...deployment, handoverAuthority: keys.authority },
+    };
     await expect(
       handlers['record-write'](
         {
           record: {
             ...record,
-            deployment: { ...deployment, lockAccount: true },
+            deployment: {
+              ...deployment,
+              lockAccount: true,
+              handoverAuthority: keys.authority,
+            },
           },
         },
         DAPP_ORIGIN,
@@ -4304,15 +4830,55 @@ describe('record guards', () => {
     ).rejects.toThrow(
       new FlowScopeError('create-account', { argument: 'record.deployment' }),
     );
-    await handlers['record-write']({ record: pendingRecord }, DAPP_ORIGIN);
+    await handlers['record-write']({ record: drawn }, DAPP_ORIGIN);
     await handlers['flow-close'](FLOW_COMPLETED);
 
-    await expect(readAsCreation(handlers)).resolves.toEqual(pendingRecord);
+    await expect(readAsCreation(handlers)).resolves.toEqual(drawn);
+  });
+
+  it('refuses a first creation write handing the account to an authority no key of the session derives', async () => {
+    const { handlers } = setup();
+    const earlier = await drawAccountKeys(handlers);
+    const keys = await openCreation(handlers);
+    const refused = new FlowScopeError('create-account', {
+      argument: 'record.deployment.handoverAuthority',
+    });
+
+    for (const handoverAuthority of [
+      UNDRAWN_AUTHORITY,
+      earlier.authority,
+      { tag: 'ecdsa', value: keys.authority.value },
+    ]) {
+      await expect(
+        handlers['record-write'](
+          {
+            record: {
+              ...record,
+              deployment: { ...deployment, handoverAuthority },
+            },
+          },
+          DAPP_ORIGIN,
+        ),
+      ).rejects.toThrow(refused);
+    }
+    await expect(handlers['record-exists']({})).resolves.toBe('absent');
+    await handlers['record-write'](
+      {
+        record: {
+          ...record,
+          deployment: { ...deployment, handoverAuthority: keys.authority },
+        },
+      },
+      DAPP_ORIGIN,
+    );
+    await handlers['flow-close'](FLOW_COMPLETED);
+
+    await expect(handlers['record-exists']({})).resolves.toBe('pending');
   });
 
   it('holds a resumed creation to the stored deployment and its lock choice', async () => {
     const { handlers } = setup();
-    await seedPending(handlers);
+    const seeded = await seedPending(handlers);
 
     await handlers['flow-open'](
       { flow: { kind: 'create-account', lockAccount: true } },
@@ -4329,10 +4895,22 @@ describe('record guards', () => {
     for (const changed of [
       { saltHex: '33'.repeat(32) },
       { verifierKeysDigest: '0f'.repeat(32) },
+      { handoverAuthority: { tag: 'schnorr', value: '44'.repeat(32) } },
+      {
+        handoverAuthority: {
+          tag: 'ecdsa',
+          value: seeded.deployment.handoverAuthority.value,
+        },
+      },
     ]) {
       await expect(
         handlers['record-write'](
-          { record: { ...record, deployment: { ...deployment, ...changed } } },
+          {
+            record: {
+              ...record,
+              deployment: { ...seeded.deployment, ...changed },
+            },
+          },
           DAPP_ORIGIN,
         ),
       ).rejects.toThrow(
@@ -4342,7 +4920,7 @@ describe('record guards', () => {
       );
     }
     await handlers['record-write'](
-      { record: { ...pendingRecord, localUseCounter: '1' } },
+      { record: { ...seeded, localUseCounter: '1' } },
       DAPP_ORIGIN,
     );
     await handlers['record-write']({ record }, DAPP_ORIGIN);
@@ -4520,7 +5098,7 @@ describe('record guards', () => {
 
   it('holds a resumed creation that keeps or drops the deployment to the lock choice it was started with', async () => {
     const { handlers } = setup();
-    await seedPending(handlers);
+    const seeded = await seedPending(handlers);
     const otherLock: SignerFlow = { kind: 'create-account', lockAccount: true };
     const refused = new FlowScopeError('create-account', {
       argument: 'lockAccount',
@@ -4528,7 +5106,7 @@ describe('record guards', () => {
 
     await handlers['flow-open']({ flow: otherLock }, DAPP_ORIGIN);
     await expect(
-      handlers['record-write']({ record: pendingRecord }, DAPP_ORIGIN),
+      handlers['record-write']({ record: seeded }, DAPP_ORIGIN),
     ).rejects.toThrow(refused);
     await expect(
       handlers['record-write']({ record }, DAPP_ORIGIN),

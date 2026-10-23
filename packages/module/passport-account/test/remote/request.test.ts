@@ -5,6 +5,9 @@ import {
   DeviceReaderInvalidError,
   EncryptionKeyMismatchError,
   GrantRevocationPendingError,
+  MaintenanceAuthorityMismatchError,
+  MaintenanceUpdateRefusedError,
+  OperationNotInstallableError,
   PrfUnsupportedError,
   RecordCorruptedError,
   RecordUnreadableError,
@@ -55,6 +58,9 @@ describe('requestSigner', () => {
     ['account-creation-pending', AccountCreationPendingError],
     ['creation-lock-mismatch', CreationLockMismatchError],
     ['grant-revocation-pending', GrantRevocationPendingError],
+    ['maintenance-authority-mismatch', MaintenanceAuthorityMismatchError],
+    ['maintenance-update-refused', MaintenanceUpdateRefusedError],
+    ['operation-not-installable', OperationNotInstallableError],
   ])(
     'maps the %s code onto its Passport error, keeping the signer message',
     async (code, errorClass) => {

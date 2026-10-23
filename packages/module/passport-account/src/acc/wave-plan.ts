@@ -14,9 +14,9 @@ export type VerifierKeySizes = ReadonlyMap<string, number>;
 
 /**
  * One transaction of a deployment: the contract deploy itself, or one
- * maintenance update inserting a batch of verifier keys. Only the last
- * maintenance wave of a locked account retires the maintenance authority,
- * so a retire-only wave carries no operations.
+ * maintenance update inserting a batch of verifier keys. The last
+ * maintenance wave also replaces the deploy-time maintenance authority,
+ * so a replace-only wave carries no operations.
  */
 export type DeployWave = {
   kind: 'deploy' | 'maintenance';
@@ -24,12 +24,10 @@ export type DeployWave = {
   operations: string[];
   /** The verifier key bytes this wave carries. */
   verifierBytes: number;
-  retiresAuthority: boolean;
+  replacesAuthority: boolean;
 };
 
 export type WavePlanOptions = {
-  /** Whether the last maintenance wave retires the maintenance authority. */
-  retireAuthority: boolean;
   /** Verifier bytes per wave; defaults to {@link VERIFIER_BYTE_BUDGET}. */
   budget?: number;
 };
@@ -37,13 +35,14 @@ export type WavePlanOptions = {
 /**
  * What a resumed deployment is planned from: the roster it was begun
  * with and its key sizes, the operations the contract already holds on
- * chain, and whether its maintenance authority has been retired.
+ * chain, and whether the deploy-time maintenance authority has already
+ * been replaced, by a retirement or a handover.
  */
 export type ResumePlanProps = WavePlanOptions & {
   operations: readonly string[];
   sizes: VerifierKeySizes;
   installed: readonly string[];
-  isAuthorityRetired: boolean;
+  isAuthorityReplaced: boolean;
 };
 
 type Batch = Pick<DeployWave, 'operations' | 'verifierBytes'>;
@@ -95,28 +94,25 @@ const packOperations = (
 };
 
 /**
- * The maintenance waves for the given batches. Retirement rides on the
- * last of them, the last update that needs the authority; with nothing
- * left to install, a retire-only update is the whole of it.
+ * The maintenance waves for the given batches. The replacement of the
+ * deploy-time authority rides on the last of them, the last update that
+ * needs it; with nothing left to install, a replace-only update is the
+ * whole of it.
  */
-const toMaintenanceWaves = (
-  batches: Batch[],
-  shouldRetire: boolean,
-): DeployWave[] => {
+const toMaintenanceWaves = (batches: Batch[]): DeployWave[] => {
   const waves: DeployWave[] = batches.map(batch => ({
     kind: 'maintenance',
     ...batch,
-    retiresAuthority: false,
+    replacesAuthority: false,
   }));
-  if (!shouldRetire) return waves;
   const last = waves.at(-1);
-  if (last) last.retiresAuthority = true;
+  if (last) last.replacesAuthority = true;
   else {
     waves.push({
       kind: 'maintenance',
       operations: [],
       verifierBytes: 0,
-      retiresAuthority: true,
+      replacesAuthority: true,
     });
   }
   return waves;
@@ -132,51 +128,67 @@ const toMaintenanceWaves = (
 export const planDeployWaves = (
   operations: readonly string[],
   sizes: VerifierKeySizes,
-  { retireAuthority, budget = VERIFIER_BYTE_BUDGET }: WavePlanOptions,
+  { budget = VERIFIER_BYTE_BUDGET }: WavePlanOptions = {},
 ): DeployWave[] => {
   assertBudget(budget);
   const [deploy, ...rest] = packOperations(operations, sizes, budget);
   if (!deploy) throw new Error('A deployment needs at least one operation');
   return [
-    { kind: 'deploy', ...deploy, retiresAuthority: false },
-    ...toMaintenanceWaves(rest, retireAuthority),
+    { kind: 'deploy', ...deploy, replacesAuthority: false },
+    ...toMaintenanceWaves(rest),
   ];
 };
 
 /**
  * Plans the waves a deployed contract still needs: the roster operations
- * not yet installed, packed as maintenance updates, and the retirement
- * when the account is to be locked and its authority is still live.
+ * not yet installed, packed as maintenance updates, and the replacement
+ * of the deploy-time authority while it is still live.
  * Installed operations are read from chain rather than from any local
  * count, so a wave that landed without being recorded is never sent
  * twice.
  *
  * @throws {@link AuthorityRetiredError} when operations are missing but
- * the authority is already retired: nothing can install them any more.
+ * the deploy-time authority is already replaced: nothing that holds it
+ * can install them any more.
  */
 export const planResumeWaves = ({
   operations,
   sizes,
   installed,
-  isAuthorityRetired,
-  retireAuthority,
+  isAuthorityReplaced,
   budget = VERIFIER_BYTE_BUDGET,
 }: ResumePlanProps): DeployWave[] => {
   assertBudget(budget);
   const installedSet = new Set(installed);
   const missing = operations.filter(operation => !installedSet.has(operation));
-  if (isAuthorityRetired) {
+  if (isAuthorityReplaced) {
     if (missing.length > 0) {
       throw new AuthorityRetiredError(
-        `The maintenance authority is retired and ${
+        `The deploy-time maintenance authority is replaced and ${
           missing.length
         } operations are not installed: ${missing.join(', ')}`,
       );
     }
     return [];
   }
-  return toMaintenanceWaves(
-    packOperations(missing, sizes, budget),
-    retireAuthority,
-  );
+  return toMaintenanceWaves(packOperations(missing, sizes, budget));
+};
+
+/**
+ * Plans the waves that install `operations` on a live account: one
+ * maintenance update per batch packed under the budget, in the order
+ * given, none replacing the authority, which stays the one that signs
+ * them.
+ */
+export const planInstallWaves = (
+  operations: readonly string[],
+  sizes: VerifierKeySizes,
+  { budget = VERIFIER_BYTE_BUDGET }: WavePlanOptions = {},
+): DeployWave[] => {
+  assertBudget(budget);
+  return packOperations(operations, sizes, budget).map(batch => ({
+    kind: 'maintenance',
+    ...batch,
+    replacesAuthority: false,
+  }));
 };

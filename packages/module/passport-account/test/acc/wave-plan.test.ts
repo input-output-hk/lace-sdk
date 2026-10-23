@@ -1,7 +1,11 @@
 import { AuthorityRetiredError } from '@lace-contract/passport';
 import { describe, expect, it } from 'vitest';
 
-import { planDeployWaves, planResumeWaves } from '../../src/acc/wave-plan';
+import {
+  planDeployWaves,
+  planInstallWaves,
+  planResumeWaves,
+} from '../../src/acc/wave-plan';
 
 import type { DeployWave } from '../../src/acc/wave-plan';
 
@@ -55,7 +59,7 @@ const operationsOf = (waves: DeployWave[]): string[][] =>
 
 describe('planDeployWaves', () => {
   it('packs the 19 operation roster into four waves under the 15,000 byte budget', () => {
-    const waves = planDeployWaves(ROSTER, sizes, { retireAuthority: false });
+    const waves = planDeployWaves(ROSTER, sizes);
 
     expect(waves.map(wave => wave.kind)).toEqual([
       'deploy',
@@ -82,22 +86,22 @@ describe('planDeployWaves', () => {
   });
 
   it('keeps the roster order, so the activation circuit lands in the deploy', () => {
-    const [deploy] = planDeployWaves(ROSTER, sizes, { retireAuthority: true });
+    const [deploy] = planDeployWaves(ROSTER, sizes);
 
     expect(deploy.operations).toContain('activate_initial_device_with_jubjub');
   });
 
   it('is deterministic for a given roster and key set', () => {
-    const first = planDeployWaves(ROSTER, sizes, { retireAuthority: true });
-    const second = planDeployWaves(ROSTER, sizes, { retireAuthority: true });
+    const first = planDeployWaves(ROSTER, sizes);
+    const second = planDeployWaves(ROSTER, sizes);
 
     expect(second).toEqual(first);
   });
 
-  it('retires the authority in the last maintenance wave only', () => {
-    const waves = planDeployWaves(ROSTER, sizes, { retireAuthority: true });
+  it('replaces the authority in the last maintenance wave only', () => {
+    const waves = planDeployWaves(ROSTER, sizes);
 
-    expect(waves.map(wave => wave.retiresAuthority)).toEqual([
+    expect(waves.map(wave => wave.replacesAuthority)).toEqual([
       false,
       false,
       false,
@@ -105,39 +109,25 @@ describe('planDeployWaves', () => {
     ]);
   });
 
-  it('retires nothing when the account stays open', () => {
-    const waves = planDeployWaves(ROSTER, sizes, { retireAuthority: false });
-
-    expect(waves.some(wave => wave.retiresAuthority)).toBe(false);
-  });
-
-  it('fits a roster within the budget into the deploy alone', () => {
+  it('follows a roster within the budget with a replace-only wave, since the deploy cannot replace the authority it mints', () => {
     const roster = ROSTER.slice(0, 6);
 
-    const waves = planDeployWaves(roster, sizes, { retireAuthority: false });
+    const waves = planDeployWaves(roster, sizes);
 
     expect(waves).toEqual([
       {
         kind: 'deploy',
         operations: roster,
         verifierBytes: 12_726,
-        retiresAuthority: false,
+        replacesAuthority: false,
+      },
+      {
+        kind: 'maintenance',
+        operations: [],
+        verifierBytes: 0,
+        replacesAuthority: true,
       },
     ]);
-  });
-
-  it('adds a retire-only wave to a single-wave roster of a locked account', () => {
-    const roster = ROSTER.slice(0, 6);
-
-    const waves = planDeployWaves(roster, sizes, { retireAuthority: true });
-
-    expect(waves).toHaveLength(2);
-    expect(waves[1]).toEqual({
-      kind: 'maintenance',
-      operations: [],
-      verifierBytes: 0,
-      retiresAuthority: true,
-    });
   });
 
   it('starts a new wave when the next key would exceed the budget exactly by one byte', () => {
@@ -149,46 +139,38 @@ describe('planDeployWaves', () => {
     ]);
 
     expect(
-      operationsOf(
-        planDeployWaves(roster, exact, { retireAuthority: false, budget: 15 }),
-      ),
+      operationsOf(planDeployWaves(roster, exact, { budget: 15 })),
     ).toEqual([['a', 'b'], ['c']]);
     expect(
-      operationsOf(
-        planDeployWaves(roster, exact, { retireAuthority: false, budget: 14 }),
-      ),
+      operationsOf(planDeployWaves(roster, exact, { budget: 14 })),
     ).toEqual([['a'], ['b', 'c']]);
   });
 
   it('refuses a verifier key larger than the budget', () => {
-    expect(() =>
-      planDeployWaves(ROSTER, sizes, { retireAuthority: false, budget: 2000 }),
-    ).toThrow(
+    expect(() => planDeployWaves(ROSTER, sizes, { budget: 2000 })).toThrow(
       "The verifier key of 'deposit_shielded' (2121 bytes) exceeds the 2000 byte wave budget",
     );
   });
 
   it('refuses an operation with no measured key size', () => {
     expect(() =>
-      planDeployWaves([...ROSTER, 'recover_submit'], sizes, {
-        retireAuthority: false,
-      }),
+      planDeployWaves([...ROSTER, 'recover_submit'], sizes, {}),
     ).toThrow("No verifier key size for operation 'recover_submit'");
   });
 
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     'refuses the budget %s',
     budget => {
-      expect(() =>
-        planDeployWaves(ROSTER, sizes, { retireAuthority: false, budget }),
-      ).toThrow('The verifier byte budget must be a positive number');
+      expect(() => planDeployWaves(ROSTER, sizes, { budget })).toThrow(
+        'The verifier byte budget must be a positive number',
+      );
     },
   );
 
   it('refuses an empty roster', () => {
-    expect(() =>
-      planDeployWaves([], sizes, { retireAuthority: false }),
-    ).toThrow('A deployment needs at least one operation');
+    expect(() => planDeployWaves([], sizes)).toThrow(
+      'A deployment needs at least one operation',
+    );
   });
 });
 
@@ -198,8 +180,7 @@ describe('planResumeWaves', () => {
       operations: ROSTER,
       sizes,
       installed: ROSTER.slice(0, 6),
-      isAuthorityRetired: false,
-      retireAuthority: false,
+      isAuthorityReplaced: false,
     });
 
     expect(waves.map(wave => wave.kind)).toEqual([
@@ -212,7 +193,11 @@ describe('planResumeWaves', () => {
       ROSTER.slice(12, 18),
       ROSTER.slice(18),
     ]);
-    expect(waves.some(wave => wave.retiresAuthority)).toBe(false);
+    expect(waves.map(wave => wave.replacesAuthority)).toEqual([
+      false,
+      false,
+      true,
+    ]);
   });
 
   it('repacks from the installed set, so a wave that landed is never sent twice', () => {
@@ -220,15 +205,14 @@ describe('planResumeWaves', () => {
       operations: ROSTER,
       sizes,
       installed: ROSTER.slice(0, 12),
-      isAuthorityRetired: false,
-      retireAuthority: true,
+      isAuthorityReplaced: false,
     });
 
     expect(operationsOf(waves)).toEqual([
       ROSTER.slice(12, 18),
       ROSTER.slice(18),
     ]);
-    expect(waves.map(wave => wave.retiresAuthority)).toEqual([false, true]);
+    expect(waves.map(wave => wave.replacesAuthority)).toEqual([false, true]);
   });
 
   it('ignores the order and extras of the installed set', () => {
@@ -236,20 +220,18 @@ describe('planResumeWaves', () => {
       operations: ROSTER,
       sizes,
       installed: [...ROSTER.slice(0, 6)].reverse().concat('recover_submit'),
-      isAuthorityRetired: false,
-      retireAuthority: false,
+      isAuthorityReplaced: false,
     });
 
     expect(waves.flatMap(wave => wave.operations)).toEqual(ROSTER.slice(6));
   });
 
-  it('plans a retire-only wave when every operation is in but the lock is still due', () => {
+  it('plans a replace-only wave when every operation is in but the authority is still the deploy-time one', () => {
     const waves = planResumeWaves({
       operations: ROSTER,
       sizes,
       installed: ROSTER,
-      isAuthorityRetired: false,
-      retireAuthority: true,
+      isAuthorityReplaced: false,
     });
 
     expect(waves).toEqual([
@@ -257,31 +239,18 @@ describe('planResumeWaves', () => {
         kind: 'maintenance',
         operations: [],
         verifierBytes: 0,
-        retiresAuthority: true,
+        replacesAuthority: true,
       },
     ]);
   });
 
-  it('plans nothing when every operation is in and the account stays open', () => {
+  it('plans nothing when every operation is in and the authority is already replaced', () => {
     expect(
       planResumeWaves({
         operations: ROSTER,
         sizes,
         installed: ROSTER,
-        isAuthorityRetired: false,
-        retireAuthority: false,
-      }),
-    ).toEqual([]);
-  });
-
-  it('plans nothing when every operation is in and the authority is already retired', () => {
-    expect(
-      planResumeWaves({
-        operations: ROSTER,
-        sizes,
-        installed: ROSTER,
-        isAuthorityRetired: true,
-        retireAuthority: true,
+        isAuthorityReplaced: true,
       }),
     ).toEqual([]);
   });
@@ -292,12 +261,11 @@ describe('planResumeWaves', () => {
         operations: ROSTER,
         sizes,
         installed: ROSTER.slice(0, 12),
-        isAuthorityRetired: true,
-        retireAuthority: true,
+        isAuthorityReplaced: true,
       }),
     ).toThrow(
       new AuthorityRetiredError(
-        `The maintenance authority is retired and 7 operations are not installed: ${ROSTER.slice(
+        `The deploy-time maintenance authority is replaced and 7 operations are not installed: ${ROSTER.slice(
           12,
         ).join(', ')}`,
       ),
@@ -310,10 +278,46 @@ describe('planResumeWaves', () => {
         operations: ROSTER,
         sizes,
         installed: ROSTER.slice(0, 6),
-        isAuthorityRetired: false,
-        retireAuthority: false,
+        isAuthorityReplaced: false,
         budget: 2000,
       }),
+    ).toThrow('exceeds the 2000 byte wave budget');
+  });
+});
+
+describe('planInstallWaves', () => {
+  it('installs the three secp256k1 grantee withdrawals in one wave that keeps the authority', () => {
+    const missing = GRANT_CIRCUITS.slice(-3);
+
+    expect(planInstallWaves(missing, sizes)).toEqual([
+      {
+        kind: 'maintenance',
+        operations: missing,
+        verifierBytes: 3 * K256_GRANT_KEY_BYTES,
+        replacesAuthority: false,
+      },
+    ]);
+  });
+
+  it('splits many operations into budgeted waves in the order given', () => {
+    const waves = planInstallWaves(GRANT_CIRCUITS, sizes);
+
+    expect(waves.length).toBeGreaterThan(1);
+    expect(waves.flatMap(wave => wave.operations)).toEqual(GRANT_CIRCUITS);
+    for (const wave of waves) {
+      expect(wave.kind).toBe('maintenance');
+      expect(wave.replacesAuthority).toBe(false);
+      expect(wave.verifierBytes).toBeLessThanOrEqual(15_000);
+    }
+  });
+
+  it('plans nothing for nothing to install', () => {
+    expect(planInstallWaves([], sizes)).toEqual([]);
+  });
+
+  it('refuses an operation whose key exceeds the budget', () => {
+    expect(() =>
+      planInstallWaves(GRANT_CIRCUITS.slice(-1), sizes, { budget: 2000 }),
     ).toThrow('exceeds the 2000 byte wave budget');
   });
 });

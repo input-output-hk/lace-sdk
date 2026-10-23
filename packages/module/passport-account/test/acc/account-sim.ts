@@ -14,16 +14,23 @@ import {
   createConstructorContext,
   sampleContractAddress,
 } from '@midnight-ntwrk/compact-runtime';
+import * as ledgerV9 from '@midnightntwrk/ledger-v9';
 
-import { Contract, ledger } from '../../src/acc/acc-module';
+import { Contract, ledger, pureCircuits } from '../../src/acc/acc-module';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 import { executeGatedCall } from '../../src/acc/gated-call';
-import { JubjubDevice, randomJubjubScalar } from '../../src/acc/signer';
+import {
+  JubjubDevice,
+  authArgs,
+  randomJubjubScalar,
+} from '../../src/acc/signer';
+import { resolveUseCounter } from '../../src/acc/use-counter';
 
 import type { Ledger, Witnesses } from '../../src/acc/acc-module';
 import type { GatedContractHandle } from '../../src/acc/gated-call';
 import type { GrantCircuitCall } from '../../src/acc/grants';
 import type {
+  MaintenanceVerifyingKey,
   PassportAuthoriser,
   ShieldedCoin,
   UseCounter,
@@ -34,11 +41,32 @@ import type {
   CircuitResults,
 } from '@midnight-ntwrk/compact-runtime';
 
-type PrivateState = Record<string, never>;
+/** A held coin as the contract's witness hands it to a spend. */
+type QualifiedCoin = {
+  nonce: Uint8Array;
+  color: Uint8Array;
+  value: bigint;
+  mt_index: bigint;
+};
+
+/** The coin a shielded spend consumes, present only while one runs. */
+type PrivateState = { heldCoin?: QualifiedCoin };
 type ImpureCircuit = (
   context: CircuitContext<PrivateState>,
   ...args: unknown[]
 ) => Promise<CircuitResults<PrivateState, unknown>>;
+
+/**
+ * Serves the coin the running spend was given, and refuses a spend
+ * outside one, since the simulated account captures no coins of its own.
+ */
+const witnesses: Witnesses<PrivateState> = {
+  held_coin: context => {
+    const { heldCoin } = context.privateState;
+    if (!heldCoin) throw new Error('The simulated account holds no coins');
+    return [context.privateState, heldCoin];
+  },
+};
 
 /** A fixed block time in POSIX seconds, before any sensible expiry. */
 const SIM_BLOCK_TIME = 1_800_000_000;
@@ -47,13 +75,20 @@ const SALT_LENGTH = 32;
 const ENC_KEY_LENGTH = 32;
 const RECOVERY_WRAP_LENGTH = 64;
 
-const witnesses: Witnesses<PrivateState> = {
-  held_coin: () => {
-    throw new Error('The simulated account holds no coins');
-  },
-};
-
 type CoinPublicKey = { bytes: Uint8Array };
+
+/** A coin the account holds, with the tree index its commitment took. */
+type SimHeldCoin = ShieldedCoin & { mtIndex: bigint };
+
+/**
+ * The contract maintenance authority as the ledger keeps it: a committee
+ * at threshold one and the counter the next update is built against.
+ */
+type SimAuthority = {
+  committee: MaintenanceVerifyingKey[];
+  threshold: number;
+  counter: bigint;
+};
 
 type AccountSimProps = {
   addressHex: string;
@@ -62,6 +97,7 @@ type AccountSimProps = {
   state: ChargedState;
   coinPublicKey: CoinPublicKey;
   operations?: readonly string[];
+  authority: SimAuthority;
 };
 
 type CreateAccountSimOptions = {
@@ -74,6 +110,8 @@ type CreateAccountSimOptions = {
    * impure circuit by default. The sim runs any circuit regardless.
    */
   operations?: readonly string[];
+  /** The maintenance committee the deployment leaves; none, a locked account, by default. */
+  committee?: MaintenanceVerifyingKey[];
 };
 
 export class AccountSim {
@@ -86,7 +124,8 @@ export class AccountSim {
   private readonly contract: InstanceType<typeof Contract>;
   private readonly circuits: Record<string, ImpureCircuit>;
   private readonly coinPublicKey: CoinPublicKey;
-  private readonly operations: readonly string[];
+  private operations: readonly string[];
+  private authority: SimAuthority;
 
   private constructor({
     addressHex,
@@ -95,6 +134,7 @@ export class AccountSim {
     state,
     coinPublicKey,
     operations,
+    authority,
   }: AccountSimProps) {
     this.addressHex = addressHex;
     this.scalar = scalar;
@@ -109,6 +149,7 @@ export class AccountSim {
     this.state = state;
     this.coinPublicKey = coinPublicKey;
     this.operations = operations ?? Object.keys(this.circuits);
+    this.authority = authority;
   }
 
   /** Deploys and activates an account whose initial device is the sim's. */
@@ -116,6 +157,7 @@ export class AccountSim {
     encKey = crypto.getRandomValues(new Uint8Array(ENC_KEY_LENGTH)),
     scalar = randomJubjubScalar(),
     operations,
+    committee = [],
   }: CreateAccountSimOptions = {}): Promise<AccountSim> {
     const device = new JubjubDevice(scalar);
     const contract = new Contract<PrivateState>(witnesses);
@@ -138,6 +180,7 @@ export class AccountSim {
       state: deployed.currentContractState.data,
       coinPublicKey,
       operations,
+      authority: { committee, threshold: 1, counter: 0n },
     });
     await sim.call('activate_initial_device_with_jubjub', device.pk, salt);
     return sim;
@@ -156,7 +199,51 @@ export class AccountSim {
       state: this.state,
       coinPublicKey: this.coinPublicKey,
       operations: this.operations,
+      authority: this.authority,
     });
+  }
+
+  /** The maintenance authority the contract holds now. */
+  public maintenanceAuthority(): SimAuthority {
+    return this.authority;
+  }
+
+  /**
+   * Applies a maintenance update as the ledger would: it must be built
+   * against the current counter and carry, at index 0, a signature of the
+   * sole committee member over its data. A replace installs its
+   * authority, a verifier key insert adds its operation to those the
+   * contract state reports, and the counter advances by one.
+   */
+  public maintain(update: ledgerV9.MaintenanceUpdate): void {
+    const { committee, counter } = this.authority;
+    const [[index, signature]] = update.signatures;
+    if (
+      committee.length !== 1 ||
+      index !== 0n ||
+      update.counter !== counter ||
+      !ledgerV9.verifySignature(committee[0], update.dataToSign, signature)
+    ) {
+      throw new Error('The simulated contract refuses the maintenance update');
+    }
+    let next: SimAuthority = { ...this.authority, counter: counter + 1n };
+    for (const change of update.updates) {
+      if (change instanceof ledgerV9.VerifierKeyInsert) {
+        const operation = String(change.operation);
+        if (!this.operations.includes(operation)) {
+          this.operations = [...this.operations, operation];
+        }
+      }
+      if (change instanceof ledgerV9.ReplaceAuthority) {
+        const { committee: installed, threshold } = change.authority;
+        next = {
+          committee: installed.map(({ tag, value }) => ({ tag, value })),
+          threshold,
+          counter: change.authority.counter,
+        };
+      }
+    }
+    this.authority = next;
   }
 
   /** The device key behind the sim's authoriser. */
@@ -184,6 +271,60 @@ export class AccountSim {
       throw new Error('The simulated deposit claimed no coin');
     }
     return commitment;
+  }
+
+  /**
+   * Spends a held coin in full to a user through the device-gated
+   * shielded withdrawal, signed by the sim's device as the module's
+   * authoriser would sign it, and returns the nullifier the contract
+   * claimed for the spend: what the chain would record for the input.
+   */
+  public async withdrawShielded(
+    coin: SimHeldCoin,
+    recipient: Uint8Array,
+  ): Promise<string> {
+    const ledgerState = this.ledger();
+    const { useCounter } = await resolveUseCounter({
+      ledgerState,
+      authoriser: this.authoriser,
+      address: this.account,
+    });
+    const device = this.device();
+    const held: QualifiedCoin = {
+      nonce: coin.nonce,
+      color: coin.color,
+      value: coin.value,
+      mt_index: coin.mtIndex,
+    };
+    const authorisation = device.sign(
+      (sigR, grindNonce) =>
+        pureCircuits.challenge_withdraw_shielded_with_jubjub(
+          { bytes: this.address },
+          sigR,
+          device.pk,
+          { bytes: recipient },
+          coin.color,
+          coin.value,
+          held,
+          ledgerState.auth_nonce,
+          grindNonce,
+        ),
+      useCounter,
+    );
+    const results = await this.runWith(
+      { heldCoin: held },
+      'withdraw_shielded_with_jubjub',
+      { bytes: recipient },
+      coin.color,
+      coin.value,
+      ...authArgs(authorisation),
+    );
+    const [nullifier] =
+      results.context.callContext.currentQueryContext.effects.claimedNullifiers;
+    if (nullifier === undefined) {
+      throw new Error('The simulated withdrawal claimed no nullifier');
+    }
+    return nullifier;
   }
 
   public ledger(): Ledger {
@@ -233,6 +374,14 @@ export class AccountSim {
     circuit: string,
     ...args: unknown[]
   ): Promise<CircuitResults<PrivateState, unknown>> {
+    return this.runWith({}, circuit, ...args);
+  }
+
+  private async runWith(
+    privateState: PrivateState,
+    circuit: string,
+    ...args: unknown[]
+  ): Promise<CircuitResults<PrivateState, unknown>> {
     const impure = this.circuits[circuit];
     if (!impure)
       throw new Error(`Simulated contract has no circuit ${circuit}`);
@@ -241,7 +390,7 @@ export class AccountSim {
       contractAddress: this.addressHex,
       coinPublicKeyOrZswapState: this.coinPublicKey,
       contractState: this.state,
-      privateState: {},
+      privateState,
       time: SIM_BLOCK_TIME,
     });
     const results = await impure(context, ...args);

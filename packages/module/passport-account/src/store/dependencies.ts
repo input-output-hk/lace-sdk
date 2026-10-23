@@ -4,6 +4,7 @@ import { createAccount } from '../flows/create-account';
 import { addDevice, removeDevice } from '../flows/devices';
 import { issueGrant, revokeAllGrants, revokeGrant } from '../flows/grants';
 import { readShieldedHoldings } from '../flows/holdings';
+import { installOperations } from '../flows/install-operations';
 import { signIn } from '../flows/sign-in';
 
 import { createAccountRecordStore, toAccountRecords } from './account-record';
@@ -29,6 +30,10 @@ import type {
   RevokeGrantInput,
 } from '../flows/grants';
 import type { ReadHoldingsInput, ShieldedHoldings } from '../flows/holdings';
+import type {
+  InstalledOperations,
+  InstallOperationsInput,
+} from '../flows/install-operations';
 import type { RecognisedAccount } from '../flows/sign-in';
 import type {
   AccountCallInput,
@@ -84,6 +89,10 @@ export interface PassportFlowDependencies {
       input: ReadHoldingsInput,
       dependencies: FlowRunnerDependencies,
     ) => Observable<FlowEvent<ShieldedHoldings>>;
+    installOperations: (
+      input: InstallOperationsInput,
+      dependencies: FlowRunnerDependencies,
+    ) => Observable<FlowEvent<InstalledOperations>>;
   };
 }
 
@@ -238,6 +247,13 @@ export const createDependencies = ({
       readShieldedHoldings: (input, dependencies) =>
         observeFlow(async onProgress =>
           readShieldedHoldings(
+            input,
+            toFlowContext(dependencies, onProgress, host),
+          ),
+        ),
+      installOperations: (input, dependencies) =>
+        observeFlow(async onProgress =>
+          installOperations(
             input,
             toFlowContext(dependencies, onProgress, host),
           ),

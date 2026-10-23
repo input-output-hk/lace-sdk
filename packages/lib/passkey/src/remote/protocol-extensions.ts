@@ -8,6 +8,7 @@
 export type SignerFlowKind =
   | 'add-device'
   | 'create-account'
+  | 'install-operations'
   | 'issue-grant'
   | 'read-holdings'
   | 'remove-device'
@@ -38,8 +39,10 @@ export type SignerFlowKind =
  * removal, a read grant's issue, a rotating revocation or an enrolment
  * that hands over the keys while a read grant is live, also carries
  * `devices`, the live device entries as hex whose devices the new secret
- * may be sealed to, the removed one left out; consent lists them. Every
- * hex field other than the commitment is lowercase.
+ * may be sealed to, the removed one left out; consent lists them. An
+ * install-operations flow carries the `account` it upgrades and the
+ * `operations` whose verifier keys the account's maintenance authority
+ * signs in. Every hex field other than the commitment is lowercase.
  */
 export type SignerFlow = {
   kind: SignerFlowKind;
@@ -54,6 +57,7 @@ export type SignerFlow = {
   reader?: { readerPublicKey: string; devicePublicKey: string };
   devices?: string[];
   lockAccount?: boolean;
+  operations?: string[];
 };
 
 /**
@@ -221,6 +225,48 @@ export type ExtensionSignerRequestPayloads = {
     grantId: string;
     account: string;
     readPublicKey: string;
+  };
+  /**
+   * One maintenance update of the keyring's account, signed by the
+   * maintenance authority one of the roster keys its envelopes deliver
+   * derives: `authority`, the verifying key of the account's one-key
+   * committee, and `counter`, as decimal, as the chain holds them, and
+   * `changes`, either the replace of that authority by the one the
+   * keyring's live roster key derives, or the inserts of pinned verifier
+   * keys, each key as hex. The signer builds the update from these and
+   * never signs bytes it is sent. The keyring carries the live envelope
+   * and, beside it, at most as many others as one request carries; the
+   * answer is the signature, with the authority a replace installs, or
+   * null when no roster key of those envelopes derives `authority`, so a
+   * device with more envelopes pages the older ones beside the live one.
+   */
+  'sign-maintenance-update': {
+    networkId: string;
+    keyring: SignerKeyring;
+    authority: { tag: string; value: string };
+    counter: string;
+    changes:
+      | {
+          kind: 'insert-verifier-keys';
+          inserts: { operation: string; verifierKey: string }[];
+        }
+      | {
+          kind: 'replace-authority';
+          authority: { tag: string; value: string };
+        };
+  };
+  /**
+   * Whether any roster key the keyring's envelopes deliver derives
+   * `authority`, the verifying key of the account's one-key committee as
+   * the chain holds it, which a removal and a rotating enrolment ask
+   * before they rotate. The keyring is paged as for
+   * `sign-maintenance-update`; the answer is a boolean and no key
+   * crosses.
+   */
+  'holds-maintenance-authority': {
+    networkId: string;
+    keyring: SignerKeyring;
+    authority: { tag: string; value: string };
   };
   'record-read': EmptyPayload;
   'record-write': { record: unknown };

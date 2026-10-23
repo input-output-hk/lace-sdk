@@ -117,6 +117,7 @@ describe('createPassportAccountModule', () => {
         revokeGrant: expect.any(Function) as unknown,
         revokeAllGrants: expect.any(Function) as unknown,
         readShieldedHoldings: expect.any(Function) as unknown,
+        installOperations: expect.any(Function) as unknown,
       },
     });
   });

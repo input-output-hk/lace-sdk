@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import {
   AccAddress,
   DeviceReaderInvalidError,
@@ -6,11 +9,14 @@ import {
   GrantId,
   GrantScopeSalt,
   GrantSlot,
+  MaintenanceAuthorityMismatchError,
+  MaintenanceUpdateRefusedError,
 } from '@lace-contract/passport';
-import { deriveSymmetricSecret } from '@lace-lib/crypto';
+import { deriveSymmetricSecret, sha256 } from '@lace-lib/crypto';
 import { HexBytes } from '@lace-lib/util';
+import * as ledger from '@midnightntwrk/ledger-v9';
 import { x25519 } from '@noble/curves/ed25519.js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { encryptionKeyOver, liveEnvelopeOver } from '../../src/acc/enc-keys';
 import {
@@ -23,6 +29,8 @@ import {
   sealDeviceRegistration,
 } from '../../src/acc/envelopes';
 import { openInboxEntry, sealInboxEntry } from '../../src/acc/inbox';
+import { authorityOf } from '../../src/acc/maintenance-authority';
+import { verifierKeyInsert } from '../../src/acc/verifier-key-insert';
 
 import { isLiveSecret, openGrantViewSeal } from './view-seal-reference';
 
@@ -32,8 +40,14 @@ import type {
   DeviceReader,
   GrantBookkeeping,
   LiveDeviceReader,
+  MaintenanceVerifierKey,
+  MaintenanceVerifyingKey,
   ShieldedCoin,
 } from '@lace-contract/passport';
+
+const pins = vi.hoisted(() => ({ expectedVk: {} as Record<string, string> }));
+
+vi.mock('../../src/acc/acc-module', () => pins);
 
 const NETWORK = 'undeployed';
 const READER_SECRET_DOMAIN = 'lace-passport:reader:v1';
@@ -694,5 +708,453 @@ describe('liveEnvelopeOver', () => {
         envelopes: [copied(), copied(), genuine, copied()],
       }),
     ).resolves.toBe(2);
+  });
+});
+
+const PINNED_OPERATION = 'withdraw_unshielded_with_jubjub';
+const HEADERLESS_OPERATION = 'add_device_with_jubjub';
+const RECOVERY_OPERATION = 'recover_submit';
+const K256_ARM_OPERATION = 'add_device_with_k256';
+
+/**
+ * A verifier key the pinned compiler line emits, for a one-circuit
+ * counter contract. It stands in for a pinned Account Custody Contract
+ * key: the test pins its digest for {@link PINNED_OPERATION}.
+ */
+const verifierKey = new Uint8Array(
+  await readFile(path.join(__dirname, 'fixtures', 'counter-bump.verifier')),
+);
+const headerless = verifierKey.slice(8);
+
+pins.expectedVk[PINNED_OPERATION] = HexBytes.fromByteArray(sha256(verifierKey));
+pins.expectedVk[RECOVERY_OPERATION] = pins.expectedVk[PINNED_OPERATION];
+pins.expectedVk[K256_ARM_OPERATION] = pins.expectedVk[PINNED_OPERATION];
+pins.expectedVk[HEADERLESS_OPERATION] = HexBytes.fromByteArray(
+  sha256(headerless),
+);
+
+/**
+ * An account a device created and then rotated, keeping the roster key
+ * or drawing a fresh one, with the keyring over both envelopes.
+ */
+const rotatedAccount = async (rotateRoster: boolean) => {
+  const owner = await device();
+  const created = await owner.key.createKeys(NETWORK, {
+    devicePublicKey: owner.reader.devicePublicKey,
+  });
+  const rotated = await owner.key.createKeys(NETWORK, {
+    devicePublicKey: owner.reader.devicePublicKey,
+    keyring: keyringOf(
+      created.encKey,
+      created.envelopes,
+      owner.readerPublicKey,
+    ),
+    registrations: created.registrations,
+    rotateRoster,
+  });
+  const keyring = keyringOf(
+    rotated.encKey,
+    [...created.envelopes, ...rotated.envelopes],
+    owner.readerPublicKey,
+  );
+  return { owner, created, rotated, keyring };
+};
+
+/** The roster key a device's envelope delivers. */
+const rosterKeyOf = async (
+  readerSecret: Uint8Array,
+  envelope: Uint8Array,
+): Promise<Uint8Array> => {
+  const opened = await openDeviceEnvelope(readerSecret, envelope);
+  if (!opened) throw new Error('The envelope does not open');
+  return opened.rosterKey;
+};
+
+const replaceUpdate = (
+  installed: MaintenanceVerifyingKey,
+  counter: bigint,
+): ledger.MaintenanceUpdate =>
+  new ledger.MaintenanceUpdate(
+    ACCOUNT,
+    [
+      new ledger.ReplaceAuthority(
+        new ledger.ContractMaintenanceAuthority([installed], 1, counter + 1n),
+      ),
+    ],
+    counter,
+  );
+
+/** Every secret a device's key source derived, as the bytes it handed out. */
+const derivedSecrets = async (
+  deriveSecret: ReturnType<typeof vi.fn<DeriveSecret>>,
+): Promise<Uint8Array[]> =>
+  Promise.all(
+    deriveSecret.mock.results.map(
+      async ({ value }) => value as Promise<Uint8Array>,
+    ),
+  );
+
+const isZeroed = (bytes: ArrayBuffer | Uint8Array): boolean =>
+  new Uint8Array(bytes).every(byte => byte === 0);
+
+describe('encryptionKeyOver maintenance authority', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('reports the authority the delivered roster key derives, kept with the roster key and new with a fresh one', async () => {
+    const kept = await rotatedAccount(false);
+    const fresh = await rotatedAccount(true);
+
+    await expect(
+      authorityOf(
+        ledger,
+        await rosterKeyOf(kept.owner.readerSecret, kept.created.envelopes[0]),
+      ),
+    ).resolves.toEqual(kept.created.authority);
+    expect(kept.created.authority.tag).toBe('schnorr');
+    expect(kept.rotated.authority).toEqual(kept.created.authority);
+    expect(fresh.rotated.authority).not.toEqual(fresh.created.authority);
+    await expect(
+      authorityOf(
+        ledger,
+        await rosterKeyOf(fresh.owner.readerSecret, fresh.rotated.envelopes[0]),
+      ),
+    ).resolves.toEqual(fresh.rotated.authority);
+    expect(kept.created.authority).not.toEqual(fresh.created.authority);
+  });
+
+  it('signs the replace a roster rotation needs with the earlier roster key, installing the live one', async () => {
+    const { owner, created, rotated, keyring } = await rotatedAccount(true);
+
+    const signed = await owner.key.signMaintenanceUpdate(NETWORK, {
+      keyring,
+      authority: created.authority,
+      counter: 3n,
+      changes: { kind: 'replace-authority', authority: rotated.authority },
+    });
+
+    expect(signed.authority).toEqual(rotated.authority);
+    expect(
+      ledger.verifySignature(
+        created.authority,
+        replaceUpdate(rotated.authority, 3n).dataToSign,
+        signed.signature,
+      ),
+    ).toBe(true);
+  });
+
+  it('finds the earlier roster key behind any number of envelopes appended to the reader key', async () => {
+    const { owner, created, rotated } = await rotatedAccount(true);
+    const earlier = await openDeviceEnvelope(
+      owner.readerSecret,
+      created.envelopes[0],
+    );
+    const flood = await Promise.all(
+      Array.from({ length: MAX_KEYRING_SECRETS + 4 }, async () =>
+        sealDeviceEnvelope(owner.readerPublicKey, {
+          secret: x25519.utils.randomSecretKey(),
+          rosterKey: crypto.getRandomValues(new Uint8Array(32)),
+        }),
+      ),
+    );
+    const replayed = await sealDeviceEnvelope(owner.readerPublicKey, {
+      secret: earlier!.secret,
+      rosterKey: crypto.getRandomValues(new Uint8Array(32)),
+    });
+    const keyring = keyringOf(
+      rotated.encKey,
+      [...created.envelopes, ...flood, replayed, ...rotated.envelopes],
+      owner.readerPublicKey,
+    );
+
+    const signed = await owner.key.signMaintenanceUpdate(NETWORK, {
+      keyring,
+      authority: created.authority,
+      counter: 2n,
+      changes: { kind: 'replace-authority', authority: rotated.authority },
+    });
+
+    expect(signed.authority).toEqual(rotated.authority);
+    expect(
+      ledger.verifySignature(
+        created.authority,
+        replaceUpdate(rotated.authority, 2n).dataToSign,
+        signed.signature,
+      ),
+    ).toBe(true);
+  });
+
+  it('installs the authority of the oldest live envelope when a later one carries the live secret with another roster key', async () => {
+    const { owner, created, rotated } = await rotatedAccount(true);
+    const genuine = await openDeviceEnvelope(
+      owner.readerSecret,
+      rotated.envelopes[0],
+    );
+    const forgedRosterKey = crypto.getRandomValues(new Uint8Array(32));
+    const forged = await sealDeviceEnvelope(owner.readerPublicKey, {
+      secret: genuine!.secret,
+      rosterKey: forgedRosterKey,
+    });
+    const keyring = keyringOf(
+      rotated.encKey,
+      [...created.envelopes, ...rotated.envelopes, forged],
+      owner.readerPublicKey,
+    );
+    expect(keyring.envelopes[0]).toEqual(forged);
+    const forgedAuthority = await authorityOf(ledger, forgedRosterKey);
+
+    await expect(
+      owner.key.signMaintenanceUpdate(NETWORK, {
+        keyring,
+        authority: created.authority,
+        counter: 4n,
+        changes: { kind: 'replace-authority', authority: forgedAuthority },
+      }),
+    ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
+    const signed = await owner.key.signMaintenanceUpdate(NETWORK, {
+      keyring,
+      authority: created.authority,
+      counter: 4n,
+      changes: { kind: 'replace-authority', authority: rotated.authority },
+    });
+
+    expect(signed.authority).toEqual(rotated.authority);
+    expect(
+      ledger.verifySignature(
+        created.authority,
+        replaceUpdate(rotated.authority, 4n).dataToSign,
+        signed.signature,
+      ),
+    ).toBe(true);
+  });
+
+  it('signs an install of a pinned verifier key with the live authority', async () => {
+    const { owner, rotated, keyring } = await rotatedAccount(true);
+
+    const signed = await owner.key.signMaintenanceUpdate(NETWORK, {
+      keyring,
+      authority: rotated.authority,
+      counter: 5n,
+      changes: {
+        kind: 'insert-verifier-keys',
+        inserts: [{ operation: PINNED_OPERATION, verifierKey }],
+      },
+    });
+    const update = new ledger.MaintenanceUpdate(
+      ACCOUNT,
+      [verifierKeyInsert(ledger, PINNED_OPERATION, verifierKey)],
+      5n,
+    );
+
+    expect(signed.authority).toBeUndefined();
+    expect(
+      ledger.verifySignature(
+        rotated.authority,
+        update.dataToSign,
+        signed.signature,
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses an on-chain authority no roster key of the keyring derives', async () => {
+    const { owner, keyring } = await rotatedAccount(true);
+    const stranger = await rotatedAccount(false);
+
+    await expect(
+      owner.key.signMaintenanceUpdate(NETWORK, {
+        keyring,
+        authority: stranger.created.authority,
+        counter: 0n,
+        changes: {
+          kind: 'insert-verifier-keys',
+          inserts: [{ operation: PINNED_OPERATION, verifierKey }],
+        },
+      }),
+    ).rejects.toBeInstanceOf(MaintenanceAuthorityMismatchError);
+  });
+
+  it('refuses a replace that installs the earlier authority instead of the live one', async () => {
+    const { owner, created, keyring } = await rotatedAccount(true);
+
+    await expect(
+      owner.key.signMaintenanceUpdate(NETWORK, {
+        keyring,
+        authority: created.authority,
+        counter: 0n,
+        changes: { kind: 'replace-authority', authority: created.authority },
+      }),
+    ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
+  });
+
+  it.each<[string, MaintenanceVerifierKey[]]>([
+    ['no verifier key', []],
+    [
+      'a recovery circuit, though its key is the pinned one',
+      [{ operation: RECOVERY_OPERATION, verifierKey }],
+    ],
+    [
+      'a k256 device arm circuit, though its key is the pinned one',
+      [{ operation: K256_ARM_OPERATION, verifierKey }],
+    ],
+    [
+      'an operation without a pin',
+      [{ operation: 'deposit_shielded', verifierKey }],
+    ],
+    [
+      'a key that is not the pinned one',
+      [{ operation: PINNED_OPERATION, verifierKey: verifierKey.slice(1) }],
+    ],
+    [
+      'a pinned key under another header',
+      [{ operation: HEADERLESS_OPERATION, verifierKey: headerless }],
+    ],
+  ])(
+    'refuses an install of %s before any key is opened',
+    async (_case, inserts) => {
+      const { owner, rotated, keyring } = await rotatedAccount(true);
+      owner.deriveSecret.mockClear();
+
+      await expect(
+        owner.key.signMaintenanceUpdate(NETWORK, {
+          keyring,
+          authority: rotated.authority,
+          counter: 0n,
+          changes: { kind: 'insert-verifier-keys', inserts },
+        }),
+      ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
+      expect(owner.deriveSecret).not.toHaveBeenCalled();
+    },
+  );
+
+  it('zeroes the reader secret and every derived authority secret, on success and on refusal', async () => {
+    const { owner, created, rotated, keyring } = await rotatedAccount(true);
+    owner.deriveSecret.mockClear();
+    const deriveBits = crypto.subtle.deriveBits.bind(crypto.subtle);
+    const derivedBits: ArrayBuffer[] = [];
+    vi.spyOn(crypto.subtle, 'deriveBits').mockImplementation(
+      async (...args: Parameters<SubtleCrypto['deriveBits']>) => {
+        const bits = await deriveBits(...args);
+        derivedBits.push(bits);
+        return bits;
+      },
+    );
+
+    await owner.key.signMaintenanceUpdate(NETWORK, {
+      keyring,
+      authority: created.authority,
+      counter: 0n,
+      changes: { kind: 'replace-authority', authority: rotated.authority },
+    });
+    await expect(
+      owner.key.signMaintenanceUpdate(NETWORK, {
+        keyring,
+        authority: rotated.authority,
+        counter: 0n,
+        changes: { kind: 'replace-authority', authority: created.authority },
+      }),
+    ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
+
+    const readerSecrets = await derivedSecrets(owner.deriveSecret);
+    expect(readerSecrets).toHaveLength(2);
+    expect(readerSecrets.every(secret => isZeroed(secret))).toBe(true);
+    expect(derivedBits.length).toBeGreaterThan(0);
+    expect(derivedBits.every(bits => isZeroed(bits))).toBe(true);
+  });
+});
+
+describe('encryptionKeyOver holdsMaintenanceAuthority', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('answers true for the authority the live or an earlier roster key derives', async () => {
+    const { owner, created, rotated, keyring } = await rotatedAccount(true);
+
+    await expect(
+      owner.key.holdsMaintenanceAuthority(NETWORK, keyring, rotated.authority),
+    ).resolves.toBe(true);
+    await expect(
+      owner.key.holdsMaintenanceAuthority(NETWORK, keyring, created.authority),
+    ).resolves.toBe(true);
+  });
+
+  it('finds the earlier roster key behind any number of envelopes appended to the reader key', async () => {
+    const { owner, created, rotated } = await rotatedAccount(true);
+    const flood = await Promise.all(
+      Array.from({ length: MAX_KEYRING_SECRETS + 4 }, async () =>
+        sealDeviceEnvelope(owner.readerPublicKey, {
+          secret: x25519.utils.randomSecretKey(),
+          rosterKey: crypto.getRandomValues(new Uint8Array(32)),
+        }),
+      ),
+    );
+    const keyring = keyringOf(
+      rotated.encKey,
+      [...created.envelopes, ...flood, ...rotated.envelopes],
+      owner.readerPublicKey,
+    );
+
+    await expect(
+      owner.key.holdsMaintenanceAuthority(NETWORK, keyring, created.authority),
+    ).resolves.toBe(true);
+  });
+
+  it('answers false for an authority no roster key of the keyring derives', async () => {
+    const { owner, keyring } = await rotatedAccount(true);
+    const stranger = await rotatedAccount(false);
+
+    await expect(
+      owner.key.holdsMaintenanceAuthority(
+        NETWORK,
+        keyring,
+        stranger.created.authority,
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it('rejects a keyring none of whose envelopes opens its enc_key', async () => {
+    const { owner, created } = await rotatedAccount(true);
+    const keyring = keyringOf(
+      new Uint8Array(32).fill(9),
+      created.envelopes,
+      owner.readerPublicKey,
+    );
+
+    await expect(
+      owner.key.holdsMaintenanceAuthority(NETWORK, keyring, created.authority),
+    ).rejects.toBeInstanceOf(EncryptionKeyMismatchError);
+  });
+
+  it('zeroes the reader secret and every derived authority secret', async () => {
+    const { owner, created, keyring } = await rotatedAccount(true);
+    const stranger = await rotatedAccount(false);
+    owner.deriveSecret.mockClear();
+    const deriveBits = crypto.subtle.deriveBits.bind(crypto.subtle);
+    const derivedBits: ArrayBuffer[] = [];
+    vi.spyOn(crypto.subtle, 'deriveBits').mockImplementation(
+      async (...args: Parameters<SubtleCrypto['deriveBits']>) => {
+        const bits = await deriveBits(...args);
+        derivedBits.push(bits);
+        return bits;
+      },
+    );
+
+    await owner.key.holdsMaintenanceAuthority(
+      NETWORK,
+      keyring,
+      created.authority,
+    );
+    await owner.key.holdsMaintenanceAuthority(
+      NETWORK,
+      keyring,
+      stranger.created.authority,
+    );
+
+    const readerSecrets = await derivedSecrets(owner.deriveSecret);
+    expect(readerSecrets).toHaveLength(2);
+    expect(readerSecrets.every(secret => isZeroed(secret))).toBe(true);
+    expect(derivedBits.length).toBeGreaterThan(0);
+    expect(derivedBits.every(bits => isZeroed(bits))).toBe(true);
   });
 });

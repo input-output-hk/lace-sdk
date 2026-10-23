@@ -16,10 +16,10 @@ export type PasskeyEncryptionKey = Required<PassportEncryptionKey>;
  * prompts once; the account secret is random, reaches this device only
  * sealed in its envelopes on chain, and is opened from them for one call
  * at a time. Only public keys, inbox entries, the coins and bookkeeping
- * they open to, and the sealed secret of a read grant leave this
- * function, every secret being zeroed as soon as its one use is over. A
- * dismissed prompt or a PRF-less authenticator surfaces as the matching
- * Passport error.
+ * they open to, the sealed secret of a read grant and maintenance update
+ * signatures leave this function, every secret being zeroed as soon as
+ * its one use is over. A dismissed prompt or a PRF-less authenticator
+ * surfaces as the matching Passport error.
  */
 export const createPasskeyEncryptionKey = (
   keySource: PasskeySessionKeySource,
@@ -40,6 +40,12 @@ export const createPasskeyEncryptionKey = (
       asPassport(async () => key.reencryptInbox(networkId, rotation, entries)),
     sealView: async (networkId, keyring, request) =>
       asPassport(async () => key.sealView(networkId, keyring, request)),
+    signMaintenanceUpdate: async (networkId, request) =>
+      asPassport(async () => key.signMaintenanceUpdate(networkId, request)),
+    holdsMaintenanceAuthority: async (networkId, keyring, authority) =>
+      asPassport(async () =>
+        key.holdsMaintenanceAuthority(networkId, keyring, authority),
+      ),
   };
 };
 

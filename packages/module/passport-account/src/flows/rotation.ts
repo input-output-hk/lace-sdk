@@ -35,6 +35,7 @@ import type {
   AccountKeyring,
   GrantId,
   LiveDeviceReader,
+  MaintenanceVerifyingKey,
   RemovedDevice,
   PassportAccountInfo,
   PassportDependencies,
@@ -364,14 +365,16 @@ const sealedRoster = async ({
 
 /**
  * What a rotation leaves behind: the new `enc_key`, this device's keyring
- * of it, and the live device entries whose devices got no new key
- * because their registrations conflict, as lowercase hex, which need to
- * be enrolled again.
+ * of it, the live device entries whose devices got no new key because
+ * their registrations conflict, as lowercase hex, which need to be
+ * enrolled again, and the maintenance authority the delivered roster key
+ * derives, a new one when the roster key was drawn fresh.
  */
 export type RotatedEncKey = {
   encKey: Uint8Array;
   keyring: AccountKeyring;
   dropped: string[];
+  authority: MaintenanceVerifyingKey;
 };
 
 /**
@@ -490,6 +493,7 @@ export const rotateEncKey = async ({
   return {
     encKey: keys.encKey,
     dropped,
+    authority: keys.authority,
     keyring: {
       account: AccAddress(account.address),
       encKey: keys.encKey,

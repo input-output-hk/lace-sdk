@@ -438,6 +438,8 @@ export class GrantRosterUnsettledError extends CustomError {
  * maintenance authority was retired before every verifier key wave
  * landed, so no update can install the missing operations. Unrecoverable:
  * the contract is left as it stands and a new account is the only way on.
+ * An install of missing operations on a locked account, whose authority
+ * was retired at creation, raises it too, before anything is signed.
  */
 export class AuthorityRetiredError extends CustomError {
   public readonly code = 'authority-retired' as const;
@@ -450,11 +452,13 @@ export class AuthorityRetiredError extends CustomError {
 }
 
 /**
- * Thrown when a creation that chose to lock the account resumes over an
- * account the chain shows activated with its maintenance authority still
- * live. The flow retires the authority before it activates, so the
- * deployment ran outside it; whoever holds the authority key keeps full
- * custody of the account, and a new account is the safe way on.
+ * Thrown when a creation resumes over an account the chain shows
+ * activated with its deploy-time maintenance authority still live, whether
+ * it chose to lock the account or to hand the authority to its devices.
+ * The flow retires or hands over the authority before it activates, so
+ * the deployment ran outside it; whoever holds the deploy-time key keeps
+ * full custody of the account and may have installed verifier keys no
+ * check has seen, and a new account is the safe way on.
  */
 export class AuthorityNotRetiredError extends CustomError {
   public readonly code = 'authority-not-retired' as const;
@@ -495,6 +499,64 @@ export class CreationArtefactMismatchError extends CustomError {
 
   public constructor(
     message = 'The unfinished account creation was started under other contract artefacts than this build installs.',
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when the contract's maintenance authority on chain is not the
+ * one any roster key this device holds derives: the account is locked,
+ * its authority was rotated by a roster this device was never handed, or
+ * the keyring belongs to another account. Raised before anything is
+ * signed. A resumed creation raises it too when the committee on chain is
+ * neither the deploy-time key nor the successor the recorded creation
+ * installs, refused before any wave.
+ */
+export class MaintenanceAuthorityMismatchError extends CustomError {
+  public readonly code = 'maintenance-authority-mismatch' as const;
+
+  public constructor(
+    message = "No roster key this device holds derives the account's maintenance authority.",
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when a maintenance update asks for a change the encryption key
+ * does not sign: a replace that installs any authority other than the one
+ * the live roster key derives, a verifier key that is not the one pinned
+ * for its operation or not in the deployed roster, or no change at all.
+ * An install is refused before any key is opened, a replace before
+ * anything is signed. A roster rotation over an account whose authority
+ * is live raises it too when the encryption key signs no maintenance
+ * update at all, as the authority could not follow the roster, and so
+ * does an install of missing operations, before any prompt.
+ */
+export class MaintenanceUpdateRefusedError extends CustomError {
+  public readonly code = 'maintenance-update-refused' as const;
+
+  public constructor(
+    message = 'The maintenance update asks for a change the encryption key does not sign.',
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when an install of missing operations names an operation it
+ * cannot install, one outside the operation roster this build deploys,
+ * such as a recovery circuit or another device arm, or names none at
+ * all. Raised before any prompt, naming every such operation; nothing is
+ * installed. An operation the account already holds a verifier key for
+ * is skipped rather than refused.
+ */
+export class OperationNotInstallableError extends CustomError {
+  public readonly code = 'operation-not-installable' as const;
+
+  public constructor(
+    message = 'The account cannot install the operations asked for.',
   ) {
     super(message);
   }

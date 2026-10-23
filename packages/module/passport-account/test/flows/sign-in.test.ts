@@ -149,6 +149,7 @@ const pendingRecord: PassportAccountRecord = {
     lockAccount: true,
     saltHex: '07'.repeat(32),
     authorityKey: { tag: 'schnorr', value: 'authority-key' },
+    handoverAuthority: { tag: 'schnorr', value: 'cd'.repeat(32) },
     keyEntries: [envelope, registration].map(entry =>
       HexBytes.fromByteArray(entry),
     ),

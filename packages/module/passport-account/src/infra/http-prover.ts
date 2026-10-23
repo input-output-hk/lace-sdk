@@ -23,6 +23,29 @@ export class ProofServerError extends Error {
 }
 
 /**
+ * Thrown when the ledger asks for the circuit of a contract the client holds
+ * no key material for, for example a contract the account's circuits call.
+ * Without it the proof server would receive the request with no circuit IR
+ * and answer a bare 400.
+ */
+export class UnresolvedContractCircuitError extends Error {
+  public readonly code = 'unresolved-contract-circuit' as const;
+
+  public constructor(
+    readonly contractAddress: string,
+    readonly circuit: string,
+    readonly verifierKeyHash?: string,
+  ) {
+    super(
+      `No key material for circuit "${circuit}" of contract ${contractAddress}` +
+        `${verifierKeyHash === undefined ? '' : ` (vk=${verifierKeyHash})`}` +
+        ': the prover only resolves the Account Custody Contract circuits listed in its manifest.',
+    );
+    this.name = 'UnresolvedContractCircuitError';
+  }
+}
+
+/**
  * Subset of the Fetch API the prover uses. Injected so the platform picks
  * the transport and node tests run without a network.
  */
@@ -65,7 +88,7 @@ export type CreateManifestKeyMaterialResolverProps = {
  * the vk query pin is the sha256 of the verifier key the chain expects.
  */
 const CANONICAL_KEY_LOCATION =
-  /^contract:[0-9a-f]+\/([^?]+)(?:\?vk=([0-9a-f]+))?$/;
+  /^contract:([0-9a-f]+)\/([^?]+)(?:\?vk=([0-9a-f]+))?$/;
 
 /**
  * The default {@link KeyMaterialResolver}: maps a key location onto the
@@ -74,8 +97,11 @@ const CANONICAL_KEY_LOCATION =
  * byte is verified against the manifest's sha256 pins. Canonical contract
  * locations resolve by circuit name, and their embedded vk pin must match
  * the manifest's, so proving against a drifted artefact fails before the
- * proof server is asked. A location the manifest does not list resolves
- * to undefined (a protocol builtin the proof server supplies itself).
+ * proof server is asked. A canonical contract location whose circuit the
+ * manifest does not list, such as a circuit of a contract the account
+ * calls, throws {@link UnresolvedContractCircuitError}. Any other unlisted location
+ * resolves to undefined (a protocol builtin the proof server supplies
+ * itself).
  */
 export const createManifestKeyMaterialResolver = ({
   artefactUrl,
@@ -85,13 +111,22 @@ export const createManifestKeyMaterialResolver = ({
   const entries = Object.values(manifest.circuits);
   return async keyLocation => {
     const canonical = CANONICAL_KEY_LOCATION.exec(keyLocation);
-    const circuitName = canonical ? canonical[1] : keyLocation;
-    const vkPin = canonical?.[2];
+    const circuitName = canonical ? canonical[2] : keyLocation;
+    const vkPin = canonical?.[3];
     const entry = entries.find(
       candidate =>
         candidate.keyLocation === keyLocation || candidate.name === circuitName,
     );
-    if (!entry) return undefined;
+    if (!entry) {
+      if (canonical) {
+        throw new UnresolvedContractCircuitError(
+          canonical[1],
+          canonical[2],
+          vkPin,
+        );
+      }
+      return undefined;
+    }
     if (vkPin !== undefined && vkPin !== entry.verifierKeySha256) {
       throw new ArtefactIntegrityError(
         `verifier key pin mismatch for ${entry.name}: the chain expects ${vkPin}, the manifest pins ${entry.verifierKeySha256}`,

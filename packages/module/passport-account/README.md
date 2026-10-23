@@ -71,13 +71,15 @@ each swapped in by whatever the caller passes to
 ### Flows and the gate
 
 Account creation, sign-in, device enrolment, device revocation, the three
-grant operations (issue, revoke, revoke all) and the shielded holdings
-read are each a plain async function under `src/flows/`. Through
+grant operations (issue, revoke, revoke all), the shielded holdings read
+and the operation install are each a plain async function under
+`src/flows/`. Through
 `FlowContext` a host supplies nothing but the five seams above, a
 promise-based account-record seam, the relying party id a grant is bound
 to, and an `onProgress` callback that a flow calls as it enters each stage
-it reports; account creation and the grant flows report stages, sign-in,
-the device flows and the holdings read settle with no intermediate stage.
+it reports; account creation, the grant flows and the operation install
+report stages, sign-in, the device flows and the holdings read settle with
+no intermediate stage.
 Beyond that context, a flow drives the vendored binding and the network
 clients itself. A flow never imports rxjs, redux, `@reduxjs/toolkit`,
 redux-observable, `@lace-contract/module` or the store layer, so it is
@@ -107,9 +109,9 @@ shielded holdings, the resolved use counter, the id of the last grant
 issued, and one flow value with its error. A roster changes only after a
 chain call is confirmed, and the holdings only once a walk has verified
 them: `addDevice`, `removeDevice`, `issueGrant`, `revokeGrant`,
-`revokeAllGrants` and `readShieldedHoldings` are trigger actions that
-clear the previous error and touch nothing else, so a failed call never
-leaves state disagreeing with the contract.
+`revokeAllGrants`, `readShieldedHoldings` and `installOperations` are
+trigger actions that clear the previous error and touch nothing else, so
+a failed call never leaves state disagreeing with the contract.
 
 | Location            | Contents                                                                                                                                                                                                                                 | Lifetime                   |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
@@ -141,9 +143,13 @@ ceremony as the signing key. The stored value is `{ v: 1, iv, ciphertext }`
 with a fresh 12-byte IV per write, so nothing about the account is readable at
 rest, and a record that fails to decrypt is reported as corrupt rather than
 treated as absent. While a creation is unfinished the record also carries
-the deployment in progress, including the maintenance authority key that
-signs the remaining waves; it is the one secret the record ever holds, and
-the write that completes the record drops it (see "Deployment waves"). The
+the deployment in progress, including the deploy-time maintenance
+authority key that signs the remaining waves, the last of which replaces
+it; it is the one secret the record ever holds, and the write that
+completes the record drops it (see "Deployment waves"). In memory it is a
+ledger signing key, a kind tag and the secret as a hex string, which the
+in-memory private state provider also keeps while the flow runs; a string
+cannot be zeroed, so those copies survive until collection. The
 envelope then also carries `pending: true` beside the ciphertext: one
 plaintext bit, not a secret, that tells an unfinished creation from a
 completed account without opening the record, so creating an account over
@@ -201,16 +207,23 @@ secret deriving `enc_key`, so envelopes anyone appends to a reader key
 cannot hide the live one, only cost the device time, and keeps at most
 16 earlier secrets beside it (`MAX_KEYRING_SECRETS`), which only find
 coins an interrupted rotation or a racing sender left under an earlier
-key. Over the hosted signer, a device with more envelopes than one
+key. Roster keys are never dropped: a maintenance update is signed with
+the roster key, among every one the envelopes deliver, that derives the
+authority on chain. Over the hosted signer, a device with more envelopes than one
 request carries pages them to the signer, oldest page first, and sends
-the envelopes from the live one on. An
+the envelopes from the live one on; a maintenance update instead sends
+the live envelope beside each run of older envelopes in turn, until one
+holds the roster key the authority on chain derives from. An
 inbox that holds no envelope of this device opening `enc_key`, as for a
 device never handed the keys or removed since, fails with
 `EncryptionKeyMismatchError` rather than reading the inbox as empty. The
 roster of enrolled devices lives on chain too, as device registrations:
 each device's reader key and compressed device key sealed under the
 roster key, a random key every device receives in its envelope and a
-grant never does, drawn afresh whenever a device is removed. The generic key source exposes no
+grant never does, drawn afresh at creation, whenever a device is removed
+and at an enrolment while a read grant is live. On an unlocked account
+the roster key also derives the contract's maintenance authority (see
+"Maintenance authority"). The generic key source exposes no
 root, entropy, or session mnemonic accessor. Cardano wallet callers use `withPasskeyMnemonic`
 to consume words inside a callback. Each call makes a fresh assertion, even
 while a Passport session is open.
@@ -254,6 +267,7 @@ flowchart LR
     random["random account secret and roster key<br/>drawn at creation and every rotation"]
     envelope["device envelope on chain<br/>sealed to the reader public key"]
     encPub["X25519 public key<br/>the contract's enc_key"]
+    authority["maintenance authority<br/>BIP-340 Schnorr key of an unlocked account"]
 
     passkey --> saltA & saltB
     saltA -- "mod r" --> signing
@@ -266,23 +280,26 @@ flowchart LR
     random -- "sealed to each device" --> envelope
     reader -- "opens" --> envelope
     random -- "x25519.getPublicKey" --> encPub
+    random -- "HKDF over the roster key, info 'lace-passport:cma:v1'" --> authority
 ```
 
 The table indexes into that tree: what each secret comes from, how long it
 lives and what clears it, and what disclosing or losing it costs. Every
 derived entry is regenerable from the credential; the account secret and
 the roster key are random, and they are regenerable from any enrolled
-device's envelope, since every device holds its own copy on chain.
+device's envelope, since every device holds its own copy on chain, and so
+is the maintenance authority the roster key derives.
 
-| Secret                        | Derived from                                                                                                               | Lifetime                                                                                                                                                                                                                                                                                                                                                                 | If disclosed                                                                                                                                                                                                                                               | If lost                                                                                                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Device scalar                 | PRF output at salt A, reduced mod the JubJub group order                                                                   | The per-call copy is zeroed after the call (`ceremony/passkey.ts`); the session's PRF output is zeroed when the session closes (`@lace-lib/passkey`'s `key-source.ts`)                                                                                                                                                                                                   | Spend authority on the account: the holder can forge every gated-call authorisation                                                                                                                                                                        | Regenerable from the credential; nothing else is affected                                                                                                           |
-| Root                          | PRF output at salt B                                                                                                       | The open key session, or one ceremony outside it; zeroed when the last session holder settles, and never returned by any accessor                                                                                                                                                                                                                                        | Everything derived below it (record key, wallet entropy, seed, reader secret), so it is the single point worth protecting, as serious as the device scalar's exposure though it grants no spend authority on its own                                       | Regenerable from the credential                                                                                                                                     |
-| Record key                    | HKDF-SHA256(root, info `lace-passport/hkdf/record-key/v1`), a non-extractable AES-GCM key                                  | Cached in the key source for as long as that instance lives, since it carries no signing authority                                                                                                                                                                                                                                                                       | Read access to the local account record: the address, binding version and use counter, and, until the creation completes, the pending deployment with the contract's maintenance authority key, which is full custody of that contract                     | Regenerable from the credential; the sealed record simply fails to open until then                                                                                  |
-| Wallet entropy                | HKDF-SHA256(root, info `lace/hkdf/wallet-entropy/v1`)                                                                      | Exists only inside the key source for one Passport derivation or wallet callback; never cached                                                                                                                                                                                                                                                                           | The Lace mnemonic and everything derived from it: every chain wallet and the reader secret, and through it every account secret this device was handed                                                                                                     | Regenerable from the credential                                                                                                                                     |
-| Seed                          | `Mnemonic.toSeed(Mnemonic.deriveFrom(entropy))`                                                                            | One `deriveSecret` call; zeroed before the call returns                                                                                                                                                                                                                                                                                                                  | The same as wallet entropy, since a conforming wallet built from the same words derives the same seed                                                                                                                                                      | Regenerable from the credential                                                                                                                                     |
-| Reader secret                 | `deriveSymmetricSecret(seed, { domain: 'lace-passport:reader:v1', context: '<networkId>' })`, one per network              | One call of the encryption key seam: derived, used to open this device's envelopes and grant records or to seal its grant records, and zeroed before the call returns, inside the key session when one is open                                                                                                                                                           | Every account secret this device was handed, and its grant bookkeeping; never spend authority                                                                                                                                                              | Regenerable from the credential; nothing is stranded                                                                                                                |
-| Account secret and roster key | Random, drawn by `createKeys` at creation and at every rotation; the roster key drawn afresh only when a device is removed | Lives sealed on chain, one device envelope per enrolled device and secret; opened from this device's envelopes for one seam call, used to open or re-encrypt inbox entries, seal the next secret, or seal a grantee's view, and zeroed before the call returns; the module receives only public keys, ciphertexts, opened coin descriptions and bookkeeping, or the seal | Read access to the contract's inbox, so shielded holdings become visible, but never spend authority, matching the custody standard's own leak model; a read grant shares exactly the account secret, sealed, until the next rotation, never the roster key | A device that loses its passkey loses only its copy; any other enrolled device opens its own envelope, and a rotation hands a new secret to the devices that remain |
+| Secret                        | Derived from                                                                                                                                                                           | Lifetime                                                                                                                                                                                                                                                                                                                                                                                                                            | If disclosed                                                                                                                                                                                                                                                                                                                                            | If lost                                                                                                                                                             |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Device scalar                 | PRF output at salt A, reduced mod the JubJub group order                                                                                                                               | The per-call copy is zeroed after the call (`ceremony/passkey.ts`); the session's PRF output is zeroed when the session closes (`@lace-lib/passkey`'s `key-source.ts`)                                                                                                                                                                                                                                                              | Spend authority on the account: the holder can forge every gated-call authorisation                                                                                                                                                                                                                                                                     | Regenerable from the credential; nothing else is affected                                                                                                           |
+| Root                          | PRF output at salt B                                                                                                                                                                   | The open key session, or one ceremony outside it; zeroed when the last session holder settles, and never returned by any accessor                                                                                                                                                                                                                                                                                                   | Everything derived below it (record key, wallet entropy, seed, reader secret), so it is the single point worth protecting, as serious as the device scalar's exposure though it grants no device authority on its own; through the reader secret it reaches the roster key, and with it full custody of an unlocked account                             | Regenerable from the credential                                                                                                                                     |
+| Record key                    | HKDF-SHA256(root, info `lace-passport/hkdf/record-key/v1`), a non-extractable AES-GCM key                                                                                              | Cached in the key source for as long as that instance lives, since it carries no signing authority                                                                                                                                                                                                                                                                                                                                  | Read access to the local account record: the address, binding version and use counter, and, until the creation completes, the pending deployment with the contract's maintenance authority key, which is full custody of that contract                                                                                                                  | Regenerable from the credential; the sealed record simply fails to open until then                                                                                  |
+| Wallet entropy                | HKDF-SHA256(root, info `lace/hkdf/wallet-entropy/v1`)                                                                                                                                  | Exists only inside the key source for one Passport derivation or wallet callback; never cached                                                                                                                                                                                                                                                                                                                                      | The Lace mnemonic and everything derived from it: every chain wallet and the reader secret, and through it every account secret and roster key this device was handed                                                                                                                                                                                   | Regenerable from the credential                                                                                                                                     |
+| Seed                          | `Mnemonic.toSeed(Mnemonic.deriveFrom(entropy))`                                                                                                                                        | One `deriveSecret` call; zeroed before the call returns                                                                                                                                                                                                                                                                                                                                                                             | The same as wallet entropy, since a conforming wallet built from the same words derives the same seed                                                                                                                                                                                                                                                   | Regenerable from the credential                                                                                                                                     |
+| Reader secret                 | `deriveSymmetricSecret(seed, { domain: 'lace-passport:reader:v1', context: '<networkId>' })`, one per network                                                                          | One call of the encryption key seam: derived, used to open this device's envelopes and grant records or to seal its grant records, and zeroed before the call returns, inside the key session when one is open                                                                                                                                                                                                                      | Every account secret and roster key this device was handed, and its grant bookkeeping; never device authority, but full custody of an unlocked account whose live roster key is among them, through its maintenance authority                                                                                                                           | Regenerable from the credential; nothing is stranded                                                                                                                |
+| Account secret and roster key | Random, drawn by `createKeys` at creation and at every rotation; the roster key drawn afresh only at creation, when a device is removed and at an enrolment while a read grant is live | Lives sealed on chain, one device envelope per enrolled device and secret; opened from this device's envelopes for one seam call, used to open or re-encrypt inbox entries, seal the next secret, or seal a grantee's view, and zeroed before the call returns; the module receives only public keys, ciphertexts, opened coin descriptions and bookkeeping, or the seal                                                            | The account secret: read access to the contract's inbox, so shielded holdings become visible, but never spend authority, matching the custody standard's own leak model; a read grant shares exactly the account secret, sealed, until the next rotation, never the roster key. The roster key: on an unlocked account, the maintenance authority below | A device that loses its passkey loses only its copy; any other enrolled device opens its own envelope, and a rotation hands a new secret to the devices that remain |
+| Maintenance authority         | HKDF-SHA256(roster key, empty salt, info `lace-passport:cma:v1`), a BIP-340 Schnorr key, on an unlocked account only                                                                   | Derived inside one encryption key seam call, to answer its verifying key or sign one maintenance update the seam built itself, and its 32-byte HKDF output zeroed before the call returns; the ledger signing key built from it holds the same secret as a hex string and in wasm memory, which the ledger API cannot zero, so both survive until collection; on chain only as the verifying key, which a fresh roster key replaces | Full custody: a maintenance update can replace any verifier key and the authority itself. Lace signs only pinned installs of the deployed roster and the move to a fresh roster key, but a holder of the roster key can sign anything outside Lace                                                                                                      | Regenerable from any device handed the account keys; with every such device lost, nothing more can be installed                                                     |
 
 A flow calls the authoriser several times: for the public key, for entry
 commitments, and for the call signature. Each call on its own would mean one
@@ -331,7 +348,16 @@ each entry in short form, and a removal's list leaves its target out.
 The signer refuses to sign a removal unless the session rotated with a
 fresh roster key first, refuses a keyring of another account, and keeps
 the `enc_key` values its sessions rotated away from per account and
-network and refuses a keyring naming one. An `open-inbox` answers a
+network and refuses a keyring naming one. A removal, and an enrolment
+that rotates, also sign through `sign-maintenance-update` the move of an
+unlocked account's maintenance authority, only as a replace over the
+keyring of the key the session rotated to and only towards the authority
+the roster key that session drew derives, and ask beforehand through
+`holds-maintenance-authority` whether this device's keyring derives the
+authority on chain, which answers a boolean and signs nothing; an install session resolves
+the reader key and the live envelope and signs only the verifier key
+inserts of the operations its descriptor names, calling no circuit. An
+`open-inbox` answers a
 holdings read with coins alone, a sign-in with only the grant records of
 grants issued under the asking origin, and a rotating flow with coins and
 registered devices. The secret leaves such a session only sealed, through
@@ -353,7 +379,9 @@ whose key it rotates and the device entries, a revoke-all flow those
 alone and a holdings flow nothing, and an issue-grant flow the account,
 the grant id, the scope the user is asked to grant, the read key of a
 read grant inside it, the slot, the scope salt, the scope digest and, for
-a read grant, the device entries.
+a read grant, the device entries, and an install-operations flow the
+account and the operations it installs, each of the deployed roster and
+none twice.
 The authorisation is then held to the descriptor: a device or revoke-grant
 authorisation's single argument must be the bytes of that commitment or
 grant id, a revoke-all authorisation must carry none, and an issue-grant
@@ -404,6 +432,7 @@ signer, since its grant ids re-derive to another origin hash.
 | Add device, remove device                 | 1 each                                   |
 | Issue grant, revoke grant, revoke all     | 1 each                                   |
 | Read shielded holdings                    | 1, or none over an empty inbox           |
+| Install operations                        | 1                                        |
 
 Passkey creation returns no PRF output, so the first account on a device
 cannot be reduced below two. Over the signer, an issue-grant session is
@@ -414,8 +443,9 @@ check.
 ### One gate over all flows
 
 Account creation, sign-in, device enrolment, device revocation, the grant
-operations and the holdings read run through a single `exhaustMap` rather
-than one each. They are mutually exclusive: every chain call among them
+operations, the holdings read and the operation install run through a
+single `exhaustMap` rather than one each. They are mutually exclusive:
+every chain call among them
 resolves the same device's use counter and writes the same account record,
 so two in flight can authorise against the same counter and auth nonce,
 leaving one transaction to consume the entry and the other to fail with
@@ -488,37 +518,40 @@ is in state or the current flow has not settled, therefore passes through
 `ceremony` before settling on `error` with `no-account`; it opens no key
 session and touches no chain state on the way.
 
-| Condition                                                        | Reported as                  |
-| ---------------------------------------------------------------- | ---------------------------- |
-| User dismissed the passkey prompt                                | `ceremony-cancelled`         |
-| Authenticator has no PRF support                                 | `prf-unsupported`            |
-| Downloaded artefact does not match its pin                       | `artefact-integrity`         |
-| Sponsor could not cover the fee within its budget                | `sponsor-exhausted`          |
-| Create dispatched while a record already exists                  | `account-exists`             |
-| No account record stored on this device                          | `account-not-found`          |
-| No live contract at the stored address                           | `account-contract-missing`   |
-| No envelope of this device opens the contract's `enc_key`        | `encryption-key-mismatch`    |
-| Joining device keys do not match the enrolled entry              | `device-reader-invalid`      |
-| Registrations landed during a rotation                           | `device-roster-invalid`      |
-| Sealed record found but the authoriser has no storage key        | `record-unreadable`          |
-| Authority retired before every verifier key wave landed          | `authority-retired`          |
-| Locked creation resumed over an activated, unretired authority   | `authority-not-retired`      |
-| Creation resumed under another lock choice than it started with  | `creation-lock-mismatch`     |
-| Creation resumed under other verifier key pins than recorded     | `creation-artefact-mismatch` |
-| Sign-in found a record whose creation is unfinished on chain     | `account-creation-pending`   |
-| Stored record will not decrypt                                   | `record-corrupted`           |
-| Contract rejected the caller (signature or device key)           | `not-authorised`             |
-| No device entry within the probed counter windows                | `device-entry-not-found`     |
-| Removal target entry no longer in the on-chain set               | `removal-target-not-found`   |
-| Removal would leave no device, or removes the caller             | `last-device`                |
-| Device, grant or holdings flow attempted without a ready account | `no-account`                 |
-| Grant scope breaks a rule, or asks what the contract refuses     | `grant-scope-invalid`        |
-| Sixteen grants already active                                    | `grant-limit-reached`        |
-| Grant named for revocation is not on the ledger                  | `grant-not-found`            |
-| Grant named for revocation is already revoked                    | `grant-revoked`              |
-| Contract refused an issue over an active grant id                | `grant-issue-rejected`       |
-| Issue dispatched by a host with no relying party id              | `grant-origin-missing`       |
-| Indexer never reflected the accepted grant call                  | `grant-roster-unsettled`     |
+| Condition                                                        | Reported as                      |
+| ---------------------------------------------------------------- | -------------------------------- |
+| User dismissed the passkey prompt                                | `ceremony-cancelled`             |
+| Authenticator has no PRF support                                 | `prf-unsupported`                |
+| Downloaded artefact does not match its pin                       | `artefact-integrity`             |
+| Sponsor could not cover the fee within its budget                | `sponsor-exhausted`              |
+| Create dispatched while a record already exists                  | `account-exists`                 |
+| No account record stored on this device                          | `account-not-found`              |
+| No live contract at the stored address                           | `account-contract-missing`       |
+| No envelope of this device opens the contract's `enc_key`        | `encryption-key-mismatch`        |
+| Joining device keys do not match the enrolled entry              | `device-reader-invalid`          |
+| Registrations landed during a rotation                           | `device-roster-invalid`          |
+| Sealed record found but the authoriser has no storage key        | `record-unreadable`              |
+| Authority retired before every verifier key wave landed          | `authority-retired`              |
+| Locked creation resumed over an activated, unretired authority   | `authority-not-retired`          |
+| Creation resumed under another lock choice than it started with  | `creation-lock-mismatch`         |
+| Creation resumed under other verifier key pins than recorded     | `creation-artefact-mismatch`     |
+| Sign-in found a record whose creation is unfinished on chain     | `account-creation-pending`       |
+| Stored record will not decrypt                                   | `record-corrupted`               |
+| Contract rejected the caller (signature or device key)           | `not-authorised`                 |
+| No device entry within the probed counter windows                | `device-entry-not-found`         |
+| Removal target entry no longer in the on-chain set               | `removal-target-not-found`       |
+| Removal would leave no device, or removes the caller             | `last-device`                    |
+| Device, grant or holdings flow attempted without a ready account | `no-account`                     |
+| Grant scope breaks a rule, or asks what the contract refuses     | `grant-scope-invalid`            |
+| Sixteen grants already active                                    | `grant-limit-reached`            |
+| Grant named for revocation is not on the ledger                  | `grant-not-found`                |
+| Grant named for revocation is already revoked                    | `grant-revoked`                  |
+| Contract refused an issue over an active grant id                | `grant-issue-rejected`           |
+| Issue dispatched by a host with no relying party id              | `grant-origin-missing`           |
+| Indexer never reflected the accepted grant call                  | `grant-roster-unsettled`         |
+| No roster key of this device derives the authority on chain      | `maintenance-authority-mismatch` |
+| Maintenance update asks for a change the key does not sign       | `maintenance-update-refused`     |
+| Install names an operation outside the roster, or none           | `operation-not-installable`      |
 
 ## Flows
 
@@ -555,7 +588,9 @@ the boot salt the constructor committed to, installing the first device
 entry. Before that call the contract's verifier keys are installed in
 waves (see below): the deploy carries the first batch, and each later wave
 is one maintenance update signed by the authority the deploy minted. The
-last wave also retires that authority when the account is locked. The
+last wave also replaces that authority: it retires it when the account is
+locked, and otherwise hands it to the account's devices, as the key the
+roster key derives. The
 account keys are drawn before the deploy: a random secret, whose public
 key the constructor stores as `enc_key`, and a random roster key, sealed
 to this device's reader key in its envelope, with this device's
@@ -577,17 +612,19 @@ sequenceDiagram
     M->>K: open key session
     K-->>M: device public key, reader public key
     M->>K: draw the account keys
-    K-->>M: enc_key, own envelope, own registration
+    K-->>M: enc_key, own envelope, own registration, handover authority
     Note over M: flow: deploying
     M->>C: deploy: constructor(boot commitment, enc_key), first verifier keys
     C-->>M: contract address
-    M->>St: seal and write the pending record (address, roster, salt, authority key, key entries)
+    M->>St: seal and write the pending record (address, roster, salt, authority key, handover authority, key entries)
     loop each remaining wave
         M->>C: read the authority counter
         M->>C: maintenance update inserts the next verifier keys
     end
-    opt lockAccount
+    alt lockAccount
         Note over M,C: the last update also retires the authority
+    else unlocked
+        Note over M,C: the last update also hands the authority to the devices
     end
     Note over M: flow: activating
     M->>C: activate_initial_device(device key, boot salt)
@@ -633,17 +670,22 @@ deploy minted. The update must name the authority counter the chain
 expects, and every applied update advances it, so the counter is read
 from chain before each update and the next one waits until the chain
 shows the previous one applied; the first update likewise waits until
-the indexer serves the contract the deploy created. The last update of a
-locked account also replaces the authority with an unsatisfiable one,
-which no later update can undo, so locking costs no transaction of its
-own.
+the indexer serves the contract the deploy created. The last update also
+replaces the deploy-time authority, so neither choice costs a
+transaction of its own: a locked account gets an unsatisfiable one, which
+no later update can undo, and an unlocked one the authority its roster
+key derives, alone at threshold 1, which `createKeys` answered with the
+account keys. The deploy-time key cannot hand over sooner, since the
+creating device's envelope reaches the chain only after activation and
+until then no keyring opens the roster key.
 
 A creation interrupted between waves leaves a contract missing operations
 and, with no device entry yet, no way to use it. The account record is
 therefore written as soon as the deploy lands, carrying the deployment in
 progress: the planned roster, the lock choice, a digest naming the
 pinned verifier keys of the roster, the boot salt the activation must
-present, and the authority key that signs the remaining waves. The next
+present, the authority key that signs the remaining waves, and the
+handover authority the last wave of an unlocked account installs. The next
 create request on this device finds that record, reads the operations
 the contract already holds from the indexer, plans the waves still
 missing, submits them, and activates once every key is in; a wave that
@@ -658,13 +700,18 @@ the same way; a sign-in over a record whose contract is not activated is
 refused with `account-creation-pending`, since only the create flow can
 finish it. Over the hosted signer a sign-in cannot drop the deployment,
 so the record stays pending until a create request from the origin that
-started the creation completes it. A contract whose authority was retired
-before every wave landed cannot be completed by anyone and is reported as
-`authority-retired`; a new account is the only way on. A creation that
-chose to lock the account and resumes over a contract already activated
-with its authority live is reported as `authority-not-retired`: the flow
-retires the authority before it activates, so the deployment ran outside
-it and whoever holds the authority key keeps full custody.
+started the creation completes it. A resume reads the committee on
+chain: the deploy-time key means waves remain, and the committee the
+recorded choice installs means the last wave landed. A contract whose
+authority was replaced before every wave landed cannot be completed by
+anyone and is reported as `authority-retired`; a new account is the only
+way on. A committee that is neither is reported as
+`maintenance-authority-mismatch` before any wave. A creation that
+resumes over a contract already activated with the deploy-time
+authority live is reported as `authority-not-retired`, whichever the
+lock choice: the flow replaces the authority before it activates, so the
+deployment ran outside it and whoever holds the deploy-time key keeps
+full custody.
 
 A resumed creation finishes exactly as it began, or is refused before
 any wave. A create request whose `lockAccount` is not the recorded one is
@@ -683,7 +730,8 @@ Over the hosted signer a create request from another site than the one
 that started the creation is refused with `account-creation-pending`; it
 resumes only from that site. A creation whose kept key entries and origin
 are lost, or stored in an older shape, or that reports
-`authority-not-retired`, cannot be resumed at all, nor can one that
+`authority-not-retired` or `maintenance-authority-mismatch`, cannot be
+resumed at all, nor can one that
 reports `creation-artefact-mismatch` by this build. The way out is to
 clear the signer origin's site data and create a new account; an
 unfinished account holds nothing the user lacks elsewhere. If its key
@@ -702,12 +750,13 @@ loses nothing, since the contract it named never existed.
 #### The lock choice
 
 `lockAccount` is a required parameter of account creation with no default,
-because it is a one-way decision about who can move the account's assets.
+because it is a one-way decision about whether the account's circuits can
+ever change.
 
-| Value   | Effect                                                                                                                                                                        | Cost                                                                                                       |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `true`  | The last deployment wave replaces the maintenance authority with an unsatisfiable one, so no maintenance update can be signed again and the device set is the only way to act | The account can never receive a future arm's circuits; migration to a new account is the only upgrade path |
-| `false` | The deploy-time authority stays live, so verifier keys can be replaced later by whoever holds its key; the module keeps the key only until the creation completes             | Whoever holds that authority can swap verifier keys and move the assets, independently of the device set   |
+| Value   | Effect                                                                                                                                                                                                                                                                                                            | Cost                                                                                                                                                                                                              |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `true`  | The last deployment wave replaces the maintenance authority with an unsatisfiable one, so no maintenance update can be signed again and the device set is the only way to act                                                                                                                                     | The account can never receive a future arm's circuits; migration to a new account is the only upgrade path                                                                                                        |
+| `false` | The last deployment wave hands the maintenance authority to the account's devices: the key the roster key derives, which every device handed the account keys holds and no grantee does. The devices can install the deployed roster's missing operations later, and the authority follows every fresh roster key | Every device handed the account keys holds full custody through the authority until a fresh roster key moves it; over the hosted signer the creating dApp carries out the handover, which the signer cannot check |
 
 ### Recognition on return
 
@@ -819,8 +868,10 @@ until it lands the registration names no live entry and a rotation passes
 over it. While any read grant is live the account keys are rotated
 first, in the same session and with a fresh roster key, as a removal
 rotates them, so the new device is handed a secret no grantee has seen
-and a grantee cannot capture it with an envelope of its own; the live
-read grants are sealed the new secret after. The new device then reads
+and a grantee cannot capture it with an envelope of its own; the
+maintenance authority of an unlocked account moves to the new roster key
+before the enrolment call, and the live read grants are sealed the new
+secret after. The new device then reads
 the holdings with its own passkey alone. Without those keys the device can authorise but reads nothing
 until some device hands it the keys.
 
@@ -840,8 +891,10 @@ registration, when it has one, is named to the encryption key, which
 seals to no reader carrying its device key or paired with it, so the
 removed device is sealed nothing however it registered itself. A fresh secret and a fresh roster key are sealed to
 those devices and to this one, the live holdings are re-encrypted towards
-the new key, `enc_key` is replaced, and every live read grant this client
-holds the read key of is sealed the new secret again. The removed
+the new key, `enc_key` is replaced, the maintenance authority of an
+unlocked account moves to the new roster key before the removal call,
+and every live read grant this client holds the read key of is sealed
+the new secret again. The removed
 device's envelopes stay on chain and keep opening the secrets they already
 held, never the new one, and its registrations no longer count once the
 roster key is replaced. Every rotation resolves the roster the same way,
@@ -851,7 +904,76 @@ roster key from the oldest of its envelopes that delivers `enc_key`, so
 a later envelope someone sealed with the right secret cannot swap the
 roster key. An encryption key that
 cannot re-encrypt refuses a removal with `read-unavailable` before any
-prompt.
+prompt, and one that signs no maintenance update refuses a rotating
+removal or enrolment on an unlocked account with
+`maintenance-update-refused`.
+
+### Maintenance authority
+
+The contract maintenance authority of an unlocked account is one
+BIP-340 Schnorr key derived from the roster key: HKDF-SHA256 with an
+empty salt and the info `lace-passport:cma:v1`, taken by the ledger's
+`signingKeyFromBip340`. No account address enters it, since the roster
+key is unique per account and drawn before the address exists. Every
+device handed the account keys holds the roster key and can sign
+maintenance updates through its encryption key; a grantee, or a device
+enrolled without keys, never can. The derived key exists only inside the
+encryption key seam call that uses it (`acc/maintenance-authority.ts`):
+the 32-byte secret is zeroed before the call settles, while the ledger
+signing key built from it holds the same secret as a hex string and in
+wasm memory, which the ledger API cannot zero, until collection.
+
+The seam signs one update per call (`signMaintenanceUpdate`), given the
+keyring, the authority and counter on chain and the changes. It builds
+the ledger update itself and never signs bytes it is handed, signs with
+the roster key, among every distinct one the keyring's envelopes deliver,
+whose authority is the one on chain, and refuses with
+`maintenance-authority-mismatch` when none is. It signs only two
+changes, refusing anything else with `maintenance-update-refused`: a
+replace towards the authority the keyring's live roster key derives, and
+inserts of the pinned verifier keys of operations of the deployed roster.
+Nothing removes a verifier key or installs an empty committee.
+
+A rotation that draws a fresh roster key, a removal or an enrolment while
+a read grant is live, moves the authority with it. Inside the key
+session, after its one passkey prompt and before anything is submitted,
+the flow reads the committee and, when it is one key, asks the seam
+(`holdsMaintenanceAuthority`) whether any roster key of this device's
+keyring derives it, refusing with `maintenance-authority-mismatch` when
+none does, so no rotation lands that the authority could not follow; the
+seam answers only that boolean. Once `rotate_enc_key`
+lands, the flow reads the committee again: an empty one is a locked account and
+is left alone; otherwise the seam signs a replace with the previous
+roster key, found among this device's envelopes, towards the authority
+the new roster key derives, and the flow submits it and waits for the
+chain to apply it before `remove_device` or `add_device`. A committee no
+roster key of this device derives is refused with
+`maintenance-authority-mismatch` before that call. A removed device
+therefore loses its upgrade rights with its read access; until
+`remove_device` lands it still holds the roster key behind the live
+authority, which the threat model, section 3.11, weighs.
+
+`installOperations` takes the names of operations of the module's
+deployed roster that the account lacks, as read from chain, and
+installs their pinned verifier keys, so an unlocked account whose
+authority its devices hold gains the operations a later roster adds.
+Accounts created before the handover existed cannot, since their
+authority is retired or a deploy-time key Lace dropped. A name outside the roster,
+such as a recovery circuit or another device arm, or a request naming
+none, is refused with `operation-not-installable` before any prompt.
+Operations the account already holds are skipped, so an install
+interrupted after some of its waves landed is finished by running it
+again; when the account holds every operation named, the install
+resolves with nothing submitted and no prompt. Otherwise a locked
+account is refused with `authority-retired`, and an encryption key that
+signs no maintenance update with `maintenance-update-refused`, both
+before any prompt. The flow resolves with the operations it installed
+and those it skipped as already installed. The verifier
+keys are downloaded against their pins and packed into waves under the
+same budget as a deployment, each one maintenance update the seam signs
+in one key session; each waits for the chain to apply it, and none
+replaces the authority. No gated call is made, so the use counter and the
+record are left as they are.
 
 ### Grants
 
@@ -987,6 +1109,23 @@ failure, because anyone may append anything. Two entries describing the
 same coin, as re-encrypting the inbox after a key rotation leaves behind,
 yield one holding.
 
+Spending a coin never touches the inbox, so the walk also reads what the
+chain spent. Only the contract can spend a coin it holds, so every spend
+lands in a transaction that acted on the contract, the same transactions
+the walk already reads, and the ledger reports each spent coin there by
+its nullifier. A contract-owned coin's nullifier depends on the coin and
+the account address alone, never on a secret or the coin's tree
+position, so the walk computes it with the ledger's own input
+construction, a contract-owned input of the coin from the account built
+over a scratch commitment tree, and leaves out every coin whose nullifier
+the history recorded. A spent coin is neither a holding nor counted as
+skipped, and its entries are not re-encrypted by a rotation. The walk
+collects every input nullifier of those transactions, including those of
+other parties such as a depositor's own coins, so it computes the held
+coins' nullifiers whenever the transactions carry any input at all. The
+inputs of other parties never match, because a contract-owned coin's
+nullifier binds the account address.
+
 The walk costs one passkey ceremony however many entries the inbox
 holds, and none over an inbox without coins: the secrets are opened from
 the envelopes once inside the key session, tried against every entry,
@@ -996,21 +1135,20 @@ grantee, can tell what the inbox says; the chain, the indexer, a dApp and
 every other observer see sealed entries and commitments. Over the signer,
 a holdings flow sends the entries and this device's envelopes to the
 signer page, which opens the secret, opens the entries and answers with
-the coin descriptions, so a dApp learns the holdings it was approved to read
-and never the viewing capability itself. The holdings land in the slice
+the coin descriptions, so a dApp learns the holdings it was approved to
+read and never the viewing capability itself. The holdings land in the slice
 as plain records (token colour, value, commitment, tree index) under
 `selectShieldedHoldings`, are never persisted, and reflect what the chain
-created for the account: a coin the account later spends stays listed
-until spend tracking joins the spend flows.
+created for the account and has not spent.
 
 Discovery needs an indexer that serves, per transaction, the ledger
 events the chain emitted, which the current indexer API does; the module
-reads the transaction's events by hash and decodes them with the
-ledger's own codec. The permissionless deposit circuit and the inbox
-layout are those of the vendored contract; sealing an entry towards an
-account is `sealInboxEntry`, which a depositor uses, and which the
-encryption key seam uses when a rotation re-encrypts the holdings, so the
-owner's client appends ciphertexts it never opened.
+reads the transaction's events by hash, outputs and spends alike, and
+decodes them with the ledger's own codec. The permissionless deposit
+circuit and the inbox layout are those of the vendored contract; sealing
+an entry towards an account is `sealInboxEntry`, which a depositor uses,
+and which the encryption key seam uses when a rotation re-encrypts the
+holdings, so the owner's client appends ciphertexts it never opened.
 
 ## Factory API
 
@@ -1215,8 +1353,9 @@ a transaction through the indexer's `transactions` query by hash.
   withdrawal circuits, but no k256 or P-256 device arm, no P-256 grantee
   withdrawal and no recovery circuit is deployed. Installing one later
   needs a maintenance update: a locked account retired its authority, and
-  the module drops an unlocked account's authority key once the creation
-  completes, so in practice it means a new account.
+  the devices of an unlocked one install only operations of the deployed
+  roster, which none of these is in, so in practice it means a new
+  account.
 - **Grants spend on the agent's side.** The module issues, revokes, lists
   and exports grants; it builds no grantee withdrawal. No rolling window
   can be set, since the contract reserves the window bounds.

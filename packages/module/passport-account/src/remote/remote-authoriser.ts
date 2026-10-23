@@ -74,8 +74,9 @@ const revokeFields = (
  * keys and a removal the device entries that keep reading, a revoke its
  * account, its grant id and, when the revocation rotates the encryption
  * key, the read flag with the device entries, an issue the grant with
- * its scope digest and, for a read grant, the device entries, and a
- * creation its lock choice. A descriptor
+ * its scope digest and, for a read grant, the device entries, a
+ * creation its lock choice and an install the account it upgrades with
+ * the operations it installs. A descriptor
  * missing a field its kind binds is refused here with the error the
  * signer would answer, before anything is sent.
  */
@@ -114,6 +115,12 @@ const toSignerFlow = (flow: KeySessionFlow): SignerFlow => {
       return {
         kind: flow.kind,
         lockAccount: required(flow.lockAccount, 'flow.lockAccount'),
+      };
+    case 'install-operations':
+      return {
+        kind: flow.kind,
+        account: required(flow.account, 'flow.account'),
+        operations: required(flow.operations, 'flow.operations'),
       };
     case 'read-holdings':
     case 'sign-in':

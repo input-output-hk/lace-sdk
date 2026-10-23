@@ -12,8 +12,8 @@ import type { ShieldedHolding } from '@lace-contract/passport';
 export type ReadHoldingsInput = Pick<AccountCallInput, 'account'>;
 
 /**
- * What a completed read leaves behind: every holding the chain confirmed,
- * and how many inbox entries were passed over as noise.
+ * What a completed read leaves behind: every unspent holding the chain
+ * confirmed, and how many inbox entries were passed over as noise.
  */
 export type ShieldedHoldings = {
   holdings: ShieldedHolding[];
@@ -27,7 +27,8 @@ export type ShieldedHoldings = {
  * the older ones after it, so a coin a racing sender or an interrupted
  * rotation left under an earlier key is still found, and each coin that
  * opens is kept only once its commitment is found among the outputs the
- * chain created for the account, with the tree index it took. The
+ * chain created for the account, with the tree index it took, and only
+ * while its nullifier is not among those the chain recorded. The
  * envelopes are opened inside one key session, so the walk costs one
  * ceremony however many entries the inbox holds, and none at all when
  * it holds no coin to open; only the opened coin descriptions reach this
@@ -38,7 +39,8 @@ export type ShieldedHoldings = {
  * device that opens the ledger's `enc_key` with EncryptionKeyMismatchError
  * rather than an inbox read as empty. An entry that fails to open or
  * describes a coin the chain never created is skipped and counted, never
- * an error; the account keys and grant bookkeeping the inbox also holds
+ * an error; a coin the account spent is left out without being counted;
+ * the account keys and grant bookkeeping the inbox also holds
  * are not coins and are not counted.
  *
  * Reports no intermediate stage: the ceremony and the indexer reads all

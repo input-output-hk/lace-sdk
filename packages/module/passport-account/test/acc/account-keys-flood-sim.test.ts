@@ -58,12 +58,14 @@ import type {
   ShieldedOutputRecord,
 } from '../../src/infra/indexer';
 import type {
+  MaintenanceVerifyingKey,
   PassportAccountInfo,
   PassportAuthoriser,
   PassportEncryptionKey,
   ShieldedCoin,
 } from '@lace-contract/passport';
 import type { SignerRequestHandlers } from '@lace-lib/passkey';
+import type { MaintenanceUpdate, Signature } from '@midnightntwrk/ledger-v9';
 
 const chain = vi.hoisted(() => ({
   sim: undefined as AccountSim | undefined,
@@ -85,8 +87,10 @@ vi.mock('../../src/infra/indexer', () => ({
   createIndexerClient: () => ({
     queryContractState: async () => simulated().contractState(),
     enumerateContractActions: async () => chain.actions,
-    queryShieldedOutputs: async (txHash: string) =>
-      chain.outputs.get(txHash) ?? [],
+    queryShieldedEvents: async (txHash: string) => ({
+      outputs: chain.outputs.get(txHash) ?? [],
+      nullifiers: [],
+    }),
   }),
 }));
 vi.mock('../../src/infra/providers', () => ({
@@ -101,15 +105,18 @@ vi.mock('../../src/acc/deploy', () => ({
   deployAccount: async ({
     encPublicKey,
     lockAccount,
+    handoverAuthority,
     onDeployed,
   }: {
     encPublicKey: Uint8Array;
     lockAccount: boolean;
+    handoverAuthority: MaintenanceVerifyingKey;
     onDeployed: (address: string, pending: unknown) => Promise<void>;
   }) => {
     chain.sim = await AccountSim.create({
       encKey: encPublicKey,
       scalar: chain.scalar,
+      committee: lockAccount ? [] : [handoverAuthority],
     });
     const address = HexBytes.fromByteArray(chain.sim.address);
     await onDeployed(address, {
@@ -118,6 +125,7 @@ vi.mock('../../src/acc/deploy', () => ({
       verifierKeysDigest: '00'.repeat(32),
       saltHex: '00'.repeat(32),
       authorityKey: { tag: 'schnorr', value: '00' },
+      handoverAuthority,
     });
     return {
       address,
@@ -128,6 +136,16 @@ vi.mock('../../src/acc/deploy', () => ({
   },
   resumeAccountDeployment: async () => {
     throw new Error('No deployment is resumed here');
+  },
+  readMaintenanceAuthority: async () => simulated().maintenanceAuthority(),
+  submitMaintenanceUpdate: async ({
+    update,
+    signature,
+  }: {
+    update: MaintenanceUpdate;
+    signature: Signature;
+  }) => {
+    simulated().maintain(update.addSignature(0n, signature));
   },
 }));
 
@@ -182,7 +200,8 @@ const unsupported = async (): Promise<never> => {
 /**
  * The seams a dApp holds over the hosted signer serving a passkey, through
  * the real signer client and server, with the pages the signer was asked
- * to find the live envelope in and what closes the connection.
+ * to find the live envelope in, the keyrings it was asked to sign a
+ * maintenance update over, and what closes the connection.
  */
 const hostedSigner = async () => {
   const pair = createWindowPair();
@@ -191,9 +210,11 @@ const hostedSigner = async () => {
     createKeyValueStorage: createInMemoryStorage().createKeyValueStorage,
   });
   const findLiveEnvelope = vi.fn(passport['find-live-envelope']);
+  const signMaintenanceUpdate = vi.fn(passport['sign-maintenance-update']);
   const handlers: SignerRequestHandlers = {
     ...passport,
     'find-live-envelope': findLiveEnvelope,
+    'sign-maintenance-update': signMaintenanceUpdate,
     'sign-cardano-tx': unsupported,
     'sign-cardano-data': unsupported,
     'cardano-account-public-key': unsupported,
@@ -218,6 +239,10 @@ const hostedSigner = async () => {
     encryptionKey: createRemoteEncryptionKey(client),
     pages: () =>
       findLiveEnvelope.mock.calls.map(
+        ([{ keyring }]) => keyring.envelopes.length,
+      ),
+    maintenancePages: () =>
+      signMaintenanceUpdate.mock.calls.map(
         ([{ keyring }]) => keyring.envelopes.length,
       ),
     close: () => {
@@ -292,7 +317,7 @@ describe(
       chain.outputs = new Map();
     });
 
-    it('signs in, reads and rotates, locally and through the hosted signer', async () => {
+    it('signs in, reads, rotates and moves the maintenance authority, locally and through the hosted signer', async () => {
       expect(MAX_INBOX_ENTRIES_PER_REQUEST).toBe(4);
       const scalar = randomJubjubScalar();
       chain.scalar = scalar;
@@ -353,6 +378,7 @@ describe(
       expect(
         deviceEnvelopes(inboxEntries(simulated().ledger()), readerPublicKey),
       ).toHaveLength(MAX_INBOX_ENTRIES_PER_REQUEST + 2);
+      const handedOver = simulated().maintenanceAuthority();
       const buried = {
         sim: simulated().fork(),
         actions: [...chain.actions],
@@ -388,6 +414,10 @@ describe(
         await expect(valuesOf(account, context)).resolves.toEqual([
           early.value.toString(),
         ]);
+        const { committee, counter } = simulated().maintenanceAuthority();
+        expect(committee).toHaveLength(1);
+        expect(committee).not.toEqual(handedOver.committee);
+        expect(counter).toBe(handedOver.counter + 1n);
       };
 
       await readsAndRotates(contextOver(authoriser, encryptionKey));
@@ -406,6 +436,12 @@ describe(
         expect(
           signer
             .pages()
+            .every(length => length <= MAX_INBOX_ENTRIES_PER_REQUEST),
+        ).toBe(true);
+        expect(signer.maintenancePages().length).toBeGreaterThan(1);
+        expect(
+          signer
+            .maintenancePages()
             .every(length => length <= MAX_INBOX_ENTRIES_PER_REQUEST),
         ).toBe(true);
       } finally {

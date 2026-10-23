@@ -117,6 +117,22 @@ describe('signer protocol guards', () => {
     ).toBe(true);
   });
 
+  it('recognises a flow-open of an install naming the account and its operations', () => {
+    expect(
+      isSignerRequest({
+        id: 6,
+        kind: 'flow-open',
+        payload: {
+          flow: {
+            kind: 'install-operations',
+            account: 'cd'.repeat(32),
+            operations: ['withdraw_unshielded_with_grant_k256'],
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it('recognises the account key requests and a flow-open delivering keys to a joining device', () => {
     expect(
       isSignerRequest({

@@ -5,6 +5,8 @@ import {
   DeviceCommitmentHex,
   DeviceReaderInvalidError,
   LastDeviceError,
+  MaintenanceAuthorityMismatchError,
+  MaintenanceUpdateRefusedError,
   NotAuthorisedError,
   ReadUnavailableError,
   RemovalTargetNotFoundError,
@@ -49,6 +51,9 @@ const mocks = vi.hoisted(() => ({
   executeGatedCall: vi.fn(),
   rotateEncKey: vi.fn(),
   sealViews: vi.fn(),
+  assertMaintenanceSigner: vi.fn(),
+  assertHoldsRosterAuthority: vi.fn(),
+  followRosterAuthority: vi.fn(),
 }));
 
 vi.mock('../../src/infra/indexer', () => ({
@@ -67,6 +72,11 @@ vi.mock('../../src/infra/providers', () => ({
 vi.mock('../../src/acc/gated-call', () => ({
   connectAccountHandle: mocks.connectAccountHandle,
   executeGatedCall: mocks.executeGatedCall,
+}));
+vi.mock('../../src/flows/maintenance', () => ({
+  assertMaintenanceSigner: mocks.assertMaintenanceSigner,
+  assertHoldsRosterAuthority: mocks.assertHoldsRosterAuthority,
+  followRosterAuthority: mocks.followRosterAuthority,
 }));
 vi.mock('../../src/flows/rotation', async importOriginal => ({
   ...(await importOriginal<typeof Rotation>()),
@@ -130,6 +140,7 @@ const joiningDevice: PassportDevice = {
   isLocal: false,
 };
 const contractState = { data: 'charged-state' };
+const rotatedAuthority = { tag: 'schnorr' as const, value: '7a'.repeat(32) };
 const encKey = new Uint8Array(32).fill(2);
 const rotatedKey = new Uint8Array(32).fill(3);
 const envelope = await sealDeviceEnvelope(readerPublicKey, {
@@ -266,6 +277,7 @@ beforeEach(() => {
   mocks.rotateEncKey.mockResolvedValue({
     encKey: rotatedKey,
     dropped: [],
+    authority: rotatedAuthority,
     keyring: {
       account: AccAddress(accountAddress),
       encKey: rotatedKey,
@@ -273,7 +285,17 @@ beforeEach(() => {
     },
   });
   mocks.sealViews.mockResolvedValue({ sealed: [], unsealed: [], entries: [] });
+  mocks.assertMaintenanceSigner.mockResolvedValue(undefined);
+  mocks.assertHoldsRosterAuthority.mockResolvedValue(undefined);
+  mocks.followRosterAuthority.mockResolvedValue(undefined);
 });
+
+/** The keyring this device holds over the ledger the mocked chain serves. */
+const chainKeyring = {
+  account: AccAddress(accountAddress),
+  encKey,
+  envelopes: [envelope],
+};
 
 const gatedCall = (circuit: string, args: unknown[]): unknown =>
   expect.objectContaining({ circuit, args, address: accountAddress });
@@ -619,6 +641,7 @@ describe('addDevice', () => {
         mocks.rotateEncKey.mockResolvedValueOnce({
           encKey: rotatedKey,
           dropped: [targetCommitment],
+          authority: rotatedAuthority,
           keyring: {
             account: AccAddress(accountAddress),
             encKey: rotatedKey,
@@ -663,6 +686,116 @@ describe('addDevice', () => {
         );
       });
 
+      it('moves the maintenance authority after the rotation, in the key session, before the keys are handed over and the device enrolled', async () => {
+        const { context, withKeySession, encryptionKey } = createContext({
+          keySession: true,
+        });
+        mocks.readGrants.mockReturnValue(liveRead());
+        let isSessionOpen = false;
+        withKeySession.mockImplementation(async operation => {
+          isSessionOpen = true;
+          try {
+            return await operation();
+          } finally {
+            isSessionOpen = false;
+          }
+        });
+        const inSession: boolean[] = [];
+        mocks.followRosterAuthority.mockImplementation(async () => {
+          inSession.push(isSessionOpen);
+        });
+
+        await addDevice({ ...joining(), reader: joiningReader }, context);
+
+        expect(mocks.assertMaintenanceSigner).toHaveBeenCalledExactlyOnceWith({
+          address: accountAddress,
+          indexer: expect.objectContaining({ queryContractState }) as unknown,
+          encryptionKey,
+        });
+        expect(
+          mocks.assertMaintenanceSigner.mock.invocationCallOrder[0],
+        ).toBeLessThan(withKeySession.mock.invocationCallOrder[0]);
+        expect(mocks.followRosterAuthority).toHaveBeenCalledExactlyOnceWith({
+          address: accountAddress,
+          seams: context.seams,
+          keyring: chainKeyring,
+          authority: rotatedAuthority,
+          onProgress: context.onProgress,
+        });
+        expect(inSession).toEqual([true]);
+        const [followed] = mocks.followRosterAuthority.mock.invocationCallOrder;
+        expect(mocks.rotateEncKey.mock.invocationCallOrder[0]).toBeLessThan(
+          followed,
+        );
+        expect(followed).toBeLessThan(
+          encryptionKey.sealToDevice.mock.invocationCallOrder[0],
+        );
+        expect(followed).toBeLessThan(
+          mocks.executeGatedCall.mock.invocationCallOrder[0],
+        );
+        expect(mocks.executeGatedCall).toHaveBeenLastCalledWith(
+          gatedCall('add_device_with_jubjub', [
+            ByteArray.fromHex(HexBytes(joiningCommitment)),
+          ]),
+        );
+      });
+
+      it('checks in the key session, before the rotation, that this device holds the authority, refusing with nothing submitted when it does not', async () => {
+        const { context, withKeySession, encryptionKey } = createContext({
+          keySession: true,
+        });
+        mocks.readGrants.mockReturnValue(liveRead());
+        let isSessionOpen = false;
+        withKeySession.mockImplementation(async operation => {
+          isSessionOpen = true;
+          try {
+            return await operation();
+          } finally {
+            isSessionOpen = false;
+          }
+        });
+        const inSession: boolean[] = [];
+        mocks.assertHoldsRosterAuthority.mockImplementation(async () => {
+          inSession.push(isSessionOpen);
+          throw new MaintenanceAuthorityMismatchError();
+        });
+
+        await expect(
+          addDevice({ ...joining(), reader: joiningReader }, context),
+        ).rejects.toBeInstanceOf(MaintenanceAuthorityMismatchError);
+
+        expect(
+          mocks.assertHoldsRosterAuthority,
+        ).toHaveBeenCalledExactlyOnceWith({
+          address: accountAddress,
+          seams: context.seams,
+          indexer: expect.objectContaining({ queryContractState }) as unknown,
+          keyring: chainKeyring,
+        });
+        expect(inSession).toEqual([true]);
+        expect(withKeySession).toHaveBeenCalledOnce();
+        expect(mocks.rotateEncKey).not.toHaveBeenCalled();
+        expect(mocks.followRosterAuthority).not.toHaveBeenCalled();
+        expect(encryptionKey.sealToDevice).not.toHaveBeenCalled();
+        expect(mocks.executeGatedCall).not.toHaveBeenCalled();
+      });
+
+      it('refuses before any prompt when the encryption key cannot move a live authority', async () => {
+        const { context, withKeySession } = createContext({
+          keySession: true,
+        });
+        mocks.readGrants.mockReturnValue(liveRead());
+        mocks.assertMaintenanceSigner.mockRejectedValue(
+          new MaintenanceUpdateRefusedError(),
+        );
+
+        await expect(
+          addDevice({ ...joining(), reader: joiningReader }, context),
+        ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
+        expect(withKeySession).not.toHaveBeenCalled();
+        expect(mocks.rotateEncKey).not.toHaveBeenCalled();
+      });
+
       it.each([
         ['a revoked read grant', liveRead(false, true)],
         ['a live spend grant', liveRead(true, false)],
@@ -679,6 +812,9 @@ describe('addDevice', () => {
           ).resolves.not.toHaveProperty('encKey');
 
           expect(mocks.rotateEncKey).not.toHaveBeenCalled();
+          expect(mocks.assertMaintenanceSigner).not.toHaveBeenCalled();
+          expect(mocks.assertHoldsRosterAuthority).not.toHaveBeenCalled();
+          expect(mocks.followRosterAuthority).not.toHaveBeenCalled();
           expect(withKeySession).toHaveBeenCalledExactlyOnceWith(
             expect.any(Function),
             expect.not.objectContaining({
@@ -790,11 +926,98 @@ describe('removeDevice', () => {
     );
   });
 
+  it('moves the maintenance authority after the rotation and before the removal, signed over the keyring the chain then holds', async () => {
+    const { context, encryptionKey, withKeySession } = createContext({
+      keySession: true,
+    });
+
+    await removeDevice(callInput(), context);
+
+    expect(mocks.assertMaintenanceSigner).toHaveBeenCalledExactlyOnceWith({
+      address: accountAddress,
+      indexer: expect.objectContaining({ queryContractState }) as unknown,
+      encryptionKey,
+    });
+    expect(
+      mocks.assertMaintenanceSigner.mock.invocationCallOrder[0],
+    ).toBeLessThan(withKeySession.mock.invocationCallOrder[0]);
+    expect(mocks.followRosterAuthority).toHaveBeenCalledExactlyOnceWith({
+      address: accountAddress,
+      seams: context.seams,
+      keyring: chainKeyring,
+      authority: rotatedAuthority,
+      onProgress: context.onProgress,
+    });
+    const [followed] = mocks.followRosterAuthority.mock.invocationCallOrder;
+    expect(
+      mocks.assertHoldsRosterAuthority.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.rotateEncKey.mock.invocationCallOrder[0]);
+    expect(mocks.rotateEncKey.mock.invocationCallOrder[0]).toBeLessThan(
+      followed,
+    );
+    expect(followed).toBeLessThan(mocks.sealViews.mock.invocationCallOrder[0]);
+    expect(followed).toBeLessThan(
+      mocks.executeGatedCall.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('refuses before any prompt when the encryption key cannot move a live authority', async () => {
+    const { context, withKeySession } = createContext({ keySession: true });
+    mocks.assertMaintenanceSigner.mockRejectedValue(
+      new MaintenanceUpdateRefusedError(),
+    );
+
+    await expect(removeDevice(callInput(), context)).rejects.toBeInstanceOf(
+      MaintenanceUpdateRefusedError,
+    );
+    expect(withKeySession).not.toHaveBeenCalled();
+    expect(mocks.rotateEncKey).not.toHaveBeenCalled();
+  });
+
+  it('refuses in the key session, before the rotation, when this device holds no roster key of the authority, submitting nothing', async () => {
+    const { context, withKeySession } = createContext({ keySession: true });
+    mocks.assertHoldsRosterAuthority.mockRejectedValue(
+      new MaintenanceAuthorityMismatchError(),
+    );
+
+    await expect(removeDevice(callInput(), context)).rejects.toBeInstanceOf(
+      MaintenanceAuthorityMismatchError,
+    );
+    expect(mocks.assertHoldsRosterAuthority).toHaveBeenCalledExactlyOnceWith({
+      address: accountAddress,
+      seams: context.seams,
+      indexer: expect.objectContaining({ queryContractState }) as unknown,
+      keyring: chainKeyring,
+    });
+    expect(withKeySession).toHaveBeenCalledOnce();
+    expect(
+      mocks.assertHoldsRosterAuthority.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(withKeySession.mock.invocationCallOrder[0]);
+    expect(mocks.rotateEncKey).not.toHaveBeenCalled();
+    expect(mocks.followRosterAuthority).not.toHaveBeenCalled();
+    expect(mocks.sealViews).not.toHaveBeenCalled();
+    expect(mocks.executeGatedCall).not.toHaveBeenCalled();
+  });
+
+  it('submits no removal when the authority cannot be moved', async () => {
+    const { context } = createContext();
+    mocks.followRosterAuthority.mockRejectedValue(
+      new MaintenanceAuthorityMismatchError(),
+    );
+
+    await expect(removeDevice(callInput(), context)).rejects.toBeInstanceOf(
+      MaintenanceAuthorityMismatchError,
+    );
+    expect(mocks.sealViews).not.toHaveBeenCalled();
+    expect(mocks.executeGatedCall).not.toHaveBeenCalled();
+  });
+
   it('reports the devices the rotation left without the new key', async () => {
     const { context } = createContext();
     mocks.rotateEncKey.mockResolvedValueOnce({
       encKey: rotatedKey,
       dropped: [joiningCommitment],
+      authority: rotatedAuthority,
       keyring: {
         account: AccAddress(accountAddress),
         encKey: rotatedKey,
@@ -1028,6 +1251,7 @@ describe('removeDevice', () => {
       inSession.push(isSessionOpen);
       return {
         encKey: rotatedKey,
+        authority: rotatedAuthority,
         keyring: {
           account: AccAddress(accountAddress),
           encKey: rotatedKey,

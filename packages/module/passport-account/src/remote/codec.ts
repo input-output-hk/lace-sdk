@@ -10,6 +10,7 @@ import {
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 
+import { DEPLOYED_OPERATIONS } from '../acc/deployed-operations';
 import { ENC_KEY_PREFIX_LENGTH } from '../acc/envelopes';
 import {
   INBOX_ENTRY_LENGTH,
@@ -42,14 +43,20 @@ import type {
   GrantScopeInput,
   GrantViewDelivery,
   LiveDeviceReader,
+  MaintenanceChanges,
+  MaintenanceSignature,
+  MaintenanceSignatureKind,
+  MaintenanceVerifyingKey,
   OpenedInboxEntry,
   RemovedDevice,
   ShieldedCoin,
+  SignedMaintenanceUpdate,
 } from '@lace-contract/passport';
 import type {
   SignerKeyring,
   SignerLiveReader,
   SignerRemovedDevice,
+  SignerRequestPayloads,
 } from '@lace-lib/passkey';
 
 /**
@@ -302,19 +309,37 @@ const decodeStrings = (value: unknown, field: string): string[] => {
   return value.map((entry, index) => decodeString(entry, `${field}[${index}]`));
 };
 
-/** The maintenance authority key as the ledger types it: a kind and hex. */
+/**
+ * A maintenance authority key as the ledger types it: a kind and hex,
+ * either a signing key or a verifying key.
+ */
 const decodeAuthorityKey = (
   value: unknown,
   field: string,
-): PendingDeployment['authorityKey'] => {
+): { tag: MaintenanceSignatureKind; value: string } => {
   if (!isRecord(value)) throw new MalformedPayloadError(field);
   const tag = decodeString(value.tag, `${field}.tag`);
   if (!SIGNATURE_KINDS.has(tag))
     throw new MalformedPayloadError(`${field}.tag`);
   return {
-    tag: tag as PendingDeployment['authorityKey']['tag'],
+    tag: tag as MaintenanceSignatureKind,
     value: decodeString(value.value, `${field}.value`),
   };
+};
+
+/**
+ * Reads a maintenance key as the ledger types it: a signature kind and
+ * the key, or signature, as non-empty lowercase hex.
+ */
+export const decodeMaintenanceKey = (
+  value: unknown,
+  field: string,
+): MaintenanceVerifyingKey => {
+  const key = decodeAuthorityKey(value, field);
+  if (key.value.length === 0 || !HEX_BYTES_PATTERN.test(key.value)) {
+    throw new MalformedPayloadError(`${field}.value`);
+  }
+  return key;
 };
 
 /** The creating device's key entries, as the lowercase hex of each. */
@@ -344,6 +369,10 @@ const decodePendingDeployment = (
       value.authorityKey,
       `${field}.authorityKey`,
     ),
+    handoverAuthority: decodeMaintenanceKey(
+      value.handoverAuthority,
+      `${field}.handoverAuthority`,
+    ),
     keyEntries: decodeKeyEntries(value.keyEntries, `${field}.keyEntries`),
   };
 };
@@ -355,6 +384,7 @@ const DEPLOYMENT_ONLY_FIELDS = [
   'verifierKeysDigest',
   'saltHex',
   'authorityKey',
+  'handoverAuthority',
 ] as const;
 
 /**
@@ -834,15 +864,20 @@ export const decodeLiveReader = (
   };
 };
 
-/** The account keys a creation answered, each byte string as hex. */
+/**
+ * The account keys a creation answered, each byte string as hex, with
+ * the verifying key of the authority their roster key derives.
+ */
 export const encodeAccountKeys = ({
   encKey,
   envelopes,
   registrations,
+  authority,
 }: AccountKeys): Record<string, unknown> => ({
   encKey: encodeBytes(encKey),
   envelopes: envelopes.map(entry => encodeBytes(entry)),
   registrations: registrations.map(entry => encodeBytes(entry)),
+  authority: { tag: authority.tag, value: authority.value },
 });
 
 /** Reads the account keys a creation answered. */
@@ -858,7 +893,116 @@ export const decodeAccountKeys = (
       value.registrations,
       `${field}.registrations`,
     ),
+    authority: decodeMaintenanceKey(value.authority, `${field}.authority`),
   };
+};
+
+/** A maintenance update request as the channel carries it. */
+type EncodedMaintenanceUpdate =
+  SignerRequestPayloads['sign-maintenance-update'];
+
+/** The changes of a maintenance update, each verifier key as hex. */
+export const encodeMaintenanceChanges = (
+  changes: MaintenanceChanges,
+): EncodedMaintenanceUpdate['changes'] =>
+  changes.kind === 'replace-authority'
+    ? {
+        kind: 'replace-authority',
+        authority: {
+          tag: changes.authority.tag,
+          value: changes.authority.value,
+        },
+      }
+    : {
+        kind: 'insert-verifier-keys',
+        inserts: changes.inserts.map(({ operation, verifierKey }) => ({
+          operation,
+          verifierKey: encodeBytes(verifierKey),
+        })),
+      };
+
+/** Reads a verifier key of any length from its non-empty lowercase hex. */
+const decodeVerifierKey = (value: unknown, field: string): Uint8Array => {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    !HEX_BYTES_PATTERN.test(value)
+  ) {
+    throw new MalformedPayloadError(field);
+  }
+  return ByteArray.fromHex(HexBytes(value));
+};
+
+/**
+ * Reads the changes of a maintenance update: a replace naming the
+ * authority it installs, or the verifier key inserts it makes, each an
+ * operation name and its key, at most one per operation of the deployed
+ * roster. Any other kind is refused.
+ */
+export const decodeMaintenanceChanges = (
+  value: unknown,
+  field: string,
+): MaintenanceChanges => {
+  if (!isRecord(value)) throw new MalformedPayloadError(field);
+  if (value.kind === 'replace-authority') {
+    return {
+      kind: 'replace-authority',
+      authority: decodeMaintenanceKey(value.authority, `${field}.authority`),
+    };
+  }
+  if (value.kind !== 'insert-verifier-keys' || !Array.isArray(value.inserts)) {
+    throw new MalformedPayloadError(field);
+  }
+  if (value.inserts.length > DEPLOYED_OPERATIONS.length) {
+    throw new MalformedPayloadError(`${field}.inserts`);
+  }
+  return {
+    kind: 'insert-verifier-keys',
+    inserts: value.inserts.map((insert: unknown, index) => {
+      const at = `${field}.inserts[${index}]`;
+      if (!isRecord(insert)) throw new MalformedPayloadError(at);
+      return {
+        operation: decodeString(insert.operation, `${at}.operation`),
+        verifierKey: decodeVerifierKey(insert.verifierKey, `${at}.verifierKey`),
+      };
+    }),
+  };
+};
+
+/**
+ * A signed maintenance update as the channel carries it: the signature
+ * and, for a replace, the authority it installs.
+ */
+export const encodeSignedMaintenanceUpdate = ({
+  signature,
+  authority,
+}: SignedMaintenanceUpdate): Record<string, unknown> => ({
+  signature: { tag: signature.tag, value: signature.value },
+  ...(authority
+    ? { authority: { tag: authority.tag, value: authority.value } }
+    : {}),
+});
+
+/**
+ * Reads what a maintenance signing answered: the signed update, or null
+ * when no roster key of the envelopes sent derives the authority.
+ */
+export const decodeSignedMaintenanceUpdate = (
+  value: unknown,
+  field: string,
+): SignedMaintenanceUpdate | null => {
+  if (value === null) return null;
+  if (!isRecord(value)) throw new MalformedPayloadError(field);
+  const signature: MaintenanceSignature = decodeMaintenanceKey(
+    value.signature,
+    `${field}.signature`,
+  );
+  return value.authority === undefined
+    ? { signature }
+    : {
+        signature,
+        authority: decodeMaintenanceKey(value.authority, `${field}.authority`),
+      };
 };
 
 /** Reads the delivery a joining device was sealed. */

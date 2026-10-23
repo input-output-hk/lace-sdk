@@ -94,6 +94,7 @@ const runFlowTest = ({ createAccount = 'a', flows, assertion }: FlowTest) => {
             a: actions.passport.createAccount({ lockAccount: true }),
           }),
           issueGrant$: NEVER,
+          installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
           removeDevice$: NEVER,
           revokeAllGrants$: NEVER,

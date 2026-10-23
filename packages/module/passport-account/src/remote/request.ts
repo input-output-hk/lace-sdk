@@ -6,6 +6,9 @@ import {
   DeviceRosterInvalidError,
   EncryptionKeyMismatchError,
   GrantRevocationPendingError,
+  MaintenanceAuthorityMismatchError,
+  MaintenanceUpdateRefusedError,
+  OperationNotInstallableError,
   PrfUnsupportedError,
   RecordCorruptedError,
   RecordUnreadableError,
@@ -37,6 +40,12 @@ const PASSPORT_ERRORS: Record<
     new DeviceRosterInvalidError(message),
   'grant-revocation-pending': ({ message }) =>
     new GrantRevocationPendingError(message),
+  'maintenance-authority-mismatch': ({ message }) =>
+    new MaintenanceAuthorityMismatchError(message),
+  'maintenance-update-refused': ({ message }) =>
+    new MaintenanceUpdateRefusedError(message),
+  'operation-not-installable': ({ message }) =>
+    new OperationNotInstallableError(message),
 };
 
 /**

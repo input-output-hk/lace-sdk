@@ -135,6 +135,8 @@ export const echoHandlers = (): SignerRequestHandlers => {
     'seal-grant': echo('seal-grant'),
     'reencrypt-inbox': echo('reencrypt-inbox'),
     'seal-view': echo('seal-view'),
+    'sign-maintenance-update': echo('sign-maintenance-update'),
+    'holds-maintenance-authority': echo('holds-maintenance-authority'),
     'record-read': echo('record-read'),
     'record-write': echo('record-write'),
     'record-exists': echo('record-exists'),

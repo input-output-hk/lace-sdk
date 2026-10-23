@@ -154,7 +154,7 @@ const createContext = () => {
 
 const indexer = {
   queryContractState: vi.fn(async () => contractState),
-  queryShieldedOutputs: vi.fn(),
+  queryShieldedEvents: vi.fn(),
 };
 
 /** The opener the flow handed the walk, exercised as the walk would. */
@@ -192,7 +192,7 @@ describe('readShieldedHoldings', () => {
       address: accountAddress,
       ledgerState,
       indexer: expect.objectContaining({
-        queryShieldedOutputs: indexer.queryShieldedOutputs,
+        queryShieldedEvents: indexer.queryShieldedEvents,
       }) as unknown,
       openEntries: expect.any(Function) as unknown,
     });

@@ -1,19 +1,26 @@
-import { EncryptionKeyMismatchError } from '@lace-contract/passport';
+import {
+  EncryptionKeyMismatchError,
+  MaintenanceAuthorityMismatchError,
+} from '@lace-contract/passport';
 
 import { MAX_INBOX_ENTRIES_PER_REQUEST } from '../acc/inbox';
 
 import {
   decodeAccountKeys,
+  decodeBoolean,
   decodeBytes,
   decodeDeviceDelivery,
   decodeInboxEntries,
   decodeLiveEnvelope,
   decodeOpenedEntries,
   decodeSealedEntries,
+  decodeSignedMaintenanceUpdate,
   decodeViewDelivery,
+  encodeBigInt,
   encodeBytes,
   encodeKeyring,
   encodeLiveReader,
+  encodeMaintenanceChanges,
   encodeRemovedDevice,
   MalformedPayloadError,
 } from './codec';
@@ -67,27 +74,21 @@ const inBatches = async <T>(
 };
 
 /**
- * The keyring a request carries in place of `keyring`: `keyring` itself
- * when its envelopes fit one request, otherwise its envelopes from the
- * live one on, as many as fit. The live envelope is found by paging the
- * envelopes to the signer, oldest page first, so the first page holding
- * one holds the oldest, the one the signer takes as live, however many
- * envelopes anyone appended after it; the earlier secrets beside it come
- * from the envelopes older than it that still fit. Unlike the whole
- * keyring a local key opens, it leaves out the envelopes newer than the
- * live one, which the live keys are never taken from and which add only
- * secrets sealed to this reader key after the live one landed.
+ * Where the live envelope sits among the envelopes of a keyring with
+ * more of them than one request carries. The envelopes are paged to the
+ * signer, oldest page first, so the first page holding one holds the
+ * oldest, the one the signer takes as live, however many envelopes
+ * anyone appended after it.
  *
  * @throws {@link EncryptionKeyMismatchError} when no page holds an
  * envelope whose secret derives the keyring's `enc_key`.
  */
-const liveKeyring = async (
+const findLivePosition = async (
   client: SignerRequester,
   networkId: string,
   keyring: AccountKeyring,
-): Promise<AccountKeyring> => {
+): Promise<number> => {
   const { envelopes } = keyring;
-  if (envelopes.length <= MAX_INBOX_ENTRIES_PER_REQUEST) return keyring;
   for (
     let end = envelopes.length;
     end > 0;
@@ -103,17 +104,41 @@ const liveKeyring = async (
       'live',
       page.length,
     );
-    if (live !== null) {
-      const from = start + live;
-      return {
-        ...keyring,
-        envelopes: envelopes.slice(from, from + MAX_INBOX_ENTRIES_PER_REQUEST),
-      };
-    }
+    if (live !== null) return start + live;
   }
   throw new EncryptionKeyMismatchError(
     "None of this device's envelopes opens the account's enc_key.",
   );
+};
+
+/**
+ * The keyrings a maintenance update is signed over, tried in order until
+ * one holds the roster key whose authority the chain holds: `keyring`
+ * itself when its envelopes fit one request, otherwise the live envelope
+ * at `live` with, beside it, each consecutive run of the envelopes older
+ * than it, so every roster key the device was sealed before the live one
+ * is reached however many envelopes sit between, in requests of at most
+ * one request's envelopes. The live envelope is in every keyring, since
+ * the signer takes the live roster key from it.
+ */
+const maintenanceKeyrings = (
+  keyring: AccountKeyring,
+  live: number | undefined,
+): AccountKeyring[] => {
+  if (live === undefined) return [keyring];
+  const liveEnvelope = keyring.envelopes[live];
+  const older = keyring.envelopes.slice(live + 1);
+  const run = MAX_INBOX_ENTRIES_PER_REQUEST - 1;
+  const keyrings: AccountKeyring[] = [];
+  let start = 0;
+  do {
+    keyrings.push({
+      ...keyring,
+      envelopes: [liveEnvelope, ...older.slice(start, start + run)],
+    });
+    start += run;
+  } while (start < older.length);
+  return keyrings;
 };
 
 /**
@@ -126,21 +151,52 @@ const liveKeyring = async (
  * inbox is opened or re-encrypted in batches of at most the entries the
  * signer serves per request, each answered with one item, or null, per
  * entry it sent; every batch carries the keyring. A keyring with more
- * envelopes than one request carries is sent from its live envelope on,
- * see {@link liveKeyring}, found once per keyring.
+ * envelopes than one request carries has its live envelope found once,
+ * see {@link findLivePosition}, and is then sent from the live envelope
+ * on, as many as fit. Unlike the whole keyring a local key opens, that
+ * leaves out the envelopes newer than the live one, which the live keys
+ * are never taken from and which add only secrets sealed to this reader
+ * key after the live one landed. A maintenance update is signed over the
+ * live envelope and the older ones in turn instead, see
+ * {@link maintenanceKeyrings}, since the roster key behind the authority
+ * on chain may sit behind any number of envelopes; it rejects with
+ * MaintenanceAuthorityMismatchError once none of them holds it. Whether
+ * the device holds that authority is asked over the same keyrings, and
+ * answered true once one of them does.
  */
 export const createRemoteEncryptionKey = (
   client: SignerRequester,
 ): Required<PassportEncryptionKey> => {
-  const carried = new WeakMap<AccountKeyring, AccountKeyring>();
+  const positions = new WeakMap<AccountKeyring, number>();
+  const livePosition = async (
+    networkId: string,
+    keyring: AccountKeyring,
+  ): Promise<number | undefined> => {
+    if (keyring.envelopes.length <= MAX_INBOX_ENTRIES_PER_REQUEST) {
+      return undefined;
+    }
+    const known =
+      positions.get(keyring) ??
+      (await findLivePosition(client, networkId, keyring));
+    positions.set(keyring, known);
+    return known;
+  };
   const carriedKeyring = async (
     networkId: string,
     keyring: AccountKeyring,
   ): Promise<ReturnType<typeof encodeKeyring>> => {
-    const known =
-      carried.get(keyring) ?? (await liveKeyring(client, networkId, keyring));
-    carried.set(keyring, known);
-    return encodeKeyring(known);
+    const live = await livePosition(networkId, keyring);
+    return encodeKeyring(
+      live === undefined
+        ? keyring
+        : {
+            ...keyring,
+            envelopes: keyring.envelopes.slice(
+              live,
+              live + MAX_INBOX_ENTRIES_PER_REQUEST,
+            ),
+          },
+    );
   };
   return {
     readerPublicKey: async networkId =>
@@ -237,5 +293,46 @@ export const createRemoteEncryptionKey = (
         }),
         'view',
       ),
+    signMaintenanceUpdate: async (
+      networkId,
+      { keyring, authority, counter, changes },
+    ) => {
+      const keyrings = maintenanceKeyrings(
+        keyring,
+        await livePosition(networkId, keyring),
+      );
+      for (const sent of keyrings) {
+        const signed = decodeSignedMaintenanceUpdate(
+          await requestSigner(client, 'sign-maintenance-update', {
+            networkId,
+            keyring: encodeKeyring(sent),
+            authority: { tag: authority.tag, value: authority.value },
+            counter: encodeBigInt(counter),
+            changes: encodeMaintenanceChanges(changes),
+          }),
+          'signed',
+        );
+        if (signed) return signed;
+      }
+      throw new MaintenanceAuthorityMismatchError();
+    },
+    holdsMaintenanceAuthority: async (networkId, keyring, authority) => {
+      const keyrings = maintenanceKeyrings(
+        keyring,
+        await livePosition(networkId, keyring),
+      );
+      for (const sent of keyrings) {
+        const isHeld = decodeBoolean(
+          await requestSigner(client, 'holds-maintenance-authority', {
+            networkId,
+            keyring: encodeKeyring(sent),
+            authority: { tag: authority.tag, value: authority.value },
+          }),
+          'holds',
+        );
+        if (isHeld) return true;
+      }
+      return false;
+    },
   };
 };

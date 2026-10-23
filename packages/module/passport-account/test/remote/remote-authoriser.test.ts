@@ -373,6 +373,28 @@ describe('createRemotePassportAuthoriser', () => {
       });
     });
 
+    it('sends an install-operations descriptor with its account and operations, and refuses one without operations before anything is sent', async () => {
+      const { client, authoriser } = setup();
+      const operations = ['withdraw_unshielded_with_grant_k256'];
+
+      await authoriser.withKeySession!(async () => undefined, {
+        kind: 'install-operations',
+        account: ACCOUNT,
+        operations,
+      });
+      await expect(
+        authoriser.withKeySession!(async () => undefined, {
+          kind: 'install-operations',
+          account: ACCOUNT,
+        }),
+      ).rejects.toThrow(new MalformedPayloadError('flow.operations'));
+
+      expect(client.request).toHaveBeenCalledTimes(2);
+      expect(client.request).toHaveBeenNthCalledWith(1, 'flow-open', {
+        flow: { kind: 'install-operations', account: ACCOUNT, operations },
+      });
+    });
+
     it('sends the read flag of a revoke descriptor only when the revocation rotates the key', async () => {
       const { flow } = await prepareIssueGrantFlow('dapp.example');
       const { client, authoriser } = setup();

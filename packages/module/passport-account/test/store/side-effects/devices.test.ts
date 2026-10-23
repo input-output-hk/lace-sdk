@@ -179,6 +179,7 @@ const runFlowTest = ({
           }),
           createAccount$: NEVER,
           issueGrant$: NEVER,
+          installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
           revokeAllGrants$: NEVER,
           revokeGrant$: NEVER,

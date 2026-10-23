@@ -20,6 +20,11 @@ import {
 } from './account-call';
 import { inKeySession } from './key-session';
 import {
+  assertHoldsRosterAuthority,
+  assertMaintenanceSigner,
+  followRosterAuthority,
+} from './maintenance';
+import {
   callChain,
   liveDeviceEntries,
   readAccountInbox,
@@ -36,10 +41,15 @@ import {
 } from './stored-grants';
 
 import type { AccountLedger } from './account-call';
-import type { CallChain, RotatedEncKey } from './rotation';
+import type { CallChain, LocalDevice, RotatedEncKey } from './rotation';
 import type { AccountCallInput, FlowContext, StoredGrants } from './types';
 import type { Ledger } from '../acc/acc-module';
-import type { DeviceReader, PassportDevice } from '@lace-contract/passport';
+import type {
+  AccountKeyring,
+  DeviceReader,
+  PassportAccountInfo,
+  PassportDevice,
+} from '@lace-contract/passport';
 
 /**
  * Contract aborts meaning the removal would leave the account without an
@@ -127,6 +137,21 @@ const withoutDevice = (
 const entryArgument = (commitmentHex: string): Uint8Array =>
   ByteArray.fromHex(HexBytes(commitmentHex.toLowerCase()));
 
+/**
+ * This device's keyring over the ledger the chain is at: the live secret
+ * and the earlier ones its envelopes deliver.
+ */
+const keyringAt = (
+  account: PassportAccountInfo,
+  chain: CallChain,
+  local: LocalDevice,
+): AccountKeyring =>
+  readAccountInbox(
+    account.address,
+    chain.position().ledgerState,
+    local.readerPublicKey,
+  ).keyring;
+
 /** The counter the chain left this device at, or the one it started from. */
 const chainCounter = (chain: CallChain, input: DeviceCallInput): string =>
   chain.position().localUseCounter ?? input.localUseCounter ?? '0';
@@ -212,7 +237,15 @@ const openDeviceSession = async (
  * as a removal rotates them, the joining device handed the new secret no
  * grantee has seen, and the live read grants this client holds the read
  * key of sealed it after; with no live read grant only enrolled devices
- * hold the secret, and the live keys are handed over as they are. The
+ * hold the secret, and the live keys are handed over as they are. A
+ * rotation moves the maintenance authority of an unlocked account to the
+ * one the new roster key derives before the keys are handed over, so the
+ * joining device can sign maintenance updates once enrolled; an
+ * encryption key that cannot sign them refuses such an enrolment with
+ * MaintenanceUpdateRefusedError before any prompt, and a device none of
+ * whose roster keys derives the authority on chain refuses it with
+ * MaintenanceAuthorityMismatchError inside the session, before the
+ * rotation. The
  * joining device then signs in and reads the holdings with its own
  * passkey alone. Without `reader` the
  * device can authorise but reads nothing until some device delivers it
@@ -253,6 +286,13 @@ export const addDevice = async (
         ? viewCapability(seams.passportEncryptionKey)
         : undefined;
     const devices = view ? liveDeviceEntries(ledger.ledgerState) : undefined;
+    if (view) {
+      await assertMaintenanceSigner({
+        address: account.address,
+        indexer: ledger.indexer,
+        encryptionKey: seams.passportEncryptionKey,
+      });
+    }
     return await inKeySession(
       seams.passportAuthoriser,
       {
@@ -272,6 +312,12 @@ export const addDevice = async (
         if (reader) {
           const local = await readLocalDevice(seams);
           if (view && devices) {
+            await assertHoldsRosterAuthority({
+              address: account.address,
+              seams,
+              indexer: ledger.indexer,
+              keyring: keyringAt(account, chain, local),
+            });
             rotated = await rotateEncKey({
               account,
               encryptionKey: seams.passportEncryptionKey,
@@ -284,15 +330,17 @@ export const addDevice = async (
               devices,
               rotateRoster: true,
             });
+            await followRosterAuthority({
+              address: account.address,
+              seams,
+              keyring: keyringAt(account, chain, local),
+              authority: rotated.authority,
+              onProgress,
+            });
           }
           const delivery = await seams.passportEncryptionKey.sealToDevice(
             networkId,
-            rotated?.keyring ??
-              readAccountInbox(
-                account.address,
-                chain.position().ledgerState,
-                local.readerPublicKey,
-              ).keyring,
+            rotated?.keyring ?? keyringAt(account, chain, local),
             {
               ...reader,
               epoch: ledger.ledgerState.device_epoch,
@@ -382,7 +430,16 @@ const assertRemovable = (
  * seal kept on chain in a grant record. The removed device's envelopes
  * stay in the inbox and keep opening the secrets they held, but none
  * opens the new one, and the registrations under the old roster key no
- * longer count, any it planted for itself included. A roster in which
+ * longer count, any it planted for itself included. Once `enc_key` is
+ * replaced, and before the removal, the maintenance authority of an
+ * unlocked account is moved to the one the new roster key derives, so
+ * the removed device loses its upgrade rights; a locked account has no
+ * authority to move. An encryption key that cannot sign maintenance
+ * updates refuses the removal of a device from an unlocked account with
+ * MaintenanceUpdateRefusedError before any prompt, and a device none of
+ * whose roster keys derives the authority on chain refuses it with
+ * MaintenanceAuthorityMismatchError inside the session, before the
+ * rotation, so nothing is submitted. A roster in which
  * two readers claim one live device, or one reader two, refuses with
  * DeviceRosterInvalidError rather than guess.
  *
@@ -415,6 +472,11 @@ export const removeDevice = async (
     );
     assertRemovable(input, ledger);
     const devices = liveDeviceEntries(ledger.ledgerState, commitmentHex);
+    await assertMaintenanceSigner({
+      address: account.address,
+      indexer: ledger.indexer,
+      encryptionKey: seams.passportEncryptionKey,
+    });
     return await inKeySession(
       seams.passportAuthoriser,
       {
@@ -429,11 +491,18 @@ export const removeDevice = async (
           ledger,
           context,
         );
+        const local = await readLocalDevice(seams);
+        await assertHoldsRosterAuthority({
+          address: account.address,
+          seams,
+          indexer: ledger.indexer,
+          keyring: keyringAt(account, chain, local),
+        });
         const rotated = await rotateEncKey({
           account,
           encryptionKey: seams.passportEncryptionKey,
           view,
-          local: await readLocalDevice(seams),
+          local,
           chain,
           indexer: ledger.indexer,
           networkId,
@@ -441,6 +510,13 @@ export const removeDevice = async (
           devices,
           rotateRoster: true,
           target: commitmentHex.toLowerCase(),
+        });
+        await followRosterAuthority({
+          address: account.address,
+          seams,
+          keyring: keyringAt(account, chain, local),
+          authority: rotated.authority,
+          onProgress,
         });
         const views = await sealViews({
           view,

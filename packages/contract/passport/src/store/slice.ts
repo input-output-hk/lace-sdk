@@ -141,6 +141,8 @@ export type DevicePayload = { commitmentHex: string };
 export type AddDevicePayload = DevicePayload & { reader?: DeviceReader };
 /** What `passportActions.revokeGrant` carries: the grant to revoke. */
 export type RevokeGrantPayload = { grantId: GrantId };
+/** What `passportActions.installOperations` carries: the operations to install. */
+export type InstallOperationsPayload = { operations: string[] };
 
 const slice = createSlice({
   name: 'passport',
@@ -212,6 +214,17 @@ const slice = createSlice({
      * only change via setShieldedHoldings once the walk completes.
      */
     readShieldedHoldings: () => {},
+
+    /**
+     * Requests the install of verifier keys for operations of the deployed
+     * roster the account lacks, signed by its maintenance authority. A
+     * pure trigger, for the same reason as {@link createAccount}: nothing
+     * in state changes once the install lands.
+     */
+    installOperations: (
+      _state,
+      _action: PayloadAction<InstallOperationsPayload>,
+    ) => {},
 
     setFlow: (state, { payload }: PayloadAction<PassportFlow>) => {
       state.flow = payload;

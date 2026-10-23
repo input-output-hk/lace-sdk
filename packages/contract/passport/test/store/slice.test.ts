@@ -109,6 +109,13 @@ describe('passport slice', () => {
       ],
       ['revokeAllGrants', () => actions.passport.revokeAllGrants()],
       ['readShieldedHoldings', () => actions.passport.readShieldedHoldings()],
+      [
+        'installOperations',
+        () =>
+          actions.passport.installOperations({
+            operations: ['withdraw_unshielded_with_grant_k256'],
+          }),
+      ],
     ] as const)('%s', (_name, trigger) => {
       const populated: PassportSliceState = {
         ...initialState,

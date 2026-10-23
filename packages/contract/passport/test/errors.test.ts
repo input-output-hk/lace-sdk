@@ -26,8 +26,11 @@ import {
   GrantRosterUnsettledError,
   GrantScopeInvalidError,
   LastDeviceError,
+  MaintenanceAuthorityMismatchError,
+  MaintenanceUpdateRefusedError,
   NoAccountError,
   NotAuthorisedError,
+  OperationNotInstallableError,
   PrfUnsupportedError,
   ReadUnavailableError,
   RecordCorruptedError,
@@ -129,6 +132,21 @@ describe('passport errors', () => {
       'CreationArtefactMismatchError',
       CreationArtefactMismatchError,
       'creation-artefact-mismatch',
+    ],
+    [
+      'MaintenanceAuthorityMismatchError',
+      MaintenanceAuthorityMismatchError,
+      'maintenance-authority-mismatch',
+    ],
+    [
+      'MaintenanceUpdateRefusedError',
+      MaintenanceUpdateRefusedError,
+      'maintenance-update-refused',
+    ],
+    [
+      'OperationNotInstallableError',
+      OperationNotInstallableError,
+      'operation-not-installable',
     ],
   ] as const)(
     '%s has code %s and is a CustomError',

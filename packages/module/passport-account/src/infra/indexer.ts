@@ -73,6 +73,15 @@ export type ShieldedOutputRecord = {
   index: bigint;
 };
 
+/**
+ * The shielded events of one transaction: the outputs it created, and the
+ * nullifier of every shielded coin it spent, as lowercase hex.
+ */
+export type ShieldedTransactionEvents = {
+  outputs: ShieldedOutputRecord[];
+  nullifiers: string[];
+};
+
 export type EnumerateContractActionsOptions = {
   /** Deadline for the full replay (default 60 seconds). */
   timeoutMs?: number;
@@ -88,7 +97,7 @@ export type IndexerClient = {
     address: string,
     options?: EnumerateContractActionsOptions,
   ) => Promise<ContractActionRecord[]>;
-  queryShieldedOutputs: (txHash: string) => Promise<ShieldedOutputRecord[]>;
+  queryShieldedEvents: (txHash: string) => Promise<ShieldedTransactionEvents>;
 };
 
 export type CreateIndexerClientProps = {
@@ -142,9 +151,19 @@ type ShieldedOutputEvent = {
   mtIndex: bigint;
 };
 
+/** The ledger event of one shielded spend, as ledger-v9 types its details. */
+type ShieldedInputEvent = {
+  tag: 'zswapInput';
+  nullifier: string;
+};
+
 const isShieldedOutputEvent = (content: {
   tag: string;
 }): content is ShieldedOutputEvent => content.tag === 'zswapOutput';
+
+const isShieldedInputEvent = (content: {
+  tag: string;
+}): content is ShieldedInputEvent => content.tag === 'zswapInput';
 
 type TransactionEventsPayload = {
   data?: { transactions?: { zswapLedgerEvents?: RawLedgerEvent[] }[] };
@@ -199,7 +218,8 @@ const eventBytes = (raw: string): Uint8Array => {
  * contract state through the midnight-js public data provider, the
  * complete per-address action history through the indexer's
  * contractActions subscription, and the shielded outputs a transaction
- * created through the ledger events the indexer keeps per transaction.
+ * created and the coins it spent through the ledger events the indexer
+ * keeps per transaction.
  */
 export const createIndexerClient = ({
   indexerUrl,
@@ -371,11 +391,12 @@ export const createIndexerClient = ({
    * The indexer keeps, per transaction, the events the ledger emitted while
    * applying it; a shielded output's event carries the commitment and the
    * tree index the ledger assigned, so the index is read, never inferred
-   * from the transaction's position window.
+   * from the transaction's position window, and a shielded spend's event
+   * carries the nullifier the ledger recorded for the coin it consumed.
    */
-  const queryShieldedOutputs = async (
+  const queryShieldedEvents = async (
     txHash: string,
-  ): Promise<ShieldedOutputRecord[]> => {
+  ): Promise<ShieldedTransactionEvents> => {
     const body = await postQuery<TransactionEventsPayload>(
       'transactions',
       `query($offset: TransactionOffset!) { transactions(offset: $offset) { hash ... on RegularTransaction { zswapLedgerEvents { raw } } } }`,
@@ -384,30 +405,32 @@ export const createIndexerClient = ({
     const events = (body.data?.transactions ?? []).flatMap(
       transaction => transaction.zswapLedgerEvents ?? [],
     );
-    if (events.length === 0) return [];
+    const found: ShieldedTransactionEvents = { outputs: [], nullifiers: [] };
+    if (events.length === 0) return found;
     const { Event } = await import('@midnightntwrk/ledger-v9');
-    return events.flatMap(({ raw }) => {
+    for (const { raw } of events) {
       const { content } = Event.deserialize(
         eventBytes(stripHexPrefix(raw ?? '')),
       );
-      return isShieldedOutputEvent(content)
-        ? [
-            {
-              commitment: content.commitment.toLowerCase(),
-              ...(content.contract === undefined
-                ? {}
-                : { contractAddress: content.contract.toLowerCase() }),
-              index: content.mtIndex,
-            },
-          ]
-        : [];
-    });
+      if (isShieldedOutputEvent(content)) {
+        found.outputs.push({
+          commitment: content.commitment.toLowerCase(),
+          ...(content.contract === undefined
+            ? {}
+            : { contractAddress: content.contract.toLowerCase() }),
+          index: content.mtIndex,
+        });
+      } else if (isShieldedInputEvent(content)) {
+        found.nullifiers.push(content.nullifier.toLowerCase());
+      }
+    }
+    return found;
   };
 
   return {
     queryContractState: async address =>
       (await provider()).queryContractState(address),
     enumerateContractActions,
-    queryShieldedOutputs,
+    queryShieldedEvents,
   };
 };

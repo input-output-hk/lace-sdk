@@ -116,6 +116,11 @@ const everyMember = (
         account: AccAddress('cd'.repeat(32)),
         readPublicKey: 'ef'.repeat(32),
       }),
+    async () =>
+      encryptionKey.holdsMaintenanceAuthority(NETWORK_ID, keyring, {
+        tag: 'schnorr',
+        value: 'a7'.repeat(32),
+      }),
   ];
 };
 

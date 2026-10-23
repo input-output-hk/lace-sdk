@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   revokeGrant: vi.fn(),
   revokeAllGrants: vi.fn(),
   readShieldedHoldings: vi.fn(),
+  installOperations: vi.fn(),
 }));
 
 vi.mock('../../src/flows/create-account', () => ({
@@ -49,6 +50,9 @@ vi.mock('../../src/flows/grants', () => ({
 }));
 vi.mock('../../src/flows/holdings', () => ({
   readShieldedHoldings: mocks.readShieldedHoldings,
+}));
+vi.mock('../../src/flows/install-operations', () => ({
+  installOperations: mocks.installOperations,
 }));
 
 const record: PassportAccountRecord = {
@@ -674,6 +678,46 @@ describe('createDependencies', () => {
     const [, { accountRecords }] = mocks.readShieldedHoldings.mock
       .calls[0] as unknown as [unknown, FlowContext];
     await expect(accountRecords.read()).resolves.toBeUndefined();
+  });
+
+  it('wires installOperations to the seams, the account and the operations it installs', async () => {
+    const operations = ['withdraw_unshielded_with_grant_k256'];
+    const installed = { operations };
+    mocks.installOperations.mockResolvedValue(installed);
+    const { passportFlows } = createDependencies({
+      authoriser,
+      encryptionKey,
+      sponsor,
+      prover,
+      network,
+      rpId: 'lace.io',
+    });
+
+    const { events } = collect(
+      passportFlows.installOperations(
+        { account: deviceCall.account, operations },
+        createFlowRunnerDependencies() as never,
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(events).toEqual([{ type: 'done', result: installed }]);
+    });
+
+    expect(mocks.installOperations).toHaveBeenCalledExactlyOnceWith(
+      { account: deviceCall.account, operations },
+      {
+        seams: {
+          passportAuthoriser: authoriser,
+          passportEncryptionKey: encryptionKey,
+          passportSponsor: sponsor,
+          passportProver: prover,
+          passportNetwork: network,
+        },
+        accountRecords: expect.any(Object) as unknown,
+        onProgress: expect.any(Function) as unknown,
+        rpId: 'lace.io',
+      },
+    );
   });
 
   it('leaves the relying party id undefined where the page has no hostname to default to', async () => {

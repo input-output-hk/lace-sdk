@@ -297,9 +297,9 @@ describe('createIndexerClient', () => {
   });
 });
 
-describe('createIndexerClient: queryShieldedOutputs', () => {
+describe('createIndexerClient: queryShieldedEvents', () => {
   const txHash = 'ab'.repeat(32);
-  const rawEvents = ['0102', '0304', '0506'];
+  const rawEvents = ['0102', '0304', '0506', '0708'];
   const contract = 'CD'.repeat(32);
   const commitment = 'EF'.repeat(32);
 
@@ -328,13 +328,17 @@ describe('createIndexerClient: queryShieldedOutputs', () => {
     ledgerMocks.deserialize.mockReset();
   });
 
-  it('asks for the ledger events of the transaction by hash and keeps the shielded outputs, lowercased', async () => {
+  it('asks for the ledger events of the transaction by hash and keeps the shielded outputs and spent nullifiers, lowercased', async () => {
     const fetchHttp = vi.fn(async () =>
       eventsResponse(rawEvents.map(raw => ({ raw }))),
     );
     ledgerMocks.deserialize
       .mockReturnValueOnce({
-        content: { tag: 'zswapInput', nullifier: '00', contract: undefined },
+        content: {
+          tag: 'zswapInput',
+          nullifier: 'AB'.repeat(32),
+          contract: undefined,
+        },
       })
       .mockReturnValueOnce({
         content: { tag: 'zswapOutput', commitment, contract, mtIndex: 7n },
@@ -346,18 +350,24 @@ describe('createIndexerClient: queryShieldedOutputs', () => {
           contract: undefined,
           mtIndex: 8n,
         },
+      })
+      .mockReturnValueOnce({
+        content: { tag: 'contractLog', address: contract },
       });
 
     await expect(
-      clientOver(fetchHttp).queryShieldedOutputs(`0x${txHash}`),
-    ).resolves.toEqual([
-      {
-        commitment: commitment.toLowerCase(),
-        contractAddress: contract.toLowerCase(),
-        index: 7n,
-      },
-      { commitment: '11'.repeat(32), index: 8n },
-    ]);
+      clientOver(fetchHttp).queryShieldedEvents(`0x${txHash}`),
+    ).resolves.toEqual({
+      outputs: [
+        {
+          commitment: commitment.toLowerCase(),
+          contractAddress: contract.toLowerCase(),
+          index: 7n,
+        },
+        { commitment: '11'.repeat(32), index: 8n },
+      ],
+      nullifiers: ['ab'.repeat(32)],
+    });
 
     expect(
       ledgerMocks.deserialize.mock.calls.map(call => call[0] as Uint8Array),
@@ -376,12 +386,12 @@ describe('createIndexerClient: queryShieldedOutputs', () => {
     expect(body.query).toContain('zswapLedgerEvents { raw }');
   });
 
-  it('answers no outputs for a transaction the indexer does not know, without touching the ledger', async () => {
+  it('answers no events for a transaction the indexer does not know, without touching the ledger', async () => {
     const fetchHttp = vi.fn(async () => eventsResponse(undefined));
 
     await expect(
-      clientOver(fetchHttp).queryShieldedOutputs(txHash),
-    ).resolves.toEqual([]);
+      clientOver(fetchHttp).queryShieldedEvents(txHash),
+    ).resolves.toEqual({ outputs: [], nullifiers: [] });
     expect(ledgerMocks.deserialize).not.toHaveBeenCalled();
   });
 
@@ -394,7 +404,7 @@ describe('createIndexerClient: queryShieldedOutputs', () => {
     }));
 
     await expect(
-      clientOver(fetchHttp).queryShieldedOutputs(txHash),
+      clientOver(fetchHttp).queryShieldedEvents(txHash),
     ).rejects.toThrow(
       'transactions query: [{"message":"unknown transaction"}]',
     );
@@ -409,7 +419,7 @@ describe('createIndexerClient: queryShieldedOutputs', () => {
     }));
 
     await expect(
-      clientOver(fetchHttp).queryShieldedOutputs(txHash),
+      clientOver(fetchHttp).queryShieldedEvents(txHash),
     ).rejects.toThrow('transactions query failed: HTTP 502 Bad Gateway');
   });
 
@@ -420,7 +430,7 @@ describe('createIndexerClient: queryShieldedOutputs', () => {
     });
 
     await expect(
-      clientOver(fetchHttp).queryShieldedOutputs(txHash),
+      clientOver(fetchHttp).queryShieldedEvents(txHash),
     ).rejects.toThrow('Unable to deserialize Event.');
   });
 
@@ -430,7 +440,7 @@ describe('createIndexerClient: queryShieldedOutputs', () => {
       const fetchHttp = vi.fn(async () => eventsResponse([{ raw }]));
 
       await expect(
-        clientOver(fetchHttp).queryShieldedOutputs(txHash),
+        clientOver(fetchHttp).queryShieldedEvents(txHash),
       ).rejects.toThrow('transactions query: ledger event is not hex');
       expect(ledgerMocks.deserialize).not.toHaveBeenCalled();
     },

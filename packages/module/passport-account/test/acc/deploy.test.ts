@@ -3,6 +3,7 @@ import {
   AuthorityNotRetiredError,
   AuthorityRetiredError,
   CreationArtefactMismatchError,
+  MaintenanceAuthorityMismatchError,
 } from '@lace-contract/passport';
 import { HexBytes } from '@lace-lib/util';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,7 +12,9 @@ import { expectedVk, pureCircuits } from '../../src/acc/acc-module';
 import {
   accountWitnesses,
   deployAccount,
+  readMaintenanceAuthority,
   resumeAccountDeployment,
+  submitMaintenanceUpdate,
 } from '../../src/acc/deploy';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 
@@ -21,6 +24,8 @@ import type {
   AccProviders,
   PendingDeployment,
 } from '../../src/acc/deploy';
+import type * as NetworkId from '@midnight-ntwrk/midnight-js-network-id';
+import type * as Ledger from '@midnightntwrk/ledger-v9';
 
 /** Verifier key sizes measured from the vendored artefacts, in bytes. */
 const JUBJUB_KEY_BYTES = 2313;
@@ -31,6 +36,11 @@ const VERIFIER_BYTE_BUDGET = 15_000;
 const VERIFIER_KEY_HEADER = 'midnight:verifier-key[v7]:';
 
 const ledgerMocks = vi.hoisted(() => {
+  /** The verifying key of the deploy-time authority the pipeline mints. */
+  const DEPLOY_VERIFYING_KEY = {
+    tag: 'schnorr',
+    value: 'verifying-authority-signing-key',
+  };
   const gatedBases = [
     'withdraw_unshielded',
     'append_inbox',
@@ -109,7 +119,7 @@ const ledgerMocks = vi.hoisted(() => {
    */
   const chain = {
     operations: new Set<string>(),
-    authority: { committee: ['deploy-authority-key'], threshold: 1 } as {
+    authority: { committee: [DEPLOY_VERIFYING_KEY], threshold: 1 } as {
       committee: unknown[];
       threshold: number;
     },
@@ -119,7 +129,7 @@ const ledgerMocks = vi.hoisted(() => {
     lagReads: 0,
     reset: (): void => {
       chain.operations.clear();
-      chain.authority = { committee: ['deploy-authority-key'], threshold: 1 };
+      chain.authority = { committee: [DEPLOY_VERIFYING_KEY], threshold: 1 };
       chain.counter = 0n;
       chain.booted = false;
       chain.hiddenReads = 0;
@@ -231,6 +241,12 @@ const ledgerMocks = vi.hoisted(() => {
     signedBy: key,
     data,
   }));
+  const signatureVerifyingKey = vi.fn(
+    (key: { tag: string; value: string }) => ({
+      tag: key.tag,
+      value: `verifying-${key.value}`,
+    }),
+  );
 
   return {
     ContractState,
@@ -243,6 +259,7 @@ const ledgerMocks = vi.hoisted(() => {
     Intent,
     Transaction,
     signData,
+    signatureVerifyingKey,
     fullState,
     chain,
     CHAIN_STATE,
@@ -354,12 +371,17 @@ const authorityKey = {
   tag: 'schnorr' as const,
   value: 'authority-signing-key',
 };
+const handoverAuthority = {
+  tag: 'schnorr' as const,
+  value: 'roster-derived-verifying-key',
+};
 
 const deployProps = {
   providers,
   authoriser,
   encPublicKey,
   lockAccount: false,
+  handoverAuthority,
   onDeployed,
   randomBytes: fixedRandomBytes,
   sleep,
@@ -411,6 +433,7 @@ const pendingDeployment: PendingDeployment = {
   verifierKeysDigest: VERIFIER_KEYS_DIGEST,
   saltHex: '07'.repeat(32),
   authorityKey,
+  handoverAuthority,
   keyEntries: [],
 };
 
@@ -430,7 +453,7 @@ const insertedOperations = (
     single instanceof ledgerMocks.VerifierKeyInsert ? [single.operation] : [],
   );
 
-const retirements = (
+const replacements = (
   update: InstanceType<typeof ledgerMocks.MaintenanceUpdate>,
 ): InstanceType<typeof ledgerMocks.ReplaceAuthority>[] =>
   update.updates.flatMap(single =>
@@ -530,7 +553,10 @@ describe('deployAccount', () => {
     await deployAccount(deployProps);
 
     for (const update of ledgerMocks.MaintenanceUpdate.instances) {
-      for (const single of update.updates) {
+      const inserts = update.updates.filter(
+        single => !(single instanceof ledgerMocks.ReplaceAuthority),
+      );
+      for (const single of inserts) {
         expect(single).toBeInstanceOf(ledgerMocks.VerifierKeyInsert);
         const insert = single as InstanceType<
           typeof ledgerMocks.VerifierKeyInsert
@@ -577,6 +603,7 @@ describe('deployAccount', () => {
       verifierKeysDigest: VERIFIER_KEYS_DIGEST,
       saltHex: '07'.repeat(32),
       authorityKey,
+      handoverAuthority,
     });
   });
 
@@ -625,9 +652,9 @@ describe('deployAccount', () => {
 
     const updates = ledgerMocks.MaintenanceUpdate.instances;
     expect(updates).toHaveLength(3);
-    expect(retirements(updates[0])).toEqual([]);
-    expect(retirements(updates[1])).toEqual([]);
-    const [retire] = retirements(updates[2]);
+    expect(replacements(updates[0])).toEqual([]);
+    expect(replacements(updates[1])).toEqual([]);
+    const [retire] = replacements(updates[2]);
     expect(updates[2].updates.at(-1)).toBe(retire);
     expect(retire.authority).toBeInstanceOf(
       ledgerMocks.ContractMaintenanceAuthority,
@@ -639,15 +666,27 @@ describe('deployAccount', () => {
     expect(ledgerMocks.chain.authority.committee).toEqual([]);
   });
 
-  it('retires nothing when lockAccount is false', async () => {
+  it('hands the authority to the roster-derived key in the last wave when lockAccount is false', async () => {
     await deployAccount(deployProps);
 
-    expect(
-      ledgerMocks.MaintenanceUpdate.instances.flatMap(retirements),
-    ).toEqual([]);
-    expect(ledgerMocks.chain.authority.committee).toEqual([
-      'deploy-authority-key',
-    ]);
+    const updates = ledgerMocks.MaintenanceUpdate.instances;
+    expect(updates).toHaveLength(3);
+    expect(replacements(updates[0])).toEqual([]);
+    expect(replacements(updates[1])).toEqual([]);
+    const [handover] = replacements(updates[2]);
+    expect(updates[2].updates.at(-1)).toBe(handover);
+    expect(handover.authority).toBeInstanceOf(
+      ledgerMocks.ContractMaintenanceAuthority,
+    );
+    expect(handover.authority.committee).toEqual([handoverAuthority]);
+    expect(handover.authority.threshold).toBe(1);
+    expect(handover.authority.counter).toBe(3n);
+    expect(insertedOperations(updates[2])).toEqual(FOURTH_WAVE);
+    expect(ledgerMocks.signData).toHaveBeenLastCalledWith(
+      authorityKey,
+      updates[2].dataToSign,
+    );
+    expect(ledgerMocks.chain.authority.committee).toEqual([handoverAuthority]);
   });
 
   it('derives the boot commitment from the authoriser key and the fresh salt', async () => {
@@ -888,6 +927,10 @@ describe('resumeAccountDeployment', () => {
 
   it('signs the remaining waves with the recorded authority key', async () => {
     const recordedKey = { tag: 'schnorr' as const, value: 'recorded-key' };
+    ledgerMocks.chain.authority = {
+      committee: [{ tag: 'schnorr', value: 'verifying-recorded-key' }],
+      threshold: 1,
+    };
 
     await resumeAccountDeployment({
       ...resumeProps,
@@ -922,8 +965,8 @@ describe('resumeAccountDeployment', () => {
     const updates = ledgerMocks.MaintenanceUpdate.instances;
     expect(updates.map(insertedOperations)).toEqual([THIRD_WAVE, FOURTH_WAVE]);
     expect(updates.map(update => update.counter)).toEqual([1n, 2n]);
-    expect(retirements(updates[0])).toEqual([]);
-    expect(retirements(updates[1])[0].authority.counter).toBe(3n);
+    expect(replacements(updates[0])).toEqual([]);
+    expect(replacements(updates[1])[0].authority.counter).toBe(3n);
   });
 
   it('retires the authority alone when every operation is in but the lock is still due', async () => {
@@ -940,10 +983,106 @@ describe('resumeAccountDeployment', () => {
     const updates = ledgerMocks.MaintenanceUpdate.instances;
     expect(updates).toHaveLength(1);
     expect(insertedOperations(updates[0])).toEqual([]);
-    expect(retirements(updates[0])).toHaveLength(1);
+    expect(replacements(updates[0])).toHaveLength(1);
     expect(updates[0].counter).toBe(2n);
     expect(ledgerMocks.chain.authority.committee).toEqual([]);
   });
+
+  it('hands the authority over alone when every operation is in but the handover is still due', async () => {
+    for (const operation of DEPLOYED_OPERATIONS) {
+      ledgerMocks.chain.operations.add(operation);
+    }
+    ledgerMocks.chain.counter = 2n;
+
+    await resumeAccountDeployment(resumeProps);
+
+    const updates = ledgerMocks.MaintenanceUpdate.instances;
+    expect(updates).toHaveLength(1);
+    expect(insertedOperations(updates[0])).toEqual([]);
+    const [handover] = replacements(updates[0]);
+    expect(handover.authority.committee).toEqual([handoverAuthority]);
+    expect(handover.authority.counter).toBe(3n);
+    expect(updates[0].counter).toBe(2n);
+    expect(ledgerMocks.signData).toHaveBeenCalledExactlyOnceWith(
+      authorityKey,
+      updates[0].dataToSign,
+    );
+  });
+
+  it('hands over to the recorded authority, not one drawn anew', async () => {
+    const recorded = { tag: 'schnorr' as const, value: 'recorded-handover' };
+
+    await resumeAccountDeployment({
+      ...resumeProps,
+      pending: { ...pendingDeployment, handoverAuthority: recorded },
+    });
+
+    const updates = ledgerMocks.MaintenanceUpdate.instances;
+    const [handover] = replacements(updates[updates.length - 1]);
+    expect(handover.authority.committee).toEqual([recorded]);
+  });
+
+  it('submits nothing when the handover already landed and only the activation is missing', async () => {
+    for (const operation of DEPLOYED_OPERATIONS) {
+      ledgerMocks.chain.operations.add(operation);
+    }
+    ledgerMocks.chain.authority = {
+      committee: [handoverAuthority],
+      threshold: 1,
+    };
+    ledgerMocks.chain.counter = 3n;
+
+    const account = await resumeAccountDeployment(resumeProps);
+
+    expect(contractsMocks.submitTx).not.toHaveBeenCalled();
+    expect(ledgerMocks.MaintenanceUpdate.instances).toHaveLength(0);
+    expect(account.isActivated).toBe(false);
+  });
+
+  it('rejects with AuthorityRetiredError when operations are missing after the handover landed', async () => {
+    ledgerMocks.chain.authority = {
+      committee: [handoverAuthority],
+      threshold: 1,
+    };
+
+    await expect(resumeAccountDeployment(resumeProps)).rejects.toThrow(
+      AuthorityRetiredError,
+    );
+    expect(contractsMocks.submitTx).not.toHaveBeenCalled();
+    expect(contractsMocks.findDeployedContract).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'another handover authority',
+      false,
+      [{ tag: 'schnorr', value: 'other-verifying-key' }],
+    ],
+    [
+      'the handover authority of a locked deployment',
+      true,
+      [handoverAuthority],
+    ],
+    ['an empty committee for an unlocked deployment', false, []],
+  ])(
+    'rejects with MaintenanceAuthorityMismatchError when the chain shows %s',
+    async (_case, lockAccount, committee) => {
+      ledgerMocks.chain.authority = { committee, threshold: 1 };
+
+      await expect(
+        resumeAccountDeployment({
+          ...resumeProps,
+          pending: { ...pendingDeployment, lockAccount },
+        }),
+      ).rejects.toThrow(
+        new MaintenanceAuthorityMismatchError(
+          'The maintenance authority of the account at deployed-address is neither the deploy-time key nor the one its unfinished creation installs, so it cannot be resumed.',
+        ),
+      );
+      expect(getVerifierKey).not.toHaveBeenCalled();
+      expect(contractsMocks.submitTx).not.toHaveBeenCalled();
+    },
+  );
 
   it('submits nothing when the deployment only missed its activation', async () => {
     for (const operation of DEPLOYED_OPERATIONS) {
@@ -1001,11 +1140,31 @@ describe('resumeAccountDeployment', () => {
     expect(contractsMocks.findDeployedContract).not.toHaveBeenCalled();
   });
 
-  it('returns an unlocked deployment activated with its authority live', async () => {
+  it('rejects with AuthorityNotRetiredError when an unlocked deployment shows activated with its authority live', async () => {
     for (const operation of DEPLOYED_OPERATIONS) {
       ledgerMocks.chain.operations.add(operation);
     }
     ledgerMocks.chain.booted = true;
+
+    await expect(
+      resumeAccountDeployment({
+        ...resumeProps,
+        pending: { ...pendingDeployment, lockAccount: false },
+      }),
+    ).rejects.toThrow(AuthorityNotRetiredError);
+    expect(contractsMocks.submitTx).not.toHaveBeenCalled();
+    expect(contractsMocks.findDeployedContract).not.toHaveBeenCalled();
+  });
+
+  it('returns an unlocked deployment activated after its handover landed without submitting anything', async () => {
+    for (const operation of DEPLOYED_OPERATIONS) {
+      ledgerMocks.chain.operations.add(operation);
+    }
+    ledgerMocks.chain.booted = true;
+    ledgerMocks.chain.authority = {
+      committee: [handoverAuthority],
+      threshold: 1,
+    };
 
     const account = await resumeAccountDeployment({
       ...resumeProps,
@@ -1014,14 +1173,18 @@ describe('resumeAccountDeployment', () => {
 
     expect(account.isActivated).toBe(true);
     expect(contractsMocks.submitTx).not.toHaveBeenCalled();
+    expect(ledgerMocks.MaintenanceUpdate.instances).toHaveLength(0);
   });
 
   it('rejects with AuthorityRetiredError when operations are missing and the authority is retired', async () => {
     ledgerMocks.chain.authority = { committee: [], threshold: 1 };
 
-    await expect(resumeAccountDeployment(resumeProps)).rejects.toThrow(
-      AuthorityRetiredError,
-    );
+    await expect(
+      resumeAccountDeployment({
+        ...resumeProps,
+        pending: { ...pendingDeployment, lockAccount: true },
+      }),
+    ).rejects.toThrow(AuthorityRetiredError);
     expect(contractsMocks.submitTx).not.toHaveBeenCalled();
     expect(contractsMocks.findDeployedContract).not.toHaveBeenCalled();
   });
@@ -1029,6 +1192,7 @@ describe('resumeAccountDeployment', () => {
   it.each([
     ['other verifier key pins', { verifierKeysDigest: '00'.repeat(32) }],
     ['no verifier key digest', { verifierKeysDigest: undefined }],
+    ['no handover authority', { handoverAuthority: undefined }],
   ])(
     'rejects a deployment recorded under %s before reading the chain or sending a wave',
     async (_case, recorded) => {
@@ -1107,5 +1271,87 @@ describe('accountWitnesses.held_coin', () => {
     expect(() =>
       accountWitnesses.held_coin(witnessContext(state), new Uint8Array([0xaa])),
     ).toThrow('held_coin witness: no coin for color aa in the local store');
+  });
+});
+
+describe('submitMaintenanceUpdate', () => {
+  const ledger = ledgerMocks as unknown as typeof Ledger;
+  const networkId = {
+    getNetworkId: () => 'test-network',
+  } as unknown as typeof NetworkId;
+  const signature = { tag: 'schnorr' as const, value: 'replace-signature' };
+  const replaceAt = (counter: bigint) =>
+    new ledgerMocks.MaintenanceUpdate(
+      'deployed-address',
+      [
+        new ledgerMocks.ReplaceAuthority(
+          new ledgerMocks.ContractMaintenanceAuthority(
+            [handoverAuthority],
+            1,
+            counter + 1n,
+          ),
+        ),
+      ],
+      counter,
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queryContractState.mockImplementation(providedState);
+    ledgerMocks.chain.reset();
+    ledgerMocks.MaintenanceUpdate.instances.length = 0;
+  });
+
+  it('submits the update with the signature at index 0 and resolves once the chain shows the advanced counter', async () => {
+    ledgerMocks.chain.lagReads = 2;
+    const update = replaceAt(0n);
+
+    await submitMaintenanceUpdate({
+      providers,
+      ledger,
+      address: 'deployed-address',
+      networkId,
+      update: update as unknown as Ledger.MaintenanceUpdate,
+      signature,
+      label: 'Maintenance authority rotation',
+      sleep,
+    });
+
+    expect(update.signature).toEqual({ index: 0n, signature });
+    expect(contractsMocks.submitTx).toHaveBeenCalledExactlyOnceWith(providers, {
+      unprovenTx: {
+        networkId: 'test-network',
+        intent: { kind: 'maintenance-intent', update },
+      },
+    });
+    expect(sleep).toHaveBeenCalledTimes(2);
+    await expect(
+      readMaintenanceAuthority({
+        providers,
+        ledger,
+        address: 'deployed-address',
+      }),
+    ).resolves.toMatchObject({ committee: [handoverAuthority], counter: 1n });
+  });
+
+  it('rejects an update that lands with a failing status, naming it, without waiting', async () => {
+    contractsMocks.submitTx.mockResolvedValueOnce({
+      status: 'FailEntirely',
+      txId: 'tx-id',
+    });
+
+    await expect(
+      submitMaintenanceUpdate({
+        providers,
+        ledger,
+        address: 'deployed-address',
+        networkId,
+        update: replaceAt(0n) as unknown as Ledger.MaintenanceUpdate,
+        signature,
+        label: 'Maintenance authority rotation',
+        sleep,
+      }),
+    ).rejects.toThrow('Maintenance authority rotation failed: "FailEntirely"');
+    expect(queryContractState).not.toHaveBeenCalled();
   });
 });
