@@ -14,7 +14,9 @@
  * modules the scripts they run with node and their tools' configuration
  * import. Each is resolved
  * in the lockfile as npm resolves it, from the importing package's directory
- * up, and closed over the dependencies of every entry reached. A root
+ * up, and closed over the dependencies of every entry reached, less the
+ * peers it marks optional: npm never installs those for it, so they reach
+ * the family only where something else depends on them. A root
  * override counts when it names one of those packages.
  */
 import ts from 'typescript';
@@ -28,6 +30,7 @@ interface LockEntry {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 }
 
 export interface Lockfile {
@@ -122,6 +125,14 @@ export const lockSignature = (
     );
     for (const field of FIELDS) {
       for (const dependency of Object.keys(entry[field] ?? {})) {
+        // An optional peer, such as the react-native a browser library
+        // supports, installs only for a package that depends on it.
+        if (
+          field === 'peerDependencies' &&
+          entry.peerDependenciesMeta?.[dependency]?.optional
+        ) {
+          continue;
+        }
         queue.push({ from: resolved, name: dependency });
       }
     }

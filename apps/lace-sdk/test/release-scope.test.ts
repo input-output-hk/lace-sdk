@@ -17,6 +17,7 @@ import {
   signatureChanges,
   type Lockfile,
 } from '../scripts/dependency-scope';
+import { reachedOwnSource } from '../scripts/reach.mjs';
 import { internalTermFindings } from '../scripts/release-notes-check';
 import {
   cleanTitle,
@@ -26,6 +27,7 @@ import {
   fragmentsOf,
   fragmentsSince,
   isBuildTargetUnchanged,
+  otherChannelSource,
   type NotesApi,
   parseFragment,
   pullRequestFragments,
@@ -79,6 +81,24 @@ describe('the dependencies the family reaches', () => {
     ]);
   });
 
+  it('follows a peer, but not one its entry marks optional', () => {
+    const withPeers = lock({
+      ...BASE.packages,
+      'node_modules/env-utils': {
+        version: '1.2.0',
+        peerDependencies: { react: '*', tslib: '^2.6.2' },
+        peerDependenciesMeta: { react: { optional: true } },
+      },
+    });
+    const signature = lockSignature(withPeers, [
+      { from: 'apps/lace-cardano-trezor', name: 'env-utils' },
+    ]);
+    expect([...signature.keys()].sort()).toEqual([
+      'node_modules/env-utils',
+      'node_modules/tslib',
+    ]);
+  });
+
   it('counts a lockfile change only where a reached entry differs', () => {
     const seeds = [{ from: 'apps/lace-sdk', name: 'rxjs' }];
     const reactBump = lock({
@@ -117,6 +137,38 @@ describe('the dependencies the family reaches', () => {
         lockSignature(BASE, seeds, { 'tslib@2': '2.8.1' }),
       ),
     ).toEqual(['overrides:tslib@2']);
+  });
+});
+
+describe("a channel's release", () => {
+  // The first call compiles both channels' builds, about 15 s alone and
+  // twice that beside the suite's other workers; later calls reuse them.
+  it(
+    'leaves out the SDK source only the other channel reaches',
+    { timeout: 120_000 },
+    () => {
+      const canaryOnly = otherChannelSource(['stable']);
+      expect(canaryOnly.has('apps/lace-sdk/src/experimental.canary.ts')).toBe(
+        true,
+      );
+      expect(canaryOnly.has('apps/lace-sdk/src/index.ts')).toBe(false);
+      expect(
+        otherChannelSource(['canary']).has('apps/lace-sdk/src/index.ts'),
+      ).toBe(false);
+    },
+  );
+
+  it('leaves out nothing for a release of both channels', () => {
+    expect(otherChannelSource(['canary', 'stable']).size).toBe(0);
+  });
+
+  it("finds the canary entries in the canary build's own source alone", () => {
+    const stable = reachedOwnSource('stable');
+    const canaryEntries = [...reachedOwnSource('canary')].filter(file =>
+      file.endsWith('.canary.ts'),
+    );
+    expect(canaryEntries.length).toBeGreaterThan(0);
+    for (const file of canaryEntries) expect(stable.has(file)).toBe(false);
   });
 });
 
@@ -694,9 +746,8 @@ describe('the public release notes', () => {
     );
     expect(cardano).not.toContain('@laceio/cardano-ledger');
     expect(cardano).not.toContain('npmjs.com/package/@laceio/sdk/');
-    // The docs' versions follow @laceio/sdk's: another package's stable
-    // release links the latest docs, the SDK's its own archive.
-    expect(cardano).toContain('Docs: https://sdk.lace.io/\n');
+    // Each package's stable release links its own docs archive.
+    expect(cardano).toContain('Docs: https://sdk.lace.io/cardano/v/0.1.2/');
     expect(
       renderPublicNotes({
         ...api,
@@ -1106,6 +1157,70 @@ describe.skipIf(!fs.existsSync(RELEASE_WORKFLOW))(
       // The private release's body, with its pull requests, is never read.
       expect(publish).not.toMatch(/gh release view[^\n]*--json body/);
       expect(publish).not.toContain('private-release-notes');
+    });
+  },
+);
+
+describe.skipIf(!fs.existsSync(RELEASE_WORKFLOW))(
+  'the release a dry run follows',
+  () => {
+    const workflow = fs.existsSync(RELEASE_WORKFLOW)
+      ? fs.readFileSync(RELEASE_WORKFLOW, 'utf8')
+      : '';
+    // The dry-run-tag job's `Choose the last package's tag` step, as bash
+    // runs it.
+    const step = workflow.slice(
+      workflow.indexOf("- name: Choose the last package's tag"),
+    );
+    const lines = step.slice(step.indexOf('run: |\n') + 'run: |\n'.length);
+    const script = lines
+      .split('\n')
+      .slice(
+        0,
+        lines.split('\n').findIndex(line => /^ {0,9}\S/.test(line)),
+      )
+      .map(line => line.slice(10))
+      .join('\n');
+
+    /** The step's output, after the legs in `tags` (index → tag) each recorded theirs. */
+    const follow = (tags: Record<number, string>) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-dry-run-tag-'));
+      try {
+        const directory = path.join(root, 'version-tags');
+        fs.mkdirSync(directory);
+        for (const [index, tag] of Object.entries(tags)) {
+          fs.writeFileSync(
+            path.join(directory, `version-${index}`),
+            `${tag}\n`,
+          );
+        }
+        const output = path.join(root, 'output');
+        fs.writeFileSync(output, '');
+        execFileSync('bash', ['-c', script], {
+          encoding: 'utf8',
+          env: { ...process.env, GITHUB_OUTPUT: output, RUNNER_TEMP: root },
+        });
+        return fs.readFileSync(output, 'utf8').trim();
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    it('follows the one package that changed', () => {
+      expect(follow({ 3: '@laceio/sdk@0.2.0' })).toBe('tag=@laceio/sdk@0.2.0');
+    });
+
+    it('follows the last package, in dependency order, of several that changed', () => {
+      expect(
+        follow({
+          0: '@laceio/cardano@0.1.2',
+          2: '@laceio/cardano-trezor@0.1.2',
+        }),
+      ).toBe('tag=@laceio/cardano-trezor@0.1.2');
+    });
+
+    it('follows no release when no package changed', () => {
+      expect(follow({})).toBe('tag=');
     });
   },
 );

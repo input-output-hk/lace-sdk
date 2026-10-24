@@ -44,7 +44,7 @@ const SCOPE_ARG_COUNT = 16;
  * the SHA-256 digest of the challenge, the only envelope the contract
  * admits for a spend grant.
  */
-const K256_GRANT_ENVELOPE = 0n;
+export const K256_GRANT_ENVELOPE = 0n;
 
 /**
  * The optional immediate caller pin as the contract's `Maybe<ContractAddress>`

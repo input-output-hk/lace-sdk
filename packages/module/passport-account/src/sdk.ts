@@ -42,8 +42,19 @@ export {
   granteePoint,
 } from './acc/grant-rules';
 export type { GrantCircuitScope } from './acc/grant-rules';
-export { loadGrantDerivation } from './acc/signing-loader';
+export { loadGrantDerivation, loadGrantSpend } from './acc/signing-loader';
 export type { GrantDerivation } from './acc/signing-loader';
+export { grantSpendAuthorisationArgs } from './acc/grant-spend-authorisation';
+export type { GrantSpendSignature } from './acc/grant-spend-authorisation';
+export type {
+  GrantShieldedWithdrawal,
+  GrantSpendChallenges,
+  GrantSpendCoin,
+  GrantSpendContext,
+  GrantSpendJubjubChallenge,
+  GrantUnshieldedWithdrawal,
+} from './acc/grant-spend-challenges';
+export type { GrantSpend, GrantSpendCall } from './acc/grant-spend';
 export { createPasskeySessionKeySource } from '@lace-lib/passkey';
 export type {
   CreatePasskeyKeySourceProps,

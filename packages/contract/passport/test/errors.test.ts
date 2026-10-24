@@ -25,6 +25,7 @@ import {
   GrantRevokedError,
   GrantRosterUnsettledError,
   GrantScopeInvalidError,
+  GrantSpendRefusedError,
   LastDeviceError,
   MaintenanceAuthorityMismatchError,
   MaintenanceUpdateRefusedError,
@@ -92,6 +93,7 @@ describe('passport errors', () => {
       'grant-issue-rejected',
     ],
     ['GrantRevokedError', GrantRevokedError, 'grant-revoked'],
+    ['GrantSpendRefusedError', GrantSpendRefusedError, 'grant-spend-refused'],
     [
       'GrantRevocationPendingError',
       GrantRevocationPendingError,

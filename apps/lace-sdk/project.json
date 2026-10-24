@@ -40,7 +40,14 @@
       "options": {
         "command": "vitest run --config=vitest.config.js --coverage && node test/check-stable-variants.mjs",
         "cwd": "{projectRoot}"
-      }
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "sharedGlobals",
+        "{workspaceRoot}/.github/workflows/sdk-release-version.yml",
+        "{workspaceRoot}/.github/workflows/sdk-release.yml"
+      ]
     },
     "lint": {}
   }

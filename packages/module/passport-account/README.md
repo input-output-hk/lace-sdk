@@ -598,6 +598,12 @@ registration under the roster key. Both entries are recorded with the
 pending deployment and appended to the inbox once the device is active,
 so the account keys are on chain before the creation completes.
 
+The deploy and each wave expire a minute after they are built, which is
+before the sponsor balances them. A sponsor can need setup first, such as
+the development sponsor's first wallet sync, so the flow awaits the
+sponsor's optional `ready` before building each of them, and that setup
+never counts against the expiry.
+
 ```mermaid
 sequenceDiagram
     participant A as Application
@@ -982,8 +988,10 @@ sets, without the agent ever holding the owner's key: which operations it
 may run, which token it may withdraw, the largest coin it may take, how
 much per call and in total, until when, and to which recipient, with an
 optional pin to the contract allowed to invoke it. The contract checks
-every limit on each call the grantee makes; building and submitting those
-calls is the agent's side, which this module does not implement. Why Lace
+every limit on each call the grantee makes; this module builds the circuit
+name, its arguments up to the signature and the challenge to sign, while
+reading the grant record, signing, proving and submitting stay with the
+agent. Why Lace
 adopts the contract's scoped grants on the jubjub arm, whose grantees may
 also be secp256k1 ECDSA keys, and what it holds back, is recorded in
 [ADR 69](../../../docs/adr/69-passport-account-scoped-grants.md). The
@@ -1212,7 +1220,10 @@ hostname, so a host without one must pass it before it can issue grants.
 
 `createDevSponsor` above is a development seam: it pays fees from a funded
 localnet wallet and is only ever appropriate for local development.
-Production wiring supplies its own `FeeSponsor` (see the seam table).
+Production wiring supplies its own `FeeSponsor` (see the seam table). The
+development sponsor starts and syncs its wallet on first use, which can take
+minutes on a public network; call its `ready()` when the host loads to start
+the sync early, so the first creation does not wait for it.
 
 `createDevDeposit({ seedHex, network, prover, proofServerUrl })` is its
 sender-side counterpart, for the localnet only: it refuses any network id
@@ -1357,7 +1368,9 @@ a transaction through the indexer's `transactions` query by hash.
   roster, which none of these is in, so in practice it means a new
   account.
 - **Grants spend on the agent's side.** The module issues, revokes, lists
-  and exports grants; it builds no grantee withdrawal. No rolling window
+  and exports grants, and builds the circuit name, its arguments up to the
+  signature and the challenge to sign; reading the grant record, signing,
+  proving and submitting stay with the agent. No rolling window
   can be set, since the contract reserves the window bounds.
 - **Enrolment is bound to a platform authenticator.** The passkey is created
   on the device in use and syncs through the platform credential manager.

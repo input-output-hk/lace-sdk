@@ -49,6 +49,7 @@ const sdkMocks = vi.hoisted(() => {
     start: vi.fn(async () => undefined),
     adoptTransaction: vi.fn(() => 'adopted-tx'),
     waitForSyncedState: vi.fn(async () => ({})),
+    stop: vi.fn(async () => undefined),
   };
   const init = vi.fn(async () => facade);
 
@@ -435,6 +436,66 @@ describe('createDevSponsor', () => {
     await stopped;
     expect(wallet.stop).toHaveBeenCalledTimes(1);
   });
+
+  it('ready resolves only once the wallet context is synced', async () => {
+    const synced = deferred<SponsorWalletContext>();
+    const { context } = walletContext();
+    const createWalletContext = vi.fn(async () => synced.promise);
+    const { config } = sponsorConfig(context, { createWalletContext });
+    const sponsor = createDevSponsor(config);
+    let isReady = false;
+
+    const ready = sponsor.ready().then(() => {
+      isReady = true;
+    });
+    await Promise.resolve();
+    expect(createWalletContext).toHaveBeenCalledOnce();
+    expect(isReady).toBe(false);
+
+    synced.resolve(context);
+    await ready;
+    expect(isReady).toBe(true);
+  });
+
+  it('balances with the wallet ready started, without starting another', async () => {
+    const { context, wallet } = walletContext();
+    const { config, createWalletContext } = sponsorConfig(context);
+    const sponsor = createDevSponsor(config);
+
+    await sponsor.ready();
+    await sponsor.ready();
+    await sponsor.balanceAndSign(new Uint8Array([1]));
+
+    expect(createWalletContext).toHaveBeenCalledTimes(1);
+    expect(wallet.balanceUnboundTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts the wallet afresh after a failed start', async () => {
+    const { context } = walletContext();
+    const createWalletContext = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('indexer unreachable'))
+      .mockResolvedValueOnce(context);
+    const { config } = sponsorConfig(context, { createWalletContext });
+    const sponsor = createDevSponsor(config);
+
+    await expect(sponsor.ready()).rejects.toThrow('indexer unreachable');
+    await expect(sponsor.balanceAndSign(new Uint8Array([1]))).resolves.toEqual(
+      new Uint8Array([7]),
+    );
+    expect(createWalletContext).toHaveBeenCalledTimes(2);
+  });
+
+  it('stop releases the wallet ready started', async () => {
+    const { context, wallet } = walletContext();
+    const { config } = sponsorConfig(context);
+    const sponsor = createDevSponsor(config);
+
+    await sponsor.ready();
+    await sponsor.stop();
+
+    expect(wallet.stop).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('createDevSponsorWalletContext', () => {
@@ -585,6 +646,28 @@ describe('createDevSponsorWalletContext', () => {
     await expect(createDevSponsorWalletContext(network)).rejects.toThrow(
       'The sponsor seed is not a valid HD wallet seed.',
     );
+  });
+
+  it('stops the started wallet when its sync fails, so a retry does not leave it running', async () => {
+    const failure = new Error('indexer unreachable');
+    sdkMocks.facade.waitForSyncedState.mockRejectedValueOnce(failure);
+
+    await expect(createDevSponsorWalletContext(network)).rejects.toBe(failure);
+    expect(sdkMocks.facade.stop).toHaveBeenCalledOnce();
+  });
+
+  it('rejects with the sync failure even when stopping the wallet also fails', async () => {
+    const failure = new Error('indexer unreachable');
+    sdkMocks.facade.waitForSyncedState.mockRejectedValueOnce(failure);
+    sdkMocks.facade.stop.mockRejectedValueOnce(new Error('already closed'));
+
+    await expect(createDevSponsorWalletContext(network)).rejects.toBe(failure);
+  });
+
+  it('does not stop a wallet that synced', async () => {
+    await createDevSponsorWalletContext(network);
+
+    expect(sdkMocks.facade.stop).not.toHaveBeenCalled();
   });
 
   it('rejects an out-of-bounds role key derivation', async () => {

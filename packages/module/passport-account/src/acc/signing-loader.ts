@@ -48,6 +48,14 @@ export const loadJubjubSigning = cachedLoad(async () =>
  */
 export const loadGrantDerivation = cachedLoad(async () => import('./grants'));
 
+/**
+ * Cached dynamic import of the grant spend preparation and challenge
+ * builders, which evaluate the contract module the same way: an agent
+ * that imports the SDK pays for the Midnight runtime only when it first
+ * prepares a spend.
+ */
+export const loadGrantSpend = cachedLoad(async () => import('./grant-spend'));
+
 /** The device entry derivation the signer checks a rotation's readers with. */
 export type DeviceEntryDerivation = typeof deviceReadersModule;
 

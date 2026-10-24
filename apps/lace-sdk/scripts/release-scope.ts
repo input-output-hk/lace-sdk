@@ -54,6 +54,7 @@ import {
   channelEntries,
   compilerOptions,
   packageDirectory,
+  reachedOwnSource,
   reachedWorkspaceFiles,
 } from './reach.mjs';
 import { internalTermFindings } from './release-notes-check.ts';
@@ -178,16 +179,24 @@ export const isShipped = (
     entry.endsWith('/') ? file.startsWith(entry) : file === entry,
   );
 
+/** The SDK's builds: a release of one channel ships that channel's alone. */
+type Channel = 'canary' | 'stable';
+const CHANNELS: readonly Channel[] = ['stable', 'canary'];
+
 /**
- * The workspace source the SDK's two builds and the Cardano packages reach,
- * or with a package's `directory`, what that package's build reaches,
- * repository-relative.
+ * The workspace source the SDK's builds of `channels` (both by default) and
+ * the Cardano packages reach, or with a package's `directory`, what that
+ * package's build reaches, repository-relative. The Cardano packages have
+ * one build, whatever the channel.
  */
-export const reachedFiles = (directory?: string): Set<string> =>
+export const reachedFiles = (
+  directory?: string,
+  channels: readonly Channel[] = CHANNELS,
+): Set<string> =>
   new Set(
     [
       ...(directory === undefined || directory === 'apps/lace-sdk'
-        ? (['stable', 'canary'] as const).flatMap(channel =>
+        ? channels.flatMap(channel =>
             reachedWorkspaceFiles(
               channelEntries(channel),
               compilerOptions(channel),
@@ -204,6 +213,29 @@ export const reachedFiles = (directory?: string): Set<string> =>
     ),
   );
 
+/**
+ * The SDK's own source that only the builds outside `channels` reach,
+ * repository-relative: none when `channels` are both. Its source otherwise
+ * ships whole, so a file neither build reaches still counts.
+ */
+export const otherChannelSource = (
+  channels: readonly Channel[],
+): Set<string> => {
+  const others = CHANNELS.filter(channel => !channels.includes(channel));
+  if (others.length === 0) return new Set();
+  const own = new Set(
+    channels.flatMap(channel => [...reachedOwnSource(channel)]),
+  );
+  return new Set(
+    others
+      .flatMap(channel => [...reachedOwnSource(channel)])
+      .filter(file => !own.has(file))
+      .map(file =>
+        path.relative(repositoryRoot, file).split(path.sep).join('/'),
+      ),
+  );
+};
+
 /** The family's own packages: their manifests are part of what ships. */
 const FAMILY_APPS = ['apps/lace-sdk', ...CARDANO_APPS];
 
@@ -211,23 +243,35 @@ const FAMILY_APPS = ['apps/lace-sdk', ...CARDANO_APPS];
  * What a release covers: the workspace source its builds reach, the paths
  * that ship as they are, and the family packages whose manifests, sources
  * and build tools seed its third-party dependencies.
+ * A release of one channel excludes the SDK source only the other
+ * channel's build reaches.
  */
 interface ReleaseScope {
   reached: ReadonlySet<string>;
   paths: readonly string[];
   apps: readonly string[];
+  excluded?: ReadonlySet<string>;
 }
 
 /** The whole family's scope: every package releases together. */
-const familyScope = (): ReleaseScope => ({
-  reached: reachedFiles(),
+const familyScope = (
+  channels: readonly Channel[] = CHANNELS,
+): ReleaseScope => ({
+  reached: reachedFiles(undefined, channels),
+  excluded: otherChannelSource(channels),
   paths: SHIPPING_PATHS,
   apps: FAMILY_APPS,
 });
 
 /** One family package's scope, from its directory. */
-const packageScope = (directory: string): ReleaseScope => ({
-  reached: reachedFiles(directory),
+const packageScope = (
+  directory: string,
+  channels: readonly Channel[] = CHANNELS,
+): ReleaseScope => ({
+  reached: reachedFiles(directory, channels),
+  ...(directory === 'apps/lace-sdk' && {
+    excluded: otherChannelSource(channels),
+  }),
   paths: shippingPathsOf(directory),
   apps: [directory],
 });
@@ -491,11 +535,12 @@ export const shippedChanges = (
   ref: string,
   scope: ReleaseScope = familyScope(),
 ): string[] => {
-  const { reached, paths } = scope;
+  const { reached, paths, excluded } = scope;
   const files = changedFiles(ref, 'HEAD');
   return [
     ...files.filter(
       file =>
+        !excluded?.has(file) &&
         isShipped(file, reached, paths) &&
         !isBuildTargetUnchanged(
           file,
@@ -1044,13 +1089,18 @@ export const renderPublicNotes = (
   const version = api.version ?? '';
   const isCanary = api.channel === 'canary';
   const released = releasedFragments(fragments, api.channel);
-  // The docs' versions follow @laceio/sdk's, so only its stable releases have
-  // an archive of their own; another package's release links the latest docs.
+  // Each package's stable release has an archive of its docs (ADR 67):
+  // @laceio/sdk's and the family's the whole site at /v/X.Y.Z/, another
+  // package's its own pages at /<package>/v/X.Y.Z/. Each leads to the latest
+  // docs while the release is the package's latest.
   const docs = isCanary
     ? 'https://sdk.lace.io/canary/'
     : api.package === undefined || api.package === '@laceio/sdk'
     ? `https://sdk.lace.io/v/${version}/`
-    : 'https://sdk.lace.io/';
+    : `https://sdk.lace.io/${api.package.replace(
+        '@laceio/',
+        '',
+      )}/v/${version}/`;
   const packages = api.package ? [api.package] : RELEASED_PACKAGES;
   const lines = [
     `## ${api.tag ?? `lace-sdk@${version}`}`,
@@ -1091,7 +1141,7 @@ export const shippedPullRequests = (
   ref: string,
   scope: ReleaseScope = familyScope(),
 ): ShippedChange[] => {
-  const { reached, paths } = scope;
+  const { reached, paths, excluded } = scope;
   return firstParentCommits(ref)
     .map(commit => {
       const { parent } = commit;
@@ -1099,6 +1149,7 @@ export const shippedPullRequests = (
       const code = [
         ...commit.files.filter(
           file =>
+            !excluded?.has(file) &&
             isShipped(file, reached, paths) &&
             !(
               parent &&
@@ -1149,6 +1200,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       api: { type: 'string' },
       out: { type: 'string' },
       'first-canary': { type: 'boolean' },
+      channel: { type: 'string' },
       dependencies: { type: 'string' },
       'since-dependencies': { type: 'string' },
       package: { type: 'string' },
@@ -1164,11 +1216,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       command ?? '',
     ) ||
     (command === 'public-notes' && !values.api) ||
-    (command === 'fragment-check' && !ref)
+    (command === 'fragment-check' && !ref) ||
+    (values.channel !== undefined &&
+      !CHANNELS.includes(values.channel as Channel))
   ) {
     // eslint-disable-next-line no-console -- usage
     console.error(
-      'usage: node scripts/release-scope.ts changed [<ref>] [--package <name>] | notes [<ref>] [--package <name>] [--api <json>] [--first-canary] [--out <file>] | public-notes [<ref>] --api <json> [--out <file>] | fragment-check <base>',
+      'usage: node scripts/release-scope.ts changed [<ref>] [--package <name>] [--channel stable|canary] | notes [<ref>] [--package <name>] [--channel stable|canary] [--api <json>] [--first-canary] [--out <file>] | public-notes [<ref>] --api <json> [--out <file>] | fragment-check <base>',
     );
     process.exit(2);
   }
@@ -1196,6 +1250,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (values.package && !member) {
     throw new Error(`${values.package} is not a package of the SDK's family`);
   }
+  // With --channel, what that channel's build reaches: a canary-only change
+  // ships no stable release, and a stable release's notes leave it out.
+  // Without, both builds, as the changelog check counts them.
+  const channels = values.channel ? [values.channel as Channel] : undefined;
   const publicApi = command === 'public-notes' ? readApi() : undefined;
   const result = publicApi
     ? renderPublicNotes(
@@ -1212,14 +1270,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           ? []
           : member
           ? [
-              ...shippedChanges(ref, packageScope(member.directory)),
+              ...shippedChanges(ref, packageScope(member.directory, channels)),
               ...dependencyLineChanges(
                 path.join(repositoryRoot, member.directory),
                 values['since-dependencies'],
                 values.dependencies,
               ),
             ]
-          : shippedChanges(ref);
+          : shippedChanges(ref, familyScope(channels));
         const isShipping = ref === undefined || files.length > 0;
         return (
           JSON.stringify(
@@ -1239,8 +1297,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         changes: !ref
           ? []
           : member
-          ? shippedPullRequests(ref, packageScope(member.directory))
-          : shippedPullRequests(ref),
+          ? shippedPullRequests(ref, packageScope(member.directory, channels))
+          : shippedPullRequests(ref, familyScope(channels)),
         api: readApi(),
         fragments: fragmentsOf(fragmentsSince(ref), member?.name),
         firstCanary: values['first-canary'] === true,

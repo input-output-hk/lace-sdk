@@ -20,6 +20,7 @@ describe('the experimental entry', () => {
     'GrantRevokedError',
     'GrantRosterUnsettledError',
     'GrantScopeInvalidError',
+    'GrantSpendRefusedError',
     'MaintenanceAuthorityMismatchError',
     'MaintenanceUpdateRefusedError',
     'MAX_GRANTS',
@@ -29,7 +30,10 @@ describe('the experimental entry', () => {
     'TokenColor',
     'TokenColorError',
     'exportPassportAgentPolicy',
+    'grantSpendAuthorisationArgs',
+    'loadPassportGrantSpendChallenges',
     'parsePassportAgentPolicy',
+    'preparePassportGrantSpend',
     'validateGrantScope',
   ])('exports %s', name => {
     expect(experimental).toHaveProperty(name);

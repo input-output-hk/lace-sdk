@@ -31,6 +31,7 @@ export {
   GrantRevokedError,
   GrantRosterUnsettledError,
   GrantScopeInvalidError,
+  GrantSpendRefusedError,
   LastDeviceError,
   MaintenanceAuthorityMismatchError,
   MaintenanceUpdateRefusedError,
@@ -62,3 +63,19 @@ export {
   PassportAgentPolicyInvalidError,
 } from './parse-passport-agent-policy';
 export type { PassportParsedAgentPolicy } from './parse-passport-agent-policy';
+export {
+  loadPassportGrantSpendChallenges,
+  preparePassportGrantSpend,
+} from './prepare-passport-grant-spend';
+export { grantSpendAuthorisationArgs } from '@lace-module/passport-account/sdk';
+export type {
+  GrantShieldedWithdrawal,
+  GrantSpend,
+  GrantSpendCall,
+  GrantSpendChallenges,
+  GrantSpendCoin,
+  GrantSpendContext,
+  GrantSpendJubjubChallenge,
+  GrantSpendSignature,
+  GrantUnshieldedWithdrawal,
+} from '@lace-module/passport-account/sdk';

@@ -228,6 +228,8 @@ export type DeployAccountProps = {
   randomBytes?: RandomBytes;
   /** Waits between chain polls; defaults to a real timer. */
   sleep?: Sleep;
+  /** Resolves once the fee sponsor can balance; see {@link SponsorReady}. */
+  sponsorReady?: SponsorReady;
 };
 
 export type ResumeAccountDeploymentProps = {
@@ -241,6 +243,8 @@ export type ResumeAccountDeploymentProps = {
   randomBytes?: RandomBytes;
   /** Waits between chain polls; defaults to a real timer. */
   sleep?: Sleep;
+  /** Resolves once the fee sponsor can balance; see {@link SponsorReady}. */
+  sponsorReady?: SponsorReady;
 };
 
 export type DeployedAccount = {
@@ -264,7 +268,22 @@ export type DeployedAccount = {
   activate: () => Promise<unknown>;
 };
 
-const transactionTtl = (): Date => new Date(Date.now() + DEPLOY_TX_TTL_MS);
+/**
+ * Resolves once the fee sponsor can balance without further setup. The
+ * deploy and every maintenance wave expire {@link DEPLOY_TX_TTL_MS} after
+ * they are built, and the sponsor balances them only after they are
+ * built and proven, so each one awaits it first: a sponsor still syncing
+ * its wallet would otherwise spend the expiry before it balances.
+ */
+type SponsorReady = () => Promise<void>;
+
+const noSponsorSetup: SponsorReady = async () => undefined;
+
+/** The expiry of a transaction built now, once the sponsor is ready. */
+const transactionTtl = async (sponsorReady: SponsorReady): Promise<Date> => {
+  await sponsorReady();
+  return new Date(Date.now() + DEPLOY_TX_TTL_MS);
+};
 
 const defaultRandomBytes: RandomBytes = length =>
   crypto.getRandomValues(new Uint8Array(length));
@@ -429,6 +448,8 @@ type SubmitMaintenanceUpdateProps = ChainStateProps & {
   label: string;
   /** Waits between chain polls; defaults to a real timer. */
   sleep?: Sleep;
+  /** Resolves once the fee sponsor can balance; see {@link SponsorReady}. */
+  sponsorReady?: SponsorReady;
 };
 
 /**
@@ -449,12 +470,13 @@ export const submitMaintenanceUpdate = async ({
   signature,
   label,
   sleep = defaultSleep,
+  sponsorReady = noSponsorSetup,
 }: SubmitMaintenanceUpdateProps): Promise<void> => {
   const transaction = ledger.Transaction.fromParts(
     networkId.getNetworkId(),
     undefined,
     undefined,
-    ledger.Intent.new(transactionTtl()).addMaintenanceUpdate(
+    ledger.Intent.new(await transactionTtl(sponsorReady)).addMaintenanceUpdate(
       update.addSignature(0n, signature),
     ),
   );
@@ -478,6 +500,7 @@ type InstallWavesProps = ChainStateProps & {
   /** The committee the wave that replaces the authority installs. */
   successor: readonly MaintenanceVerifyingKey[];
   sleep: Sleep;
+  sponsorReady: SponsorReady;
 };
 
 /**
@@ -528,6 +551,7 @@ const installWaves = async ({
   authorityKey,
   successor,
   sleep,
+  sponsorReady,
 }: InstallWavesProps): Promise<void> => {
   const chain = { providers, ledger, address };
   for (const [index, wave] of waves.entries()) {
@@ -558,6 +582,7 @@ const installWaves = async ({
       signature: ledger.signData(authorityKey, update.dataToSign),
       label: `Verifier key wave ${index + 1} of ${waves.length}`,
       sleep,
+      sponsorReady,
     });
   }
 };
@@ -682,6 +707,8 @@ const toDeployedState = ({
  * `onDeployed` is called between the deploy and the first update with
  * what a retry needs ({@link PendingDeployment}), so an interruption
  * leaves a deployment {@link resumeAccountDeployment} can finish.
+ * The deploy and every wave are built only once `sponsorReady`
+ * resolves, so a sponsor's setup never runs down their expiry.
  *
  * The maintenance authority's signing key is total custody: it can
  * replace any operation's verifier key and release the account's assets
@@ -710,6 +737,7 @@ export const deployAccount = async ({
   onDeployed,
   randomBytes = defaultRandomBytes,
   sleep = defaultSleep,
+  sponsorReady = noSponsorSetup,
 }: DeployAccountProps): Promise<DeployedAccount> => {
   const [contracts, ledger, networkId, CompiledContract] =
     await importChainModules();
@@ -765,7 +793,7 @@ export const deployAccount = async ({
     networkId.getNetworkId(),
     undefined,
     undefined,
-    ledger.Intent.new(transactionTtl()).addDeploy(deploy),
+    ledger.Intent.new(await transactionTtl(sponsorReady)).addDeploy(deploy),
   );
   assertSubmitted(
     'Account deploy',
@@ -792,6 +820,7 @@ export const deployAccount = async ({
     authorityKey,
     successor: successorOf({ lockAccount, handoverAuthority }),
     sleep,
+    sponsorReady,
   });
 
   return toDeployedAccount({
@@ -878,6 +907,7 @@ export const resumeAccountDeployment = async ({
   pending,
   randomBytes = defaultRandomBytes,
   sleep = defaultSleep,
+  sponsorReady = noSponsorSetup,
 }: ResumeAccountDeploymentProps): Promise<DeployedAccount> => {
   if (pending.verifierKeysDigest !== (await deployedVerifierKeysDigest())) {
     throw new CreationArtefactMismatchError(
@@ -929,6 +959,7 @@ export const resumeAccountDeployment = async ({
       authorityKey: pending.authorityKey,
       successor: successorOf(pending),
       sleep,
+      sponsorReady,
     });
   }
 

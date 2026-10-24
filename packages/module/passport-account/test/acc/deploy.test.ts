@@ -6,7 +6,7 @@ import {
   MaintenanceAuthorityMismatchError,
 } from '@lace-contract/passport';
 import { HexBytes } from '@lace-lib/util';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { expectedVk, pureCircuits } from '../../src/acc/acc-module';
 import {
@@ -17,6 +17,7 @@ import {
   submitMaintenanceUpdate,
 } from '../../src/acc/deploy';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
+import { createDevSponsor } from '../../src/infra/dev-sponsor';
 
 import type * as AccModule from '../../src/acc/acc-module';
 import type {
@@ -223,7 +224,7 @@ const ledgerMocks = vi.hoisted(() => {
   }
 
   const Intent = {
-    new: vi.fn(() => ({
+    new: vi.fn((_ttl: Date) => ({
       addDeploy: (deploy: unknown) => ({ kind: 'deploy-intent', deploy }),
       addMaintenanceUpdate: (update: unknown) => ({
         kind: 'maintenance-intent',
@@ -462,6 +463,64 @@ const replacements = (
 
 const verifierBytesOf = (operations: string[]): number =>
   operations.reduce((total, operation) => total + sizeOf(operation), 0);
+
+const submitToChain = contractsMocks.submitTx.getMockImplementation()!;
+
+/** The deploy and wave expiry the node enforces, in milliseconds. */
+const DEPLOY_TX_TTL_MS = 60_000;
+/** How long the slow sponsor's first wallet sync takes: past the expiry. */
+const SPONSOR_SYNC_MS = DEPLOY_TX_TTL_MS + 1000;
+
+/**
+ * A development sponsor whose wallet takes {@link SPONSOR_SYNC_MS} to sync
+ * on first use, over a frozen clock that only the sync advances.
+ */
+const slowDevSponsor = () => {
+  const wallet = {
+    estimateTransactionFee: vi.fn(async () => 1n),
+    balanceUnboundTransaction: vi.fn(async () => 'recipe'),
+    signRecipe: vi.fn(async () => 'signed-recipe'),
+    finalizeRecipe: vi.fn(async () => ({ serialize: () => new Uint8Array() })),
+    stop: vi.fn(async () => undefined),
+  };
+  const createWalletContext = vi.fn(async () => {
+    vi.setSystemTime(Date.now() + SPONSOR_SYNC_MS);
+    return {
+      wallet,
+      signSegment: async () => 'signature',
+      adoptUnbalanced: () => 'adopted-tx',
+    };
+  });
+  const sponsor = createDevSponsor({
+    seedHex: 'ab'.repeat(32),
+    networkId: 'undeployed',
+    indexerUrl: 'http://localhost:8088/api/v4/graphql',
+    indexerWsUrl: 'ws://localhost:8088/api/v4/graphql/ws',
+    nodeUrl: 'http://localhost:9944',
+    proofServerUrl: 'http://localhost:6300',
+    createWalletContext,
+  });
+  return { sponsor, createWalletContext };
+};
+
+/**
+ * Submission through a sponsor, as the node sees it: the sponsor balances
+ * the transaction, then the node refuses it once its expiry has passed.
+ */
+const submitThroughSponsor =
+  (sponsor: { balanceAndSign: (tx: Uint8Array) => Promise<Uint8Array> }) =>
+  async (
+    _providers: unknown,
+    { unprovenTx }: { unprovenTx: { intent: { kind: string } } },
+  ) => {
+    const ttl = ledgerMocks.Intent.new.mock.calls.at(-1)?.[0];
+    await sponsor.balanceAndSign(new Uint8Array([1]));
+    if (!ttl || ttl.getTime() <= Date.now()) {
+      throw new Error('IntentTtlExpired (228)');
+    }
+    ledgerMocks.chain.apply(unprovenTx.intent);
+    return { status: 'SucceedEntirely', txId: 'tx-id' };
+  };
 
 describe('deployAccount', () => {
   beforeEach(() => {
@@ -884,6 +943,63 @@ describe('deployAccount', () => {
       "The verifier key of 'deposit_unshielded' is not a midnight:verifier-key[v7]: key",
     );
     expect(contractsMocks.submitTx).not.toHaveBeenCalled();
+  });
+
+  describe('with a sponsor whose first sync outlasts the transaction expiry', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(1_000_000));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      contractsMocks.submitTx.mockImplementation(submitToChain);
+    });
+
+    it('deploys on the first attempt once the sponsor is ready, stamping every expiry after the sync', async () => {
+      const { sponsor, createWalletContext } = slowDevSponsor();
+      contractsMocks.submitTx.mockImplementation(submitThroughSponsor(sponsor));
+
+      const account = await deployAccount({
+        ...deployProps,
+        sponsorReady: async () => sponsor.ready(),
+      });
+
+      expect(account.address).toBe('deployed-address');
+      expect(createWalletContext).toHaveBeenCalledOnce();
+      expect(contractsMocks.submitTx).toHaveBeenCalledTimes(4);
+      const syncedAt = 1_000_000 + SPONSOR_SYNC_MS;
+      expect(
+        ledgerMocks.Intent.new.mock.calls.map(([ttl]) => ttl.getTime()),
+      ).toEqual(Array.from({ length: 4 }, () => syncedAt + DEPLOY_TX_TTL_MS));
+    });
+
+    it('lets the deploy expire while the sponsor syncs when its readiness is not awaited', async () => {
+      const { sponsor } = slowDevSponsor();
+      contractsMocks.submitTx.mockImplementation(submitThroughSponsor(sponsor));
+
+      await expect(deployAccount(deployProps)).rejects.toThrow(
+        'IntentTtlExpired (228)',
+      );
+      expect(onDeployed).not.toHaveBeenCalled();
+    });
+
+    it('builds every resumed wave once the sponsor is ready', async () => {
+      const { sponsor } = slowDevSponsor();
+      contractsMocks.submitTx.mockImplementation(submitThroughSponsor(sponsor));
+      ledgerMocks.chain.operations.clear();
+      for (const operation of DEPLOY_WAVE) {
+        ledgerMocks.chain.operations.add(operation);
+      }
+
+      await resumeAccountDeployment({
+        ...resumeProps,
+        sponsorReady: async () => sponsor.ready(),
+      });
+
+      expect(contractsMocks.submitTx).toHaveBeenCalledTimes(3);
+      expect([...ledgerMocks.chain.operations]).toEqual(DEPLOYED_OPERATIONS);
+    });
   });
 });
 

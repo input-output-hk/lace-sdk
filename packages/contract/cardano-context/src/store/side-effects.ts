@@ -6,6 +6,7 @@ import { retryBackoff } from 'backoff-rxjs';
 import {
   bufferTime,
   catchError,
+  defer,
   distinct,
   distinctUntilChanged,
   EMPTY,
@@ -16,9 +17,11 @@ import {
   merge,
   mergeMap,
   of,
+  repeat,
   switchMap,
   take,
   tap,
+  timer,
   withLatestFrom,
 } from 'rxjs';
 
@@ -78,6 +81,7 @@ import type { Observable } from 'rxjs';
 
 const UPDATE_METADATA_BUFFER_TIME = Milliseconds(200);
 const TRACK_ACCOUNT_ACTIVITIES_DEBOUNCE_TIME = Milliseconds(2000);
+const PROTOCOL_PARAMETERS_RECOVERY_INTERVAL = Milliseconds(30000);
 
 const unwrapOrThrowError = <T, E extends Error>(result: Result<T, E>): T => {
   if (result.isErr()) throw result.unwrapErr();
@@ -188,9 +192,9 @@ export const trackTokenMetadata =
  *
  * Transient provider errors are retried with exponential backoff. After
  * exhaustion a failure keyed by `CardanoProtocolParametersFailureId(network)`
- * is surfaced only when no cached parameters exist for the active network;
- * otherwise the failure is silent and the next chainId change to this network
- * naturally re-triggers the fetch.
+ * is surfaced only when no cached parameters exist for the active network.
+ * While parameters are missing, retry after a delay so a temporary outage
+ * does not leave transaction building blocked until the worker restarts.
  */
 export const trackProtocolParameters: SideEffect = (
   _,
@@ -205,35 +209,51 @@ export const trackProtocolParameters: SideEffect = (
     switchMap(chainId => {
       const network = CardanoNetworkId(chainId.networkMagic);
       const failureId = CardanoProtocolParametersFailureId(network);
-      return getProtocolParameters({ chainId }).pipe(
-        map(unwrapOrThrowError),
-        retryBackoff(PROVIDER_REQUEST_RETRY_CONFIG),
-        mergeMap(protocolParameters =>
-          merge(
-            of(
-              actions.cardanoContext.setProtocolParameters({
-                network,
-                protocolParameters,
+      let hasFailureBeenReported = false;
+      let shouldRetryMissingParameters = false;
+      const request = () =>
+        getProtocolParameters({ chainId }).pipe(
+          map(unwrapOrThrowError),
+          retryBackoff(PROVIDER_REQUEST_RETRY_CONFIG),
+          mergeMap(protocolParameters => {
+            shouldRetryMissingParameters = false;
+            return merge(
+              of(
+                actions.cardanoContext.setProtocolParameters({
+                  network,
+                  protocolParameters,
+                }),
+              ),
+              of(failureId).pipe(
+                autoDismissFailureOnSuccess(selectFailureById$),
+              ),
+            );
+          }),
+          catchError(() =>
+            selectProtocolParameters$.pipe(
+              take(1),
+              mergeMap(existing => {
+                shouldRetryMissingParameters = !existing;
+                if (!shouldRetryMissingParameters || hasFailureBeenReported)
+                  return EMPTY;
+                hasFailureBeenReported = true;
+                return of(
+                  actions.failures.addFailure({
+                    failureId,
+                    message: 'sync.error.cardano-protocol-parameters-failed',
+                  }),
+                );
               }),
             ),
-            of(failureId).pipe(autoDismissFailureOnSuccess(selectFailureById$)),
           ),
-        ),
-        catchError(() =>
-          selectProtocolParameters$.pipe(
-            take(1),
-            mergeMap(existing =>
-              existing
-                ? EMPTY
-                : of(
-                    actions.failures.addFailure({
-                      failureId,
-                      message: 'sync.error.cardano-protocol-parameters-failed',
-                    }),
-                  ),
-            ),
-          ),
-        ),
+        );
+      return defer(request).pipe(
+        repeat({
+          delay: () =>
+            shouldRetryMissingParameters
+              ? timer(PROTOCOL_PARAMETERS_RECOVERY_INTERVAL)
+              : EMPTY,
+        }),
       );
     }),
   );

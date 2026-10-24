@@ -32,7 +32,7 @@
   ],
   "dependencies": {
     "@cardano-foundation/ledgerjs-hw-app-cardano": "8.0.0",
-    "@laceio/cardano": "^0.1.1",
+    "@laceio/cardano": "0.1.1",
     "@ledgerhq/hw-transport": "6.35.5",
     "@ledgerhq/hw-transport-node-hid-noevents": "6.36.0",
     "@ledgerhq/hw-transport-webusb": "6.35.0",

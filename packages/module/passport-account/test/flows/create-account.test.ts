@@ -287,6 +287,7 @@ describe('createAccount', () => {
       encPublicKey,
       lockAccount: true,
       handoverAuthority: authority,
+      sponsorReady: expect.any(Function) as unknown,
       onDeployed: expect.any(Function) as unknown,
     });
     expect(mocks.resumeAccountDeployment).not.toHaveBeenCalled();
@@ -313,6 +314,51 @@ describe('createAccount', () => {
     expect(encryptionKey.createKeys.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.deployAccount.mock.invocationCallOrder[0],
     );
+  });
+
+  it('hands the deploy the sponsor readiness to await before building each transaction', async () => {
+    const { context, sponsor } = createContext();
+    const ready = vi.fn(async () => undefined);
+    context.seams.passportSponsor = { ...sponsor, ready };
+    mocks.deployAccount.mockImplementation(
+      async ({
+        onDeployed,
+        sponsorReady,
+      }: {
+        onDeployed: OnDeployed;
+        sponsorReady: () => Promise<void>;
+      }) => {
+        expect(ready).not.toHaveBeenCalled();
+        await sponsorReady();
+        await onDeployed(accountAddress, deploymentProgress);
+        return deployedAccount();
+      },
+    );
+
+    await createAccount({ lockAccount: true }, context);
+
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
+  it('builds at once for a sponsor that needs no setup', async () => {
+    const { context } = createContext();
+    mocks.deployAccount.mockImplementation(
+      async ({
+        onDeployed,
+        sponsorReady,
+      }: {
+        onDeployed: OnDeployed;
+        sponsorReady: () => Promise<void>;
+      }) => {
+        await expect(sponsorReady()).resolves.toBeUndefined();
+        await onDeployed(accountAddress, deploymentProgress);
+        return deployedAccount();
+      },
+    );
+
+    await expect(
+      createAccount({ lockAccount: true }, context),
+    ).resolves.toMatchObject({ account: readyAccount });
   });
 
   it('appends this device envelope and registration once active, one gated call each', async () => {
@@ -622,12 +668,31 @@ describe('createAccount', () => {
         authoriser,
         address: accountAddress,
         pending: pendingDeployment,
+        sponsorReady: expect.any(Function) as unknown,
       });
       expect(mocks.deployAccount).not.toHaveBeenCalled();
       expect(encryptionKey.createKeys).not.toHaveBeenCalled();
       expect(activate).toHaveBeenCalledOnce();
       expect(mocks.submitAccountCall).toHaveBeenCalledTimes(2);
       await expect(accountRecords.read()).resolves.toEqual(expectedRecord());
+    });
+
+    it('hands the resumed waves the sponsor readiness', async () => {
+      const { context, sponsor } = createContext({
+        stored: storedPendingRecord,
+      });
+      const ready = vi.fn(async () => undefined);
+      context.seams.passportSponsor = { ...sponsor, ready };
+      mocks.resumeAccountDeployment.mockImplementation(
+        async ({ sponsorReady }: { sponsorReady: () => Promise<void> }) => {
+          await sponsorReady();
+          return deployedAccount();
+        },
+      );
+
+      await createAccount({ lockAccount: true }, context);
+
+      expect(ready).toHaveBeenCalledOnce();
     });
 
     it('refuses a request under another lock choice than the recorded one before any wave, naming the recorded choice', async () => {

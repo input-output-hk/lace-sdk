@@ -31,7 +31,7 @@
     "NOTICE"
   ],
   "dependencies": {
-    "@laceio/cardano": "^0.1.1",
+    "@laceio/cardano": "0.1.1",
     "@trezor/connect": "9.4.0",
     "@trezor/connect-web": "9.4.0",
     "lodash": "^4.17.21",

@@ -47,6 +47,31 @@ export const channelEntries = channel =>
   );
 
 /**
+ * The SDK's own source files a build channel reaches from its entries, as
+ * real paths. reachedWorkspaceFiles collects the workspace packages' source
+ * alone; the SDK's own counts whole (release-scope.ts), less what only the
+ * other channel's build reaches.
+ */
+const ownSource = new Map();
+export const reachedOwnSource = channel => {
+  // One program per channel: the source does not change within a run.
+  if (!ownSource.has(channel)) {
+    const source = path.join(packageDirectory, 'src') + path.sep;
+    ownSource.set(
+      channel,
+      new Set(
+        ts
+          .createProgram(channelEntries(channel), compilerOptions(channel))
+          .getSourceFiles()
+          .map(file => fs.realpathSync(file.fileName))
+          .filter(file => file.startsWith(source)),
+      ),
+    );
+  }
+  return ownSource.get(channel);
+};
+
+/**
  * The workspace source files reached from `roots`, plus the augmentations of
  * the packages reached, as real paths. Files under node_modules are excluded:
  * the compiler reaches workspace packages through their node_modules symlinks

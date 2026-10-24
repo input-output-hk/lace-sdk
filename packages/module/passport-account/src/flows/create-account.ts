@@ -103,7 +103,8 @@ type Deployment = { deployed: DeployedAccount; pending: PendingDeployment };
  * deployment, with this device's envelope and registration, as soon as
  * the deploy lands so an interruption can be resumed; or the remaining
  * waves of a recorded one, with the key entries and the handover
- * authority it recorded.
+ * authority it recorded. Both wait for the fee sponsor to be ready
+ * before building each transaction.
  */
 const deploy = async ({
   providers,
@@ -112,7 +113,13 @@ const deploy = async ({
   local,
   context: { seams, accountRecords },
 }: DeploymentProps): Promise<Deployment> => {
-  const { passportAuthoriser, passportEncryptionKey, passportNetwork } = seams;
+  const {
+    passportAuthoriser,
+    passportEncryptionKey,
+    passportNetwork,
+    passportSponsor,
+  } = seams;
+  const sponsorReady = async () => passportSponsor.ready?.();
   if (pending) {
     return {
       deployed: await resumeAccountDeployment({
@@ -120,6 +127,7 @@ const deploy = async ({
         authoriser: passportAuthoriser,
         address: pending.address,
         pending: pending.deployment,
+        sponsorReady,
       }),
       pending: pending.deployment,
     };
@@ -138,6 +146,7 @@ const deploy = async ({
     encPublicKey: keys.encKey,
     lockAccount,
     handoverAuthority: keys.authority,
+    sponsorReady,
     onDeployed: async (address, deployment) => {
       progress.recorded = { ...deployment, keyEntries };
       await accountRecords.write({

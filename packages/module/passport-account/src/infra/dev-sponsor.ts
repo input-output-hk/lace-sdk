@@ -84,21 +84,24 @@ export type DevSponsorConfig = {
 
 /**
  * A {@link FeeSponsor} that can also release the wallet it lazily started.
+ * `ready` starts the wallet and resolves once it is synced.
  */
 export type DevSponsor = FeeSponsor & {
+  ready(): Promise<void>;
   stop(): Promise<void>;
 };
 
 /**
  * The development wallet's balancing seam: balances a transaction in the
- * given token kinds, signs and finalizes it, and releases the wallet it
- * lazily started on stop.
+ * given token kinds, signs and finalizes it, starts and syncs the wallet
+ * on ready, and releases the wallet it lazily started on stop.
  */
 export type DevWalletBalancer = {
   balanceAndSign(
     unbalancedTx: Uint8Array,
     tokenKinds: DevTokenKind[],
   ): Promise<Uint8Array>;
+  ready(): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -164,7 +167,9 @@ const noopTxHistoryStorage = {
  * ledger version's key objects from the seeds itself, so the sponsor holds
  * none of its own. The context is handed out only once all three wallets
  * are synced, so the facade has settled on the chain's protocol version
- * before it adopts the first transaction. The heavy wallet packages load
+ * before it adopts the first transaction. A start or sync that fails
+ * stops the facade before rejecting, so a retry never leaves an earlier
+ * one syncing beside it. The heavy wallet packages load
  * lazily so platforms that inject their own context never pay for them.
  */
 export const createDevSponsorWalletContext = async (
@@ -248,8 +253,13 @@ export const createDevSponsorWalletContext = async (
       ).startWithSeed(seeds.dust),
   } as unknown as FacadeInitParams);
 
-  await wallet.start(seeds);
-  await wallet.waitForSyncedState();
+  try {
+    await wallet.start(seeds);
+    await wallet.waitForSyncedState();
+  } catch (error) {
+    await wallet.stop().catch(() => undefined);
+    throw error;
+  }
 
   return {
     wallet,
@@ -261,7 +271,9 @@ export const createDevSponsorWalletContext = async (
 /**
  * Balances transactions from a funded development wallet in the token
  * kinds each call names, signs, finalizes, and returns the finalized
- * transaction bytes. The wallet starts lazily on the first call.
+ * transaction bytes. The wallet starts lazily on the first call, or on
+ * `ready`, which resolves once it is synced. A start that fails is not
+ * kept, so the next call starts the wallet afresh.
  *
  * A transient dust rejection is retried until the wallet's dust view
  * catches up: each pass first polls the fee estimate, then balances, and
@@ -286,6 +298,16 @@ export const createDevWalletBalancer = (
     const result = queue.then(job);
     queue = result.catch(() => undefined);
     return result;
+  };
+
+  const walletContext = async (): Promise<SponsorWalletContext> => {
+    if (contextPromise) return contextPromise;
+    const started = createWalletContext(config).catch((error: unknown) => {
+      if (contextPromise === started) contextPromise = undefined;
+      throw error;
+    });
+    contextPromise = started;
+    return started;
   };
 
   const balanceWithDustBudget = async (
@@ -315,8 +337,7 @@ export const createDevWalletBalancer = (
     unbalancedTx: Uint8Array,
     tokenKinds: DevTokenKind[],
   ): Promise<Uint8Array> => {
-    contextPromise ??= createWalletContext(config);
-    const context = await contextPromise;
+    const context = await walletContext();
     const tx = context.adoptUnbalanced(unbalancedTx);
     const recipe = await balanceWithDustBudget(context, tx, tokenKinds);
     const signed = await context.wallet.signRecipe(recipe, context.signSegment);
@@ -330,6 +351,9 @@ export const createDevWalletBalancer = (
       // wallet's own dust because the wallet's dust view only advances
       // after the previous transaction lands.
       enqueue(async () => balanceAndSignOnce(unbalancedTx, tokenKinds)),
+    ready: async () => {
+      await walletContext();
+    },
     stop: async () =>
       enqueue(async () => {
         if (!contextPromise) return;
@@ -345,13 +369,16 @@ export const createDevWalletBalancer = (
  * A development {@link FeeSponsor} over a funded Midnight wallet. Balances
  * ONLY dust into the transaction (the user's tokens are never touched),
  * signs, finalizes, and returns the finalized transaction bytes, with the
- * dust retry of {@link createDevWalletBalancer}.
+ * dust retry of {@link createDevWalletBalancer}. Its first sync can take
+ * minutes on a public network, so `ready` may be called when the host
+ * loads to start it before the first flow needs it.
  */
 export const createDevSponsor = (config: DevSponsorConfig): DevSponsor => {
   const balancer = createDevWalletBalancer(config);
   return {
     balanceAndSign: async unbalancedTx =>
       balancer.balanceAndSign(unbalancedTx, ['dust']),
+    ready: async () => balancer.ready(),
     stop: async () => balancer.stop(),
   };
 };

@@ -493,9 +493,16 @@ export interface PassportEncryptionKey {
 /**
  * Sponsors the transaction fee for a Passport account operation so the
  * user can transact without holding tokens.
+ *
+ * `ready`, when given, resolves once the sponsor can balance without
+ * further setup, such as syncing the wallet that pays the fees. A flow
+ * awaits it before it builds a transaction whose expiry starts when it is
+ * built, so setup time never counts against that expiry. Calling it ahead
+ * of the first flow starts that setup early.
  */
 export interface FeeSponsor {
   balanceAndSign: (unbalancedTx: Uint8Array) => Promise<Uint8Array>;
+  ready?: () => Promise<void>;
 }
 
 /**

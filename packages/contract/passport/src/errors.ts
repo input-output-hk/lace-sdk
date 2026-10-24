@@ -402,6 +402,23 @@ export class GrantRevocationPendingError extends CustomError {
 }
 
 /**
+ * Thrown when an agent prepares a spend its grant does not allow: an
+ * operation outside the grant's scope, an amount above the per-call cap
+ * or past the cumulative cap, a recipient the grant's pin does not admit,
+ * a coin of another colour or above the grant's coin bound, or a policy
+ * whose grant id does not derive from its own fields. Raised before
+ * anything is signed, so the agent learns it before it submits a call
+ * the contract would refuse.
+ */
+export class GrantSpendRefusedError extends CustomError {
+  public readonly code = 'grant-spend-refused' as const;
+
+  public constructor(message = 'The grant does not allow this spend.') {
+    super(message);
+  }
+}
+
+/**
  * Thrown when a grant is requested by a host that runs under no relying
  * party id. Every grant is bound to the origin of the host that issued it
  * through the grant id, so without one there is no id to issue under.
