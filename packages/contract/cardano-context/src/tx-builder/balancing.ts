@@ -18,10 +18,8 @@ import type {
 
 const MAX_BALANCE_ITERATIONS = 20;
 
-// Fee-correction fixpoint bound. The correction lowers the fee toward the true
-// minimum over the final shipped body; for the cNIGHT designation tx (the sole
-// Plutus consumer) the collateral/change coin fields sit far from any CBOR
-// width boundary, so it converges in <=3 steps. The bound is a runaway guard.
+// Runaway guard rather than a proven step count: the fee descent is not
+// monotone in body size.
 const MAX_FEE_CORRECTION_ITERATIONS = 5;
 
 const BALANCE_EXHAUSTED_MESSAGE = 'Failed to balance transaction';
@@ -552,10 +550,22 @@ export const correctFeeAfterEvaluation = ({
     iteration < MAX_FEE_CORRECTION_ITERATIONS && priced.requiredFee < fee;
     iteration++
   ) {
-    const candidateFee = priced.requiredFee;
-    const candidatePriced = priceAt(candidateFee);
-    // The candidate fee must cover the body priced at that fee; otherwise keep
-    // the last fee that did (guards a coin-width straddle across the step).
+    let candidateFee = priced.requiredFee;
+    let candidatePriced = priceAt(candidateFee);
+    // Two things grow the body as the fee falls: the collateral shape is
+    // fee-derived, and a refunded saving widens the change coin's CBOR width.
+    // Climbing stays under `fee`, which already covers its own body.
+    for (
+      let climb = 0;
+      climb < MAX_FEE_CORRECTION_ITERATIONS &&
+      candidatePriced.requiredFee > candidateFee &&
+      candidatePriced.requiredFee < fee;
+      climb++
+    ) {
+      candidateFee = candidatePriced.requiredFee;
+      candidatePriced = priceAt(candidateFee);
+    }
+    // No self-covering fee below `fee`; keep the last one that was.
     if (candidatePriced.requiredFee > candidateFee) break;
     fee = candidateFee;
     priced = candidatePriced;

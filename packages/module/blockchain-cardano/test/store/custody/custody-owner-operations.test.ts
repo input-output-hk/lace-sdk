@@ -16,6 +16,7 @@ import {
   changeReserveAt,
   controlLovelaceFor,
   leastFeeOf,
+  preEvaluationFeeBound,
 } from '../../../src/store/custody/custody-assembly';
 import { custodyExecutionEstimate } from '../../../src/store/custody/custody-execution-estimate';
 
@@ -2178,5 +2179,51 @@ describe('custody owner operations', () => {
     it('builds on the account network', () => {
       expect(chainId).toEqual(Cardano.ChainIds.Preprod);
     });
+  });
+});
+
+// The control-funded path supplies no change outputs to the coin selector.
+describe('estimated collateral for a control-funded owner operation', () => {
+  it('reports insufficient collateral before evaluating instead of reseeding the execution budget', async () => {
+    const state = accountState({ nextSlot: 1n, outstanding: 1n });
+    const control = controlUtxo(state, { coins: 20_000_000n });
+    const estimate = custodyExecutionEstimate({ device: 1, logic: 'owner' });
+    const referenceFee =
+      leastFeeOf(
+        { scripts: [], referenceInputs: parkedScriptUtxos },
+        protocolParameters,
+      ) - BigInt(protocolParameters.minFeeConstant);
+    const target =
+      ((preEvaluationFeeBound(protocolParameters, estimate) + referenceFee) *
+        150n +
+        99n) /
+      100n;
+    const collateral: Cardano.Utxo = [
+      collateralUtxo[0],
+      {
+        ...collateralUtxo[1],
+        value: { coins: target + 59_000n },
+      },
+    ];
+    const { provider, evaluated } = fakeProvider({
+      utxosAt: address => (address === identity.address ? [control] : []),
+      evaluate: evaluateAll({
+        memory: Math.floor(estimate.memory / 2 / 1.1),
+        steps: Math.floor(estimate.steps / 2 / 1.1),
+      }),
+    });
+
+    const outcome = await runBuild(
+      {
+        requestId: 'estimated-collateral',
+        accountId,
+        operation: { type: 'revoke-all-grants' },
+        funding: collateralFunding({ collateralUtxo: collateral }),
+      },
+      { provider, store: { settledUtxos: [control] } },
+    );
+
+    expect(expectFailure(outcome).code).toBe('collateral-insufficient');
+    expect(evaluated).toHaveLength(0);
   });
 });

@@ -497,9 +497,14 @@ export class TransactionBuilder {
 
   /**
    * Sets the pool of UTxOs the builder may draw collateral from for a Plutus
-   * transaction. The builder selects largest-first, may combine several to
-   * cover the required collateral, and returns the unused portion (incl. native
-   * assets) to the collateral change address.
+   * transaction. The builder selects largest-first and may combine several to
+   * cover the required collateral. A collateral return sends the unused portion
+   * (incl. native assets) to the collateral change address on script failure;
+   * an ADA-only remainder below min-ADA may be absorbed into total collateral.
+   *
+   * The pool may overlap `setUnspentOutputs`; overlapping UTxOs may be spent as
+   * funding inputs on success. To keep a dedicated collateral UTxO unspent,
+   * supply it only here, not to `setUnspentOutputs` or `addInput`.
    *
    * @param utxos - Candidate collateral UTxOs (need not be pure ADA).
    * @returns `this` for fluent chaining.
@@ -847,10 +852,8 @@ export class TransactionBuilder {
       if (seeded.collateralReturn) {
         unbalancedTx.body.collateralReturn = seeded.collateralReturn;
       }
-      const reservedKeys = new Set(reservedCollateral.map(utxoRefKey));
-      spendableUtxos = this.availableUtxos.filter(
-        utxo => !reservedKeys.has(utxoRefKey(utxo)),
-      );
+      // Inputs are consumed on success and collateral only on script failure,
+      // so collateral may also fund the transaction. Reference inputs may not.
     }
     if (this.referenceUtxos.length > 0) {
       spendableUtxos = spendableUtxos.filter(utxo => !this.isReferenced(utxo));
@@ -1245,8 +1248,9 @@ export class TransactionBuilder {
 
   /**
    * Selects collateral inputs largest-first from `collateralUtxos`, combining
-   * up to `maxCollateralInputs` until they cover `coverAmount` and leave a
-   * return output (carrying any native assets) that meets the min-ADA rule.
+   * up to `maxCollateralInputs` until they cover `coverAmount`. Native assets
+   * and positive remainders under an execution estimate must fund a return
+   * output; otherwise an ADA-only pick needs nothing further.
    *
    * @param coverAmount - Lovelace the selected collateral must cover.
    * @returns The selected collateral UTxOs.
@@ -1273,12 +1277,20 @@ export class TransactionBuilder {
 
       const returnCoin = total.coins - coverAmount;
       const hasAssets = (total.assets?.size ?? 0) > 0;
-      if (returnCoin === 0n && !hasAssets) return selected;
+      // An estimated fee may not cover a return that appears after evaluation.
+      if (
+        !hasAssets &&
+        (this.plutusContext?.executionUnitsEstimate === undefined ||
+          returnCoin === 0n)
+      ) {
+        return selected;
+      }
 
-      const returnValue: Cardano.Value = { coins: returnCoin };
-      if (hasAssets) returnValue.assets = total.assets;
       const minReturn = minAdaRequired(
-        { address: returnAddress, value: returnValue },
+        {
+          address: returnAddress,
+          value: { coins: returnCoin, assets: total.assets },
+        },
         BigInt(this.params.coinsPerUtxoByte),
       );
       if (returnCoin >= minReturn) return selected;

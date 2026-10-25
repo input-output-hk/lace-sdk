@@ -791,6 +791,184 @@ describe('TransactionBuilder Plutus support', () => {
     ).rejects.toThrow(InsufficientCollateralError);
   });
 
+  // Regression (LW-15307): pre-fix this threw InputSelectionError — "Failed to
+  // balance transaction with fallback coin selector: UTxO pool exhausted while
+  // funding the minimum UTxO value of the change outputs".
+  it('funds the tx from a UTxO that also backs collateral instead of starving the pool', async () => {
+    const forcedInput = mkUtxo(210, 0, 2_000_000n, changeAddr);
+    const soleCover = mkUtxo(211, 0, 242_000_000n, changeAddr);
+
+    const tx = await new TransactionBuilder(
+      Cardano.NetworkMagics.Preprod,
+      protocolParameters,
+    )
+      .setChangeAddress(changeAddr)
+      .setUnspentOutputs([soleCover])
+      .setCollateralUtxos([soleCover])
+      .setCollateralChangeAddress(changeAddr)
+      .addInput(forcedInput, { redeemer: unitDatum })
+      .attachScript(dummyScript)
+      .transferValue(otherKeyAddr, { coins: 1_500_000n })
+      .setPlutusContext({
+        costModels,
+        txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+        inputResolver: makeResolver(forcedInput, soleCover),
+      })
+      .build();
+
+    const body = tx.toCore().body;
+
+    const isSoleCover = (ref: Cardano.TxIn): boolean =>
+      ref.txId === soleCover[0].txId && ref.index === soleCover[0].index;
+    expect(body.inputs.some(isSoleCover)).toBe(true);
+    expect(body.collaterals!.some(isSoleCover)).toBe(true);
+
+    const resolved = new Map<string, bigint>(
+      [forcedInput, soleCover].map(([ref, out]) => [
+        `${ref.txId}:${ref.index}`,
+        out.value.coins ?? 0n,
+      ]),
+    );
+    const inputSum = body.inputs.reduce(
+      (total, ref) => total + (resolved.get(`${ref.txId}:${ref.index}`) ?? 0n),
+      0n,
+    );
+    expect(inputSum).toBe(sumCoins(body.outputs) + body.fee);
+
+    // Asserted independently of the input checks above: the collateral fields
+    // must still describe the phase-2 branch even though the UTxO is an input.
+    expect(body.totalCollateral).toBe((body.fee * 150n + 99n) / 100n);
+    expect(body.collateralReturn!.value.coins).toBe(
+      (soleCover[1].value.coins ?? 0n) - body.totalCollateral!,
+    );
+  });
+
+  it.each([true, false])(
+    'spends dedicated collateral only when also offered for funding: %s',
+    async overlap => {
+      const dedicated: Cardano.Utxo = [
+        {
+          txId: Cardano.TransactionId('fc'.repeat(32)),
+          index: 0,
+          address: otherKeyAddr,
+        },
+        { address: otherKeyAddr, value: { coins: 100_000_000n } },
+      ];
+      const ordinary: Cardano.Utxo = [
+        {
+          txId: Cardano.TransactionId('fd'.repeat(32)),
+          index: 0,
+          address: changeAddr,
+        },
+        { address: changeAddr, value: { coins: 50_000_000n } },
+      ];
+      const forced: Cardano.Utxo = [
+        {
+          txId: Cardano.TransactionId('fe'.repeat(32)),
+          index: 0,
+          address: changeAddr,
+        },
+        { address: changeAddr, value: { coins: 2_000_000n } },
+      ];
+
+      const tx = await new TransactionBuilder(
+        Cardano.NetworkMagics.Preprod,
+        protocolParameters,
+      )
+        .setChangeAddress(changeAddr)
+        .useCoinSelector(new LargeFirstCoinSelector())
+        .setUnspentOutputs(overlap ? [dedicated, ordinary] : [ordinary])
+        .addInput(forced, { redeemer: unitDatum })
+        .attachScript(dummyScript)
+        .transferValue(otherKeyAddr, { coins: 5_000_000n })
+        .setCollateralUtxos([dedicated])
+        .setCollateralChangeAddress(otherKeyAddr)
+        .setPlutusContext({
+          costModels,
+          inputResolver: makeResolver(dedicated, ordinary, forced),
+          txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+        })
+        .build();
+      const body = tx.toCore().body;
+
+      expect(body.inputs.some(input => input.txId === dedicated[0].txId)).toBe(
+        overlap,
+      );
+      expect(body.inputs.some(input => input.txId === ordinary[0].txId)).toBe(
+        !overlap,
+      );
+      expect(body.collaterals).toEqual([{ txId: dedicated[0].txId, index: 0 }]);
+      expect(sumCoins(body.outputs) + body.fee).toBe(
+        forced[1].value.coins + (overlap ? dedicated : ordinary)[1].value.coins,
+      );
+    },
+  );
+
+  // The min-ADA return must be sized against the fee-derived amount actually
+  // declared, not the coverage target — that target is only an upper bound, so
+  // sizing against it refuses a ~1 ADA band of pools that build fine. Keyed to
+  // collateralPercentage 0 so the target is the stable 5 ADA constant rather
+  // than a param-derived figure.
+  it('accepts an ADA-only collateral pool whose remainder cannot fund a return', async () => {
+    const justOverTarget = mkUtxo(230, 0, 5_000_001n, changeAddr);
+
+    const tx = await new TransactionBuilder(Cardano.NetworkMagics.Preprod, {
+      ...protocolParameters,
+      collateralPercentage: 0,
+    } as unknown as Cardano.ProtocolParameters)
+      .setChangeAddress(changeAddr)
+      .setUnspentOutputs([])
+      .addInput(scriptInputUtxo, { redeemer: unitDatum })
+      .attachScript(dummyScript)
+      .setCollateralUtxos([justOverTarget])
+      .setCollateralChangeAddress(changeAddr)
+      .setPlutusContext({
+        costModels,
+        txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+        inputResolver: makeResolver(scriptInputUtxo),
+      })
+      .build();
+
+    const body = tx.toCore().body;
+    // The dust lovelace is absorbed rather than shipped as its own output:
+    // totalCollateral declares the whole reservation and there is no return.
+    expect(body.totalCollateral).toBe(5_000_001n);
+    expect(body.collateralReturn).toBeUndefined();
+  });
+
+  // The other half of the same rule, kept: native assets can leave the
+  // collateral inputs ONLY through the return output, so an asset-carrying
+  // pick whose remainder cannot meet min-ADA has no escape and must throw.
+  it('still refuses an asset-carrying collateral pool whose return cannot meet min-ADA', async () => {
+    const assetId = Cardano.AssetId(`${'ab'.repeat(28)}746f6b`);
+    const withAssets: Cardano.Utxo = [
+      { ...mkUtxo(231, 0, 5_000_001n, changeAddr)[0] },
+      {
+        address: changeAddr,
+        value: { coins: 5_000_001n, assets: new Map([[assetId, 1n]]) },
+      } as Cardano.TxOut,
+    ];
+
+    await expect(
+      new TransactionBuilder(Cardano.NetworkMagics.Preprod, {
+        ...protocolParameters,
+        collateralPercentage: 0,
+      } as unknown as Cardano.ProtocolParameters)
+        .setChangeAddress(changeAddr)
+        .setUnspentOutputs([])
+        .addInput(scriptInputUtxo, { redeemer: unitDatum })
+        .attachScript(dummyScript)
+        .setCollateralUtxos([withAssets])
+        .setCollateralChangeAddress(changeAddr)
+        .setPlutusContext({
+          costModels,
+          txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+          inputResolver: makeResolver(scriptInputUtxo),
+        })
+        .build(),
+    ).rejects.toThrow(InsufficientCollateralError);
+  });
+
   it('combines multiple collateral UTxOs largest-first to cover the required amount', async () => {
     const part1 = mkUtxo(202, 0, 3_000_000n, changeAddr);
     const part2 = mkUtxo(203, 0, 3_000_000n, changeAddr);
@@ -925,17 +1103,11 @@ describe('TransactionBuilder Plutus support', () => {
     ).rejects.toThrow(InsufficientCollateralError);
   });
 
-  // Regression (LW-15113): the knife-edge case above only survives because a
-  // 4-byte script keeps the tx tiny. The binding failure is at the FIRST
-  // pricing pass, whose fee still carries the max seed ex-units — so its
-  // collateral remainder is only
-  // `minFeeCoefficient * collateralPercentage% * (maxTxSize - txSize)`
-  // (66 lovelace/byte here). Past a ~1691-byte tx that falls under a return
-  // output's min-ADA, and a real validator's inline bytes put every designation
-  // tx (~3.5 KB) well past it — so once the exact-cover branch is entered it
-  // ALWAYS failed. Over-declaring is legal (the ledger only checks
-  // `totalCollateral == inputs - return`), so the dust is absorbed instead.
-  it('absorbs a sub-min-ADA collateral remainder into totalCollateral with a real-sized script', async () => {
+  // A real validator's inline bytes are what carry the tx past the ~1691-byte
+  // point where the seed pass' leftover falls under min-ADA; a 4-byte script
+  // never reaches the absorb branch. Declaring the whole reservation instead of
+  // the corrected shape would hand the extra to a phase-2 failure.
+  it('ships the fee-derived collateral shape when the seed pass had to absorb the remainder', async () => {
     const knifeEdgeCollateral = mkUtxo(214, 0, coverageTarget, changeAddr);
     const scriptInput = mkUtxo(215, 0, 20_000_000n, changeAddr);
 
@@ -957,16 +1129,167 @@ describe('TransactionBuilder Plutus support', () => {
       .build();
 
     const body = tx.toCore().body;
+    const required =
+      (body.fee * BigInt(protocolParameters.collateralPercentage) + 99n) / 100n;
 
-    // Past the cliff, so the case is the one the fix targets.
+    // Past the cliff, so the seed pass really did take the absorb branch.
     expect(tx.toCbor().length / 2).toBeGreaterThan(1691);
     expect(body.collaterals).toHaveLength(1);
-    // No return at all — the only shape a dust remainder can legally take.
+    expect(body.totalCollateral).toBe(required);
+    expect(body.collateralReturn?.value.coins).toBe(coverageTarget - required);
+  });
+
+  // At `collateralPercentage: 0` the amount is pinned to the flat 5 ADA fallback,
+  // so no lower fee can grow the remainder into a returnable one.
+  it('still absorbs a sub-min-ADA remainder when the collateral amount is fee-invariant', async () => {
+    const collateral = mkUtxo(218, 0, 5_100_000n, changeAddr);
+    const scriptInput = mkUtxo(219, 0, 20_000_000n, changeAddr);
+
+    const tx = await new TransactionBuilder(Cardano.NetworkMagics.Preprod, {
+      ...protocolParameters,
+      collateralPercentage: 0,
+    })
+      .setChangeAddress(changeAddr)
+      .setUnspentOutputs([])
+      .addInput(scriptInput, { redeemer: unitDatum })
+      .attachScript(realSizedScript)
+      .setCollateralUtxos([collateral])
+      .setCollateralChangeAddress(changeAddr)
+      .setPlutusContext({
+        costModels,
+        txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+        inputResolver: makeResolver(scriptInput),
+      })
+      .build();
+
+    const body = tx.toCore().body;
+
     expect(body.collateralReturn).toBeUndefined();
-    expect(body.totalCollateral).toBe(coverageTarget);
-    // Over-declared, but never under the ledger's ceil(fee * pct / 100).
-    expect(body.totalCollateral!).toBeGreaterThanOrEqual(
-      (body.fee * BigInt(protocolParameters.collateralPercentage) + 99n) / 100n,
+    expect(body.totalCollateral).toBe(5_100_000n);
+  });
+
+  // The shape cannot imply the fee: reading the flip as non-convergence still
+  // ships a valid body, just one priced with the per-tx-max seed ex-units —
+  // ~1.5 ADA of script budget the evaluated tx never spends.
+  it('corrects the fee to its own body minimum when the collateral shape flips mid-correction', async () => {
+    const flipCollateral = mkUtxo(216, 0, coverageTarget, changeAddr);
+    const scriptInput = mkUtxo(217, 0, 20_000_000n, changeAddr);
+
+    const tx = await new TransactionBuilder(
+      Cardano.NetworkMagics.Preprod,
+      protocolParameters,
+    )
+      .setChangeAddress(changeAddr)
+      .setUnspentOutputs([])
+      .addInput(scriptInput, { redeemer: unitDatum })
+      .attachScript(realSizedScript)
+      .setCollateralUtxos([flipCollateral])
+      .setCollateralChangeAddress(changeAddr)
+      .setPlutusContext({
+        costModels,
+        txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+        inputResolver: makeResolver(scriptInput),
+      })
+      .build();
+
+    const { requiredFee, signerCount } = measureSignedMinFee(tx, [
+      scriptInput,
+      flipCollateral,
+    ]);
+
+    expect(signerCount).toBe(1);
+    expect(requiredFee - tx.toCore().body.fee).toBe(
+      BigInt(protocolParameters.minFeeCoefficient),
+    );
+  });
+
+  // Collateral never goes through the resolver: the builder pairs the reserved
+  // UTxOs it selected with the resolved inputs itself.
+  const buildRealSizedTx = async (
+    collateral: Cardano.Utxo[],
+    scriptInputs: Cardano.Utxo[],
+  ) => {
+    const builder = new TransactionBuilder(
+      Cardano.NetworkMagics.Preprod,
+      protocolParameters,
+    )
+      .setChangeAddress(changeAddr)
+      .setUnspentOutputs([])
+      .attachScript(realSizedScript)
+      .setCollateralUtxos(collateral)
+      .setCollateralChangeAddress(changeAddr)
+      .setPlutusContext({
+        costModels,
+        txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+        inputResolver: makeResolver(...scriptInputs),
+      });
+    for (const input of scriptInputs) {
+      builder.addInput(input, { redeemer: unitDatum });
+    }
+    return builder.build();
+  };
+
+  // The seed pass ships no return while its own leftover stays under a return's
+  // min-ADA — a span above the target, not a single point, so the cases walk it
+  // rather than pinning one reservation inside it.
+  it.each([
+    ['exactly the coverage target', 0n],
+    ['mid-way through the absorb span', 59_000n],
+    ['above the absorb span', 118_020n],
+  ])(
+    'prices the fee to its own body minimum with collateral %s',
+    async (_label, excess) => {
+      const collateral = mkUtxo(230, 0, coverageTarget + excess, changeAddr);
+      const scriptInput = mkUtxo(231, 0, 20_000_000n, changeAddr);
+
+      const tx = await buildRealSizedTx([collateral], [scriptInput]);
+      const { requiredFee } = measureSignedMinFee(tx, [
+        scriptInput,
+        collateral,
+      ]);
+
+      expect(requiredFee - tx.toCore().body.fee).toBe(
+        BigInt(protocolParameters.minFeeCoefficient),
+      );
+    },
+  );
+
+  // `update` and `deregister` are the two-redeemer flows. The per-tx seed budget
+  // is split across redeemers rather than added up, so a second one changes the
+  // body without changing the saving.
+  it('corrects the fee over a body carrying two redeemers', async () => {
+    const collateral = mkUtxo(232, 0, coverageTarget, changeAddr);
+    const first = mkUtxo(233, 0, 20_000_000n, changeAddr);
+    const second = mkUtxo(234, 0, 20_000_000n, changeAddr);
+
+    const tx = await buildRealSizedTx([collateral], [first, second]);
+    const { requiredFee } = measureSignedMinFee(tx, [
+      first,
+      second,
+      collateral,
+    ]);
+
+    expect(tx.toCore().witness.redeemers).toHaveLength(2);
+    expect(requiredFee - tx.toCore().body.fee).toBe(
+      BigInt(protocolParameters.minFeeCoefficient),
+    );
+  });
+
+  // No collateral involvement here: refunding the saving carries the change coin
+  // over a CBOR width boundary instead. Pins the correction at the cause rather
+  // than at one of its triggers.
+  it('corrects the fee when the refunded saving widens the change coin encoding', async () => {
+    const scriptInput = mkUtxo(235, 0, 4_295_967_295n, changeAddr);
+
+    const tx = await buildRealSizedTx([collateralUtxo], [scriptInput]);
+    const { requiredFee } = measureSignedMinFee(tx, [
+      scriptInput,
+      collateralUtxo,
+    ]);
+
+    expect(sumCoins(tx.toCore().body.outputs)).toBeGreaterThan(0xff_ff_ff_ff);
+    expect(requiredFee - tx.toCore().body.fee).toBe(
+      BigInt(protocolParameters.minFeeCoefficient),
     );
   });
 
@@ -1170,11 +1493,13 @@ describe('TransactionBuilder Plutus support', () => {
     const buildEstimatedTx = async ({
       inputs = [scriptInputUtxo],
       collateral = collateralUtxo,
+      collateralUtxos = [collateral],
       budget = { memory: 100, steps: 100_000 },
       executionUnitsEstimate = estimate,
     }: {
       inputs?: Cardano.Utxo[];
       collateral?: Cardano.Utxo;
+      collateralUtxos?: Cardano.Utxo[];
       budget?: Cardano.ExUnits;
       executionUnitsEstimate?: Cardano.ExUnits;
     } = {}) => {
@@ -1189,7 +1514,7 @@ describe('TransactionBuilder Plutus support', () => {
       }
       return builder
         .attachScript(dummyScript)
-        .setCollateralUtxos([collateral])
+        .setCollateralUtxos(collateralUtxos)
         .setCollateralChangeAddress(changeAddr)
         .setPlutusContext({
           costModels,
@@ -1199,6 +1524,68 @@ describe('TransactionBuilder Plutus support', () => {
         })
         .build();
     };
+
+    it('rejects estimated collateral whose seeded remainder cannot fund a return', async () => {
+      const collateral: Cardano.Utxo = [
+        {
+          txId: Cardano.TransactionId('fa'.repeat(32)),
+          index: 0,
+          address: changeAddr,
+        },
+        { address: changeAddr, value: { coins: coverageAtEstimate + 59_000n } },
+      ];
+
+      await expect(
+        buildEstimatedTx({ collateral, budget: estimate }),
+      ).rejects.toThrow(InsufficientCollateralError);
+    });
+
+    it('adds collateral to price the return when evaluation matches the estimate', async () => {
+      const collateralUtxos: Cardano.Utxo[] = [
+        [
+          {
+            txId: Cardano.TransactionId('fa'.repeat(32)),
+            index: 0,
+            address: changeAddr,
+          },
+          {
+            address: changeAddr,
+            value: { coins: coverageAtEstimate + 59_000n },
+          },
+        ],
+        [
+          {
+            txId: Cardano.TransactionId('fb'.repeat(32)),
+            index: 0,
+            address: changeAddr,
+          },
+          { address: changeAddr, value: { coins: 1_100_000n } },
+        ],
+      ];
+      const input: Cardano.Utxo = [
+        {
+          txId: Cardano.TransactionId('fc'.repeat(32)),
+          index: 0,
+          address: changeAddr,
+        },
+        { address: changeAddr, value: { coins: 20_000_000n } },
+      ];
+
+      const tx = await buildEstimatedTx({
+        inputs: [input],
+        collateralUtxos,
+        budget: estimate,
+      });
+      const body = tx.toCore().body;
+
+      expect(body.collaterals).toHaveLength(2);
+      expect(body.collateralReturn).toBeDefined();
+      expect(sumCoins(body.outputs) + body.fee).toBe(input[1].value.coins);
+      expect(
+        measureSignedMinFee(tx, [input, ...collateralUtxos]).requiredFee -
+          body.fee,
+      ).toBe(BigInt(protocolParameters.minFeeCoefficient));
+    });
 
     it('ships the same transaction as a build priced at the per-transaction maximum', async () => {
       const estimated = await buildEstimatedTx();
