@@ -1,10 +1,10 @@
 Lace public source snapshot
 ===========================
 
-release-tag:         @laceio/sdk@0.1.2-canary.1
+release-tag:         @laceio/sdk@0.1.2-canary.2
 source-repo:         input-output-hk/lace-platform (private)
-source-commit:       23e7ddeab81efdec784f0a2b18ca10c3c3abfb53
-snapshot-utc:        2026-10-25T04:07:54.823Z
+source-commit:       987356cb523ed7539206a6b9ad4f13e29f66c3d9
+snapshot-utc:        2026-10-27T04:31:50.764Z
 
 allowlist-sha256:    b61e2b9df0ba4cf5062df6e652f7f8c2235f8bb4457d01b3a578479c36f74be4
 excludelist-sha256:  07d0e97ca2c3647087c60eff5d736142a6d7508209a5aa89c655543446d05bbd

@@ -42,5 +42,7 @@
   "midnight.send-flow.stage.submitting",
   "midnight.send-flow.stage.inclusion",
   "midnight.send-flow.stage.confirmation",
-  "midnight.send-flow.proof-material"
+  "midnight.send-flow.proof-material",
+  "v2.swap.verified-only",
+  "v2.swap.verified-only-hint"
 ]

@@ -615,6 +615,8 @@ const TICKET = '(?:lw|lace)[\\s_-]?\\d{3,}';
  * this repository's titles carry (`[LW-123]`, `LW-123:`, a `(lw-123)` scope)
  * name an internal tracker, so they are dropped.
  */
+const TICKETS = `${TICKET}(?:\\s*,\\s*${TICKET})*`;
+
 export const cleanTitle = (title: string): string =>
   title
     // A title made from a branch name: `Feat/<ticket> …`.
@@ -622,8 +624,9 @@ export const cleanTitle = (title: string): string =>
       /^(?:feat|fix|chore|refactor|docs|test|ci|build|perf)\/(?=\S)/i,
       '',
     )
-    .replaceAll(new RegExp(`\\s*\\[${TICKET}\\]`, 'gi'), '')
-    .replaceAll(new RegExp(`\\(${TICKET}\\)`, 'gi'), '')
+    // One ticket or a list of them, bracketed: `[LW-1, LW-2]`.
+    .replaceAll(new RegExp(`\\s*\\[${TICKETS}\\]`, 'gi'), '')
+    .replaceAll(new RegExp(`\\(${TICKETS}\\)`, 'gi'), '')
     .replaceAll(new RegExp(`\\b${TICKET}\\b[:/]?\\s*`, 'gi'), '')
     // The separator a leading ticket left: `[LW-123] - …`.
     .replace(/^\s*[-–—:]\s+/, '')
@@ -958,15 +961,22 @@ const exportList = (keys: readonly string[]) =>
 const apiLines = (api: NotesApi): string[] => {
   if (api.channel === 'canary' && api.canary) {
     const { canary } = api;
+    const previous = releaseName(canary.previous, api.package);
+    // A canary that changes no export says so, as a stable release does.
+    const isUnchanged =
+      canary.added.length === 0 &&
+      canary.removed.length === 0 &&
+      canary.changed.length === 0;
     return [
-      `The canary build, compared with ${releaseName(
-        canary.previous,
-        api.package,
-      )}'s:`,
-      '',
-      `- Added: ${exportList(canary.added)}`,
-      `- Removed: ${exportList(canary.removed)}`,
-      `- Changed: ${exportList(canary.changed)}`,
+      ...(isUnchanged
+        ? [`The canary build, compared with ${previous}'s: no export changed.`]
+        : [
+            `The canary build, compared with ${previous}'s:`,
+            '',
+            `- Added: ${exportList(canary.added)}`,
+            `- Removed: ${exportList(canary.removed)}`,
+            `- Changed: ${exportList(canary.changed)}`,
+          ]),
       ...(api.previous && api.base
         ? [
             '',

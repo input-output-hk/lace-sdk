@@ -2511,6 +2511,8 @@
   "v2.common.uk-fca-risk-warning.confirm": "I understand",
   "v2.swap.select-token-to-sell": "売却するトークンを選択",
   "v2.swap.select-token-to-buy": "購入するトークンを選択",
+  "v2.swap.verified-only": "確認済みのみ",
+  "v2.swap.verified-only-hint": "SteelSwapで確認済み、またはCardano Token Registryに登録されているトークンのみを表示します",
   "v2.swap.search": "検索",
   "v2.swap.no-tokens": "トークンがありません",
   "v2.swap.no-matching-tokens": "「{{searchTerm}}」に一致するトークンはありません",

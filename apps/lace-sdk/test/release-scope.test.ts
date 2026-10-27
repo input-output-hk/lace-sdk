@@ -535,6 +535,12 @@ describe('ticket references and internal terms', () => {
       'fix: keep the form in view',
     );
     expect(cleanTitle('LW-123: wallet sync')).toBe('wallet sync');
+    expect(
+      cleanTitle(
+        'fix: resolve cNIGHT launch funding and fee blockers [LW-15307, LW-15395]',
+      ),
+    ).toBe('fix: resolve cNIGHT launch funding and fee blockers');
+    expect(cleanTitle('fix: a fee (LW-1001,LW-2002)')).toBe('fix: a fee');
     expect(cleanTitle('[LW-15002] - Sheet flow navigation')).toBe(
       'Sheet flow navigation',
     );
@@ -671,6 +677,17 @@ describe('the public release notes', () => {
       );
       expect(notes).not.toContain('Compared with `lace-sdk@0.1.0`');
     }
+    // A canary build that changes no export says so in a line.
+    const unchanged: NotesApi = {
+      ...canary,
+      canary: { ...canary.canary, added: [], changed: [] },
+    };
+    const notes = renderPublicNotes(unchanged);
+    expect(notes).toContain(
+      "The canary build, compared with `lace-sdk@0.1.1-canary.0`'s: no export changed.",
+    );
+    expect(notes).not.toContain('- Added:');
+    expect(notes).toContain('It previews `0.1.1`');
     // Without its canary build's diff, a canary reads as before.
     const { canary: _, ...withoutDiff } = canary;
     expect(renderPublicNotes(withoutDiff)).toContain(

@@ -33,10 +33,8 @@ export interface BrowsePoolProps {
   theme: Theme;
   networkInfoValues: NetworkInfoCardProps;
   /**
-   * The COMMITTED query. It seeds the field on mount and re-seeds it if the
-   * list remounts (this is a grid, which still remounts on its first real
-   * layout — see GenericFlashList), but it does not drive the input: the field
-   * owns its text and reports only the settled query (ADR 64).
+   * The COMMITTED query. It seeds the field on mount but does not drive the
+   * input: the field owns its text and reports only the settled query (ADR 64).
    */
   searchValue?: string;
   onSearchCommit?: (value: string) => void;
@@ -164,33 +162,16 @@ export const BrowsePoolTemplate = ({
   const ListHeaderComponent = useMemo(
     () => (
       <Column style={defaultStyles.contentWrapper}>
-        {/* First thing read, above the epoch card: it answers "why am I
-            looking at pools?" for a user the flow sent straight here. */}
+        <NetworkInfoCard {...networkInfoValues} />
+        {/* Explains why a flow sent the user here to choose a pool. */}
         {notice !== undefined && (
           <Text.S variant="secondary" testID="browse-pool-notice">
             {notice}
           </Text.S>
         )}
-        <NetworkInfoCard {...networkInfoValues} />
-        <SearchBar
-          placeholder={searchPlaceholder}
-          initialValue={searchValue}
-          onSearchCommit={onSearchCommit ?? ignoreSearch}
-          extraStyle={defaultStyles.searchBar}
-          actions={searchBarActions}
-        />
       </Column>
     ),
-    [
-      defaultStyles.contentWrapper,
-      defaultStyles.searchBar,
-      networkInfoValues,
-      notice,
-      searchPlaceholder,
-      searchValue,
-      onSearchCommit,
-      searchBarActions,
-    ],
+    [defaultStyles.contentWrapper, networkInfoValues, notice],
   );
 
   return (
@@ -200,6 +181,15 @@ export const BrowsePoolTemplate = ({
     <SheetGestureRoot
       style={defaultStyles.container}
       testID="browse-pool-content">
+      {/* Keep the input mounted when the grid remounts to measure its columns. */}
+      <View style={defaultStyles.searchRow}>
+        <SearchBar
+          placeholder={searchPlaceholder}
+          initialValue={searchValue}
+          onSearchCommit={onSearchCommit ?? ignoreSearch}
+          actions={searchBarActions}
+        />
+      </View>
       <GenericFlashList
         testID="browse-pool-list"
         renderItem={renderItem}
@@ -248,13 +238,14 @@ const styles = ({ theme }: { theme: Theme }) =>
     contentWrapper: {
       marginHorizontal: spacing.S,
       gap: spacing.M,
-      paddingVertical: spacing.M,
+      paddingBottom: spacing.M,
     },
     listElements: {
       paddingBottom: spacing.XXXXL,
     },
-    searchBar: {
-      flex: 1,
+    searchRow: {
+      marginHorizontal: spacing.S,
+      paddingVertical: spacing.M,
     },
     emptyStateContainer: {
       paddingVertical: spacing.XL,

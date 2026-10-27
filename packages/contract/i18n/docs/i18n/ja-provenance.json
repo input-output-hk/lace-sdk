@@ -2071,6 +2071,8 @@
   "v2.common.uk-fca-risk-warning.confirm": "unknown",
   "v2.swap.select-token-to-sell": "unknown",
   "v2.swap.select-token-to-buy": "unknown",
+  "v2.swap.verified-only": "mtpe",
+  "v2.swap.verified-only-hint": "mtpe",
   "v2.swap.search": "unknown",
   "v2.swap.no-tokens": "unknown",
   "v2.swap.no-matching-tokens": "unknown",

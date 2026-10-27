@@ -295,6 +295,10 @@ export const CustomTextInput = forwardRef<RnTextInputRef, CustomTextInputProps>(
       <BlurView style={styles.blurView} testID={testID}>
         <Pressable
           style={styles.inputWrapper}
+          // Tap-to-focus only. Accessible by default, the Pressable would be an
+          // iOS accessibility leaf hiding the TextInput from VoiceOver and
+          // XCUITest; the TextInput is the control assistive tech should reach.
+          accessible={false}
           tabIndex={-1}
           disabled={isStatusDisabled || isLoading}
           onPress={() => inputRef.current?.focus()}

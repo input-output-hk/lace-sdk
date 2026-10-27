@@ -2516,6 +2516,8 @@
   "v2.common.uk-fca-risk-warning.confirm": "I understand",
   "v2.swap.select-token-to-sell": "Select token to sell",
   "v2.swap.select-token-to-buy": "Select token to buy",
+  "v2.swap.verified-only": "Verified only",
+  "v2.swap.verified-only-hint": "Show only tokens verified by SteelSwap or listed in the Cardano Token Registry",
   "v2.swap.search": "Search",
   "v2.swap.no-tokens": "You have no tokens",
   "v2.swap.no-matching-tokens": "No matching tokens for {{searchTerm}}",
