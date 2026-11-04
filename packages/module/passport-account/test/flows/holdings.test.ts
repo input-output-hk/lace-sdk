@@ -8,9 +8,11 @@ import {
 import { x25519 } from '@noble/curves/ed25519.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createBundleRegistry } from '../../src/acc/bundle';
 import { sealDeviceEnvelope } from '../../src/acc/envelopes';
 import { readShieldedHoldings } from '../../src/flows/holdings';
 
+import type * as AccModule from '../../src/acc/acc-module';
 import type * as InboxWalk from '../../src/acc/inbox-walk';
 import type { InboxWalkProps } from '../../src/acc/inbox-walk';
 import type { FlowContext } from '../../src/flows/types';
@@ -31,7 +33,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/infra/indexer', () => ({
   createIndexerClient: mocks.createIndexerClient,
 }));
-vi.mock('../../src/acc/acc-module', () => ({
+vi.mock('../../src/acc/acc-module', async importOriginal => ({
+  ...(await importOriginal<typeof AccModule>()),
   ledger: mocks.ledger,
 }));
 vi.mock('../../src/acc/inbox-walk', async importOriginal => ({
@@ -50,6 +53,7 @@ const network = {
 const account: PassportAccountInfo = {
   address: accountAddress,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -148,6 +152,7 @@ const createContext = () => {
     accountRecords: { read: vi.fn(), write: vi.fn(), presence: vi.fn() },
     onProgress: vi.fn(),
     rpId: 'lace.io',
+    bundles: createBundleRegistry(),
   };
   return { context, events, withKeySession, encryptionKey };
 };

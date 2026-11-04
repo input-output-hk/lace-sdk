@@ -22,6 +22,7 @@ export const ENC_KEY = 'e1'.repeat(32);
 export const account: PassportAccountInfo = {
   address: ACCOUNT_ADDRESS,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: NETWORK,
 };

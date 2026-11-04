@@ -183,7 +183,7 @@ type DeviceSession = {
 const openDeviceSession = async (
   input: DeviceCallInput,
   { ledgerState, indexer }: AccountLedger,
-  { seams, accountRecords, onProgress }: FlowContext,
+  { seams, accountRecords, onProgress, bundles }: FlowContext,
 ): Promise<DeviceSession> => {
   const { account, devices, localUseCounter } = input;
   const record = await accountRecords.read();
@@ -199,6 +199,7 @@ const openDeviceSession = async (
     start: { ledgerState, localUseCounter, devices },
     indexer,
     seams,
+    bundles,
     onProgress,
     onAdvanced: write,
   });
@@ -266,13 +267,14 @@ export const addDevice = async (
   { reader, ...input }: AddDeviceInput,
   context: FlowContext,
 ): Promise<DeviceRoster> => {
-  const { seams, onProgress } = context;
+  const { seams, onProgress, bundles } = context;
   const { account, commitmentHex } = input;
   const { networkId } = seams.passportNetwork;
   try {
     const ledger = await readAccountLedger(
       account.address,
       seams.passportNetwork,
+      bundles.get(account.bundleId),
     );
     if (reader) {
       assertJoiningDevice(
@@ -331,8 +333,9 @@ export const addDevice = async (
               rotateRoster: true,
             });
             await followRosterAuthority({
-              address: account.address,
+              account,
               seams,
+              bundles,
               keyring: keyringAt(account, chain, local),
               authority: rotated.authority,
               onProgress,
@@ -461,7 +464,7 @@ export const removeDevice = async (
   input: DeviceCallInput,
   context: FlowContext,
 ): Promise<DeviceRoster> => {
-  const { seams, onProgress } = context;
+  const { seams, onProgress, bundles } = context;
   const { account, commitmentHex } = input;
   const { networkId } = seams.passportNetwork;
   try {
@@ -469,6 +472,7 @@ export const removeDevice = async (
     const ledger = await readAccountLedger(
       account.address,
       seams.passportNetwork,
+      bundles.get(account.bundleId),
     );
     assertRemovable(input, ledger);
     const devices = liveDeviceEntries(ledger.ledgerState, commitmentHex);
@@ -512,8 +516,9 @@ export const removeDevice = async (
           target: commitmentHex.toLowerCase(),
         });
         await followRosterAuthority({
-          address: account.address,
+          account,
           seams,
+          bundles,
           keyring: keyringAt(account, chain, local),
           authority: rotated.authority,
           onProgress,

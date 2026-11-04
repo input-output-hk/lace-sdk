@@ -1,4 +1,4 @@
-import { ComposableError, formatErrorMessage } from '@lace-lib/util/common';
+import { ComposableError, formatErrorMessage } from '@lace-lib/cardano-util';
 import { CustomError } from 'ts-custom-error';
 
 import type { Cardano, Handle } from '.';

@@ -81,13 +81,15 @@ export const RegularPoolSheetTemplate = ({
           coin={coin}
         />
 
-        <EpochsRewards
-          epochs={epochs}
-          epochsScale={epochsScale}
-          filterOptions={epochsFilterOptions}
-          selectedFilter={selectedEpochFilter}
-          onFilterChange={onEpochFilterChange}
-        />
+        {epochs.length > 0 && (
+          <EpochsRewards
+            epochs={epochs}
+            epochsScale={epochsScale}
+            filterOptions={epochsFilterOptions}
+            selectedFilter={selectedEpochFilter}
+            onFilterChange={onEpochFilterChange}
+          />
+        )}
       </View>
     ),
     [

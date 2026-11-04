@@ -8,7 +8,8 @@ import {
 import { HexBytes } from '@lace-lib/util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { expectedVk, pureCircuits } from '../../src/acc/acc-module';
+import { Contract, expectedVk, pureCircuits } from '../../src/acc/acc-module';
+import { accountBundle } from '../../src/acc/bundle';
 import {
   accountWitnesses,
   deployAccount,
@@ -25,6 +26,7 @@ import type {
   AccProviders,
   PendingDeployment,
 } from '../../src/acc/deploy';
+import type { AccountBundle } from '@lace-contract/passport';
 import type * as NetworkId from '@midnight-ntwrk/midnight-js-network-id';
 import type * as Ledger from '@midnightntwrk/ledger-v9';
 
@@ -71,6 +73,7 @@ const ledgerMocks = vi.hoisted(() => {
       ),
     ),
     ...grantCircuits,
+    'tally_set_with_jubjub',
   ]);
   const fullState = {
     data: { tag: 'charged-state' },
@@ -359,6 +362,7 @@ const providers: AccProviders = {
   privateStateProvider: 'private-state',
   walletProvider: 'wallet',
   midnightProvider: 'midnight',
+  contractModuleProvider: 'contract-modules',
 };
 
 const authoriser = devJubjubAuthoriser(7n);
@@ -379,6 +383,9 @@ const handoverAuthority = {
 
 const deployProps = {
   providers,
+  bundle: accountBundle,
+  constructorArgs: [],
+  constructorValues: [],
   authoriser,
   encPublicKey,
   lockAccount: false,
@@ -415,18 +422,53 @@ const THIRD_WAVE = DEPLOYED_OPERATIONS.slice(12, 18);
 const FOURTH_WAVE = DEPLOYED_OPERATIONS.slice(18);
 
 /** The sha256 over each roster operation and its pinned verifier key digest. */
-const VERIFIER_KEYS_DIGEST = HexBytes.fromByteArray(
-  new Uint8Array(
-    await crypto.subtle.digest(
-      'SHA-256',
-      new TextEncoder().encode(
-        DEPLOYED_OPERATIONS.map(
-          operation => `${operation}:${expectedVk[operation]}`,
-        ).join('\n'),
+const digestOf = async (
+  operations: readonly string[],
+  keys: Readonly<Record<string, string>>,
+): Promise<string> =>
+  HexBytes.fromByteArray(
+    new Uint8Array(
+      await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(
+          operations
+            .map(operation => `${operation}:${keys[operation]}`)
+            .join('\n'),
+        ),
       ),
     ),
-  ),
-);
+  );
+
+const VERIFIER_KEYS_DIGEST = await digestOf(DEPLOYED_OPERATIONS, expectedVk);
+
+const TALLY_CIRCUIT = 'tally_set_with_jubjub';
+const TALLY_ADDRESS = 'ab'.repeat(32);
+const TALLY_OPERATIONS = [...DEPLOYED_OPERATIONS, TALLY_CIRCUIT];
+const tallyKeys = { ...expectedVk, [TALLY_CIRCUIT]: 'aa'.repeat(32) };
+const TALLY_VERIFIER_KEYS_DIGEST = await digestOf(TALLY_OPERATIONS, tallyKeys);
+
+/** The generated module of the tally build, as a fake over the vendored one. */
+class TallyContract extends Contract {}
+
+/** A build of the account with one more gated circuit, calling a tally it takes at construction. */
+const tallyBundle: AccountBundle = {
+  ...accountBundle,
+  id: 'account-tally',
+  module: async () => ({
+    ...(await import('../../src/acc/acc-module')),
+    Contract: TallyContract,
+    expectedVk: tallyKeys,
+  }),
+  operations: TALLY_OPERATIONS,
+  verifierKeys: tallyKeys,
+  constructorArgs: [
+    { name: 'tally', label: 'Tally', type: 'contract', interface: 'Tally' },
+  ],
+};
+const tallyConstructor = {
+  constructorArgs: [TALLY_ADDRESS],
+  constructorValues: [{ bytes: new Uint8Array(32).fill(0xab) }],
+};
 
 const pendingDeployment: PendingDeployment = {
   operations: DEPLOYED_OPERATIONS,
@@ -438,8 +480,17 @@ const pendingDeployment: PendingDeployment = {
   keyEntries: [],
 };
 
+const pendingTallyDeployment: PendingDeployment = {
+  ...pendingDeployment,
+  operations: TALLY_OPERATIONS,
+  verifierKeysDigest: TALLY_VERIFIER_KEYS_DIGEST,
+  bundleId: 'account-tally',
+  constructorArgs: [TALLY_ADDRESS],
+};
+
 const resumeProps = {
   providers,
+  bundle: accountBundle,
   authoriser,
   address: 'deployed-address',
   pending: pendingDeployment,
@@ -663,6 +714,64 @@ describe('deployAccount', () => {
       saltHex: '07'.repeat(32),
       authorityKey,
       handoverAuthority,
+      bundleId: 'account',
+      constructorArgs: [],
+    });
+  });
+
+  it('compiles the default bundle under its id and passes the constructor the five standard arguments alone', async () => {
+    await deployAccount(deployProps);
+
+    const [, options] = contractsMocks.createUnprovenDeployTx.mock.calls[0];
+    expect(options.compiledContract).toMatchObject({ tag: 'account' });
+    expect(options.args).toHaveLength(5);
+  });
+
+  describe('from a registered bundle with a constructor argument', () => {
+    it('compiles that bundle, appends its decoded arguments to the constructor and installs its roster against its pins', async () => {
+      await deployAccount({
+        ...deployProps,
+        bundle: tallyBundle,
+        ...tallyConstructor,
+      });
+
+      const [, options] = contractsMocks.createUnprovenDeployTx.mock.calls[0];
+      expect(options.compiledContract).toMatchObject({ tag: 'account-tally' });
+      expect(options.args).toHaveLength(6);
+      expect(options.args[5]).toEqual({
+        bytes: new Uint8Array(32).fill(0xab),
+      });
+      expect(getVerifierKey.mock.calls.map(([operation]) => operation)).toEqual(
+        TALLY_OPERATIONS,
+      );
+      expect([...ledgerMocks.chain.operations]).toEqual(TALLY_OPERATIONS);
+      const updates = ledgerMocks.MaintenanceUpdate.instances;
+      expect(insertedOperations(updates.at(-1)!)).toEqual([
+        ...FOURTH_WAVE,
+        TALLY_CIRCUIT,
+      ]);
+      const [, findOptions] = contractsMocks.findDeployedContract.mock.calls[0];
+      expect(findOptions.compiledContract).toBe(options.compiledContract);
+    });
+
+    it('records the bundle, its constructor arguments, its roster and the digest of its pins in the pending deployment', async () => {
+      await deployAccount({
+        ...deployProps,
+        bundle: tallyBundle,
+        ...tallyConstructor,
+      });
+
+      expect(onDeployed).toHaveBeenCalledExactlyOnceWith('deployed-address', {
+        operations: TALLY_OPERATIONS,
+        lockAccount: false,
+        verifierKeysDigest: TALLY_VERIFIER_KEYS_DIGEST,
+        saltHex: '07'.repeat(32),
+        authorityKey,
+        handoverAuthority,
+        bundleId: 'account-tally',
+        constructorArgs: [TALLY_ADDRESS],
+      });
+      expect(TALLY_VERIFIER_KEYS_DIGEST).not.toBe(VERIFIER_KEYS_DIGEST);
     });
   });
 
@@ -1309,6 +1418,7 @@ describe('resumeAccountDeployment', () => {
     ['other verifier key pins', { verifierKeysDigest: '00'.repeat(32) }],
     ['no verifier key digest', { verifierKeysDigest: undefined }],
     ['no handover authority', { handoverAuthority: undefined }],
+    ['another bundle', { bundleId: 'account-tally' }],
   ])(
     'rejects a deployment recorded under %s before reading the chain or sending a wave',
     async (_case, recorded) => {
@@ -1327,6 +1437,68 @@ describe('resumeAccountDeployment', () => {
       expect(ledgerMocks.MaintenanceUpdate.instances).toHaveLength(0);
     },
   );
+
+  it('reads a deployment recorded without a bundle as the default bundle, refusing to resume it under another', async () => {
+    await expect(
+      resumeAccountDeployment({ ...resumeProps, bundle: tallyBundle }),
+    ).rejects.toThrow(
+      new CreationArtefactMismatchError(
+        "The unfinished creation of the account at deployed-address was started from account bundle 'account', so it cannot be resumed from 'account-tally'.",
+      ),
+    );
+    expect(queryContractState).not.toHaveBeenCalled();
+  });
+
+  it('names the recorded and the requested bundle when it refuses a resume under another bundle', async () => {
+    await expect(
+      resumeAccountDeployment({
+        ...resumeProps,
+        pending: pendingTallyDeployment,
+      }),
+    ).rejects.toThrow(
+      new CreationArtefactMismatchError(
+        "The unfinished creation of the account at deployed-address was started from account bundle 'account-tally', so it cannot be resumed from 'account'.",
+      ),
+    );
+    expect(queryContractState).not.toHaveBeenCalled();
+  });
+
+  it("resumes a bundle deployment under the recorded bundle, installing that bundle's roster with its compiled contract", async () => {
+    const account = await resumeAccountDeployment({
+      ...resumeProps,
+      bundle: tallyBundle,
+      pending: pendingTallyDeployment,
+    });
+
+    expect(getVerifierKey.mock.calls.map(([operation]) => operation)).toEqual(
+      TALLY_OPERATIONS,
+    );
+    expect([...ledgerMocks.chain.operations]).toEqual(TALLY_OPERATIONS);
+    expect(contractsMocks.createUnprovenDeployTx).not.toHaveBeenCalled();
+    const [, findOptions] = contractsMocks.findDeployedContract.mock.calls[0];
+    expect(findOptions.compiledContract).toMatchObject({
+      tag: 'account-tally',
+    });
+    expect(account.isActivated).toBe(false);
+  });
+
+  it('refuses a resume under a build of the recorded bundle pinning other verifier keys', async () => {
+    await expect(
+      resumeAccountDeployment({
+        ...resumeProps,
+        bundle: {
+          ...tallyBundle,
+          verifierKeys: { ...tallyKeys, [TALLY_CIRCUIT]: 'bb'.repeat(32) },
+        },
+        pending: pendingTallyDeployment,
+      }),
+    ).rejects.toThrow(
+      new CreationArtefactMismatchError(
+        "The unfinished creation of the account at deployed-address was started under other verifier key pins than this build of account bundle 'account-tally' installs, so it cannot be resumed.",
+      ),
+    );
+    expect(queryContractState).not.toHaveBeenCalled();
+  });
 
   it('rejects with AccountContractMissingError when the address holds no contract', async () => {
     queryContractState.mockResolvedValueOnce(null);

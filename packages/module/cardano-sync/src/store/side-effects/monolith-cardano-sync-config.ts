@@ -50,7 +50,11 @@ export const monolithCardanoSyncConfig: CardanoSyncEngineConfig<MonolithCardanoS
       {
         wallets: { selectActiveNetworkAccounts$ },
         addresses: { selectAllAddresses$ },
-        cardanoContext: { selectTip$, selectChainId$ },
+        cardanoContext: {
+          selectTip$,
+          selectChainId$,
+          selectWalletSyncResetOperation$,
+        },
         failures: { selectAllFailures$ },
       },
     ) => {
@@ -132,7 +136,16 @@ export const monolithCardanoSyncConfig: CardanoSyncEngineConfig<MonolithCardanoS
       );
 
       // Merge natural and manual triggers
-      return merge(naturalTrigger$, manualRetryTrigger$);
+      return merge(naturalTrigger$, manualRetryTrigger$).pipe(
+        withLatestFrom(selectWalletSyncResetOperation$),
+        map(([context, resetOperation]) => ({
+          ...context,
+          accounts: context.accounts.filter(account => {
+            const status = resetOperation(account.accountId)?.status;
+            return status !== 'Pending' && status !== 'InProgress';
+          }),
+        })),
+      );
     },
     buildRoundOperations: (account, context) => {
       const hasAddresses = context.accountsWithAddresses.has(account.accountId);

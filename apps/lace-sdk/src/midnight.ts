@@ -27,6 +27,7 @@ export type {
   MidnightPublicEndpoints,
   MidnightPublicNetworkId,
 } from './midnight-module';
+export type { MidnightWorkerOptions } from './midnight-worker/options';
 export { createMidnightPasskeyWalletEntity } from './midnight-passkey-wallet-entity';
 export type { CreateMidnightPasskeyWalletEntityProps } from './midnight-passkey-wallet-entity';
 export { selectMidnightNetwork } from './select-midnight-network';
@@ -67,10 +68,18 @@ export type {
 } from './midnight-wallet';
 export {
   MidnightAccountNotFoundError,
+  MidnightAttestedProverUnsupportedError,
+  MidnightEngineResetError,
   MidnightNetworkNotConfiguredError,
   MidnightNothingToRegisterError,
+  MidnightStaleTxError,
+  MidnightSubmitInterruptedError,
   MidnightSubmitTimeoutError,
   MidnightWalletNotReadyError,
+  MidnightWorkerSettingsConflictError,
+  MidnightWorkerStartupError,
+  MidnightWorkerStoppedError,
+  MidnightWorkerUnsupportedError,
 } from './midnight-errors';
 export type { MidnightErrorCode } from './midnight-errors';
 export { Err, Ok } from '@lace-lib/util';

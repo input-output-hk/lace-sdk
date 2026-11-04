@@ -31,7 +31,7 @@ import type {
 } from './types';
 import type { Cardano, Serialization } from '@lace-lib/cardano-core';
 import type { Cip30DataSignature } from '@lace-lib/cardano-dapp-connector';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const defaultRootPrivateKeyEncryption: PassphraseEncryption = {
   decrypt: emip3decrypt,

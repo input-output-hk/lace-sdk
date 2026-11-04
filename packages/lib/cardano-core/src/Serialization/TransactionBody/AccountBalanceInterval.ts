@@ -1,10 +1,13 @@
-import { InvalidArgumentError, InvalidStateError } from '@lace-lib/util/common';
+import {
+  InvalidArgumentError,
+  InvalidStateError,
+} from '@lace-lib/cardano-util';
 
 import { SerializationError, SerializationFailure } from '../../errors';
 import { CborReader, CborReaderState, CborWriter } from '../CBOR';
 
 import type * as Cardano from '../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const INTERVAL_ARRAY_SIZE = 2;
 const BOTH_NIL_MESSAGE = 'Both interval bounds cannot be nil.';

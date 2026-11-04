@@ -16,6 +16,7 @@ import { ByteArray, HexBytes } from '@lace-lib/util';
 import { x25519 } from '@noble/curves/ed25519.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { accountBundle, createBundleRegistry } from '../../src/acc/bundle';
 import {
   encodeDevicePublicKey,
   sealDeviceEnvelope,
@@ -26,6 +27,7 @@ import { addDevice, removeDevice } from '../../src/flows/devices';
 import { issuedGrant } from './issued-grant';
 
 import type * as AccModule from '../../src/acc/acc-module';
+import type { AcceptedGatedCall } from '../../src/acc/gated-call';
 import type { DeviceCallInput } from '../../src/flows/devices';
 import type * as Rotation from '../../src/flows/rotation';
 import type {
@@ -91,6 +93,12 @@ const targetCommitment = '22'.repeat(32);
 const deviceEpoch = 4n;
 const localKey = new JubjubDevice(31n);
 const joiningKey = new JubjubDevice(37n);
+
+/** What the gated call reports once the contract accepted it, leaving the device at `advancedCounter`. */
+const acceptedCall = (advancedCounter: bigint): AcceptedGatedCall => ({
+  advancedCounter: UseCounter(advancedCounter),
+  result: undefined,
+});
 const grantee = new JubjubDevice(41n);
 const joiningCommitment = HexBytes.fromByteArray(
   joiningKey.entryAt(
@@ -120,6 +128,7 @@ const network = {
 const account: PassportAccountInfo = {
   address: accountAddress,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -248,6 +257,7 @@ const createContext = ({
       stages.push(stage);
     },
     rpId: 'lace.io',
+    bundles: createBundleRegistry(),
   };
   return {
     authoriser,
@@ -273,7 +283,7 @@ beforeEach(() => {
   mocks.readGrants.mockReturnValue([]);
   mocks.createMidnightProviders.mockResolvedValue(providers);
   mocks.connectAccountHandle.mockResolvedValue(handle);
-  mocks.executeGatedCall.mockResolvedValue(UseCounter(3n));
+  mocks.executeGatedCall.mockResolvedValue(acceptedCall(3n));
   mocks.rotateEncKey.mockResolvedValue({
     encKey: rotatedKey,
     dropped: [],
@@ -320,11 +330,15 @@ describe('addDevice', () => {
       network,
       prover,
       sponsor,
+      bundle: accountBundle,
+      bundles: [accountBundle],
+      calledContracts: [],
       onStage: expect.any(Function) as unknown,
     });
     expect(mocks.connectAccountHandle).toHaveBeenCalledExactlyOnceWith(
       providers,
       accountAddress,
+      { bundle: accountBundle },
     );
     expect(mocks.executeGatedCall).toHaveBeenCalledExactlyOnceWith({
       handle,
@@ -353,7 +367,7 @@ describe('addDevice', () => {
         ...ledgerState(),
         device_epoch: deviceEpoch + 1n,
       }));
-      return UseCounter(3n);
+      return acceptedCall(3n);
     });
 
     await expect(
@@ -501,7 +515,7 @@ describe('addDevice', () => {
     });
     mocks.executeGatedCall.mockImplementation(async () => {
       inSession.push(isSessionOpen);
-      return UseCounter(3n);
+      return acceptedCall(3n);
     });
     vi.mocked(accountRecords.write).mockImplementation(async () => {
       inSession.push(isSessionOpen);
@@ -585,8 +599,8 @@ describe('addDevice', () => {
       const { context, accountRecords } = createContext();
       const failure = new Error('node unreachable');
       mocks.executeGatedCall
-        .mockResolvedValueOnce(UseCounter(3n))
-        .mockResolvedValueOnce(UseCounter(4n))
+        .mockResolvedValueOnce(acceptedCall(3n))
+        .mockResolvedValueOnce(acceptedCall(4n))
         .mockRejectedValueOnce(failure);
 
       await expect(
@@ -716,8 +730,9 @@ describe('addDevice', () => {
           mocks.assertMaintenanceSigner.mock.invocationCallOrder[0],
         ).toBeLessThan(withKeySession.mock.invocationCallOrder[0]);
         expect(mocks.followRosterAuthority).toHaveBeenCalledExactlyOnceWith({
-          address: accountAddress,
+          account,
           seams: context.seams,
+          bundles: context.bundles,
           keyring: chainKeyring,
           authority: rotatedAuthority,
           onProgress: context.onProgress,
@@ -942,8 +957,9 @@ describe('removeDevice', () => {
       mocks.assertMaintenanceSigner.mock.invocationCallOrder[0],
     ).toBeLessThan(withKeySession.mock.invocationCallOrder[0]);
     expect(mocks.followRosterAuthority).toHaveBeenCalledExactlyOnceWith({
-      address: accountAddress,
+      account,
       seams: context.seams,
+      bundles: context.bundles,
       keyring: chainKeyring,
       authority: rotatedAuthority,
       onProgress: context.onProgress,
@@ -1261,7 +1277,7 @@ describe('removeDevice', () => {
     });
     mocks.executeGatedCall.mockImplementation(async () => {
       inSession.push(isSessionOpen);
-      return UseCounter(3n);
+      return acceptedCall(3n);
     });
 
     await removeDevice(callInput(), context);

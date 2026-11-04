@@ -1,6 +1,6 @@
 import type { Cardano } from '../..';
 import type { Provider } from '../Provider';
-import type { Range } from '@lace-lib/util/common';
+import type { Range } from '@lace-lib/cardano-util';
 
 export interface Reward {
   epoch: Cardano.EpochNo;

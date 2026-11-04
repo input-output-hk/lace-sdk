@@ -1,7 +1,7 @@
 import type { Credential } from '../Address';
 import type { Slot } from './Block';
 import type * as Crypto from '@lace-lib/cardano-crypto';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** Plutus script type. */
 export enum ScriptType {

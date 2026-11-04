@@ -1,4 +1,4 @@
-import { HexBlob, InvalidArgumentError } from '@lace-lib/util/common';
+import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { EpochNo } from '../../Cardano/types/Block';
 import { CborReader, CborReaderState, CborWriter } from '../CBOR';

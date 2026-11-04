@@ -1,39 +1,22 @@
-import { defaultTxTtlLength } from '@lace-contract/midnight-context';
-import {
-  deserializeMidnightSealedTransaction,
-  deserializeMidnightUnsealedTransaction,
-  groupMidnightConnectorInputs,
-  groupMidnightConnectorOutputs,
-} from '@lace-lib/vendor/midnight-connector-transaction';
-import {
-  catchError,
-  defer,
-  firstValueFrom,
-  of,
-  switchMap,
-  throwError,
-  timeout,
-} from 'rxjs';
+import { defer } from 'rxjs';
 
-import {
-  balanceMidnightRecipe,
-  releaseThenThrow,
-} from './balance-midnight-recipe';
+import { midnightOperationsOf } from './midnight-engine-operations';
 import { withMidnightWallet } from './midnight-wallet';
 import { resolveProveTimeout } from './prove-midnight-tx';
 
-import type { MidnightTxRecipe } from './build-midnight-transfer';
 import type {
   MidnightAccountProps,
   WalletWithMidnight,
 } from './midnight-wallet';
 import type { MidnightFinalizedTx } from './prove-midnight-tx';
-import type { MidnightWallet } from '@lace-contract/midnight-context';
+import type { MidnightEngine } from '@lace-contract/midnight-context';
 import type { Result } from '@lace-lib/util';
+import type { MidnightConnectorRequest } from '@lace-module/midnight-sync/sdk';
 import type {
   DesiredInput,
   DesiredOutput,
 } from '@midnight-ntwrk/dapp-connector-api';
+import type { Observable } from 'rxjs';
 
 type ProveTimeoutProps = {
   /**
@@ -105,46 +88,16 @@ const validateBalance = ({ tx, options }: MidnightBalanceProps) => {
   }
 };
 
-// What a connector build reserved, as a recipe `revert` takes: the whole
-// recipe when the wallet built it, otherwise its balancing transaction. The
-// dApp's own transaction may spend coins an earlier build reserved, and the
-// wallet does not reserve the unshielded inputs it adds to an unbound one.
-const reservedBy = (recipe: MidnightTxRecipe): MidnightTxRecipe | undefined =>
-  recipe.type === 'UNPROVEN_TRANSACTION'
-    ? recipe
-    : recipe.balancingTransaction && {
-        type: 'UNPROVEN_TRANSACTION',
-        transaction: recipe.balancingTransaction,
-      };
-
-// The timeout bounds proving only: it stops waiting for the proof server
-// without cancelling the proving under way, as `proveMidnightTx` does.
-// A signing failure leaves the build's reservations in place and the caller
-// holds no recipe to discard, so they are released first. A proving failure
-// is left to the engine, which releases what it was proving.
-const finalize = async (
-  wallet: MidnightWallet,
-  recipe: MidnightTxRecipe,
-  { sign, proveTimeout }: { sign: boolean; proveTimeout: number },
-): Promise<MidnightFinalizedTx> => {
-  const reserved = reservedBy(recipe);
-  const prepared = sign
-    ? await firstValueFrom(
-        wallet
-          .signRecipe(recipe)
-          .pipe(
-            catchError((signingError: unknown) =>
-              reserved
-                ? releaseThenThrow(wallet, reserved, signingError)
-                : throwError(() => signingError),
-            ),
-          ),
-      )
-    : recipe;
-  return firstValueFrom(
-    wallet.finalizeRecipe(prepared).pipe(timeout(proveTimeout)),
-  );
-};
+// The engine-side build times proving itself, in the worker or on this page, so balancing and signing stay unbounded.
+const buildWithin = (
+  engine: MidnightEngine,
+  request: MidnightConnectorRequest,
+  proveTimeout: number,
+): Observable<MidnightFinalizedTx> =>
+  midnightOperationsOf(engine).buildConnectorTransaction({
+    ...request,
+    proveTimeout,
+  });
 
 /**
  * Balances, signs and proves a binding transaction; never submits it.
@@ -155,23 +108,18 @@ export const balanceMidnightSealedTransaction = async (
   props: MidnightBalanceProps,
 ): Promise<Result<MidnightFinalizedTx, Error>> =>
   withMidnightWallet(wallet, props, engine =>
-    defer(async () => {
+    defer(() => {
       const proveTimeout = resolveProveTimeout(props.proveTimeout);
       validateBalance(props);
-      const transaction = await deserializeMidnightSealedTransaction(props.tx);
-      const recipe = await firstValueFrom(
-        engine.balanceFinalizedTransaction(transaction, {
-          ttl: new Date(Date.now() + defaultTxTtlLength),
-          tokenKindsToBalance:
-            props.options?.payFees === false
-              ? ['shielded', 'unshielded']
-              : undefined,
-        }),
-      );
-      return finalize(engine, recipe, {
-        sign: true,
+      return buildWithin(
+        engine,
+        {
+          kind: 'balance-sealed',
+          tx: props.tx,
+          payFees: props.options?.payFees,
+        },
         proveTimeout,
-      });
+      );
     }),
   );
 
@@ -184,31 +132,24 @@ export const balanceMidnightUnsealedTransaction = async (
   props: MidnightBalanceProps,
 ): Promise<Result<MidnightFinalizedTx, Error>> =>
   withMidnightWallet(wallet, props, engine =>
-    defer(async () => {
+    defer(() => {
       const proveTimeout = resolveProveTimeout(props.proveTimeout);
       validateBalance(props);
-      const transaction = await deserializeMidnightUnsealedTransaction(
-        props.tx,
-      );
-      const recipe = await firstValueFrom(
-        engine.balanceUnboundTransaction(transaction, {
-          ttl: new Date(Date.now() + defaultTxTtlLength),
-          tokenKindsToBalance:
-            props.options?.payFees === false
-              ? ['shielded', 'unshielded']
-              : undefined,
-        }),
-      );
-      return finalize(engine, recipe, {
-        sign: true,
+      return buildWithin(
+        engine,
+        {
+          kind: 'balance-unsealed',
+          tx: props.tx,
+          payFees: props.options?.payFees,
+        },
         proveTimeout,
-      });
+      );
     }),
   );
 
 /**
  * Builds and proves connector transfers, including mixed token kinds; signs when unshielded outputs exist.
- * Obtain consumer consent before calling. Returns a native finalized transaction without submitting.
+ * Obtain consumer consent before calling. Returns the proved transaction without submitting.
  * Fees default to enabled; use `buildMidnightTransfers` for separate homogeneous build/sign/prove stages.
  */
 export const makeMidnightTransfer = async (
@@ -216,52 +157,21 @@ export const makeMidnightTransfer = async (
   props: MidnightMakeTransferProps,
 ): Promise<Result<MidnightFinalizedTx, Error>> =>
   withMidnightWallet(wallet, props, engine =>
-    defer(async () => {
+    defer(() => {
       const proveTimeout = resolveProveTimeout(props.proveTimeout);
       validateOptions(props.options);
       validateTokens(props.desiredOutputs);
-      const outputs = groupMidnightConnectorOutputs(
-        props.desiredOutputs,
-        engine.networkId,
-      );
-      const ttl = new Date(Date.now() + defaultTxTtlLength);
-      // Built without its fee, then balanced when fees are paid, so that a
-      // release that fails beside a fee failure is reported, not dropped.
-      const recipe = await firstValueFrom(
-        engine
-          .transferTransaction(outputs, { ttl, payFees: false })
-          .pipe(
-            switchMap(built =>
-              props.options?.payFees ?? true
-                ? balanceMidnightRecipe(engine, built, ttl)
-                : of(built),
-            ),
-          ),
-      );
-      return finalize(engine, recipe, {
-        sign: outputs.some(output => output.type === 'unshielded'),
+      return buildWithin(
+        engine,
+        {
+          kind: 'transfer',
+          desiredOutputs: props.desiredOutputs,
+          payFees: props.options?.payFees,
+        },
         proveTimeout,
-      });
+      );
     }),
   );
-
-// The wallet library builds each kind's leg from that kind's inputs and
-// silently drops the outputs of a kind that offers none, so the signed
-// transaction would no longer express the requested exchange.
-const assertOutputKindsHaveInputs = (
-  inputs: ReturnType<typeof groupMidnightConnectorInputs>,
-  outputs: ReturnType<typeof groupMidnightConnectorOutputs>,
-) => {
-  const missing = outputs
-    .map(output => output.type)
-    .filter(kind => inputs[kind] === undefined);
-  if (missing.length > 0)
-    throw new Error(
-      `Midnight intent requests ${missing.join(
-        ' and ',
-      )} outputs without inputs of that kind, which the wallet library would drop`,
-    );
-};
 
 /**
  * Builds and proves an intent, signing when inputs or outputs include unshielded tokens.
@@ -278,7 +188,7 @@ export const makeMidnightIntent = async (
   props: MidnightMakeIntentProps,
 ): Promise<Result<MidnightFinalizedTx, Error>> =>
   withMidnightWallet(wallet, props, engine =>
-    defer(async () => {
+    defer(() => {
       const proveTimeout = resolveProveTimeout(props.proveTimeout);
       validateOptions(props.options);
       if (
@@ -291,31 +201,15 @@ export const makeMidnightIntent = async (
       }
       validateTokens(props.desiredInputs);
       validateTokens(props.desiredOutputs);
-      const inputs = groupMidnightConnectorInputs(props.desiredInputs);
-      const outputs = groupMidnightConnectorOutputs(
-        props.desiredOutputs,
-        engine.networkId,
-      );
-      assertOutputKindsHaveInputs(inputs, outputs);
-      const ttl = new Date(Date.now() + defaultTxTtlLength);
-      // Built without its fee, then balanced when fees are paid, so that a
-      // release that fails beside a fee failure is reported, not dropped.
-      const recipe = await firstValueFrom(
-        engine
-          .initSwap(inputs, outputs, { ttl, payFees: false })
-          .pipe(
-            switchMap(built =>
-              props.options.payFees
-                ? balanceMidnightRecipe(engine, built, ttl)
-                : of(built),
-            ),
-          ),
-      );
-      return finalize(engine, recipe, {
-        sign:
-          !!inputs.unshielded ||
-          outputs.some(output => output.type === 'unshielded'),
+      return buildWithin(
+        engine,
+        {
+          kind: 'intent',
+          desiredInputs: props.desiredInputs,
+          desiredOutputs: props.desiredOutputs,
+          payFees: props.options.payFees,
+        },
         proveTimeout,
-      });
+      );
     }),
   );

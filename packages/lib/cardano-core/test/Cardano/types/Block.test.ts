@@ -1,5 +1,5 @@
 import { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
-import { InvalidStringError, typedBech32 } from '@lace-lib/util/common';
+import { InvalidStringError, typedBech32 } from '@lace-lib/cardano-util';
 import * as BaseEncoding from '@scure/base';
 
 import {
@@ -9,8 +9,8 @@ import {
   VrfVkBech32,
 } from '../../../src/Cardano';
 
-vi.mock('@lace-lib/util/common', async () => {
-  const actual = await vi.importActual<any>('@lace-lib/util/common');
+vi.mock('@lace-lib/cardano-util', async () => {
+  const actual = await vi.importActual<any>('@lace-lib/cardano-util');
   return {
     ...actual,
     typedBech32: vi

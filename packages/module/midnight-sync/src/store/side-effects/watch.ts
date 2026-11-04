@@ -9,7 +9,7 @@ import {
 import { TokenId } from '@lace-contract/tokens';
 import { whileActive } from '@lace-contract/wallet-active-state';
 import { SecretBox } from '@lace-lib/core';
-import { BigNumber, ByteArray, HexBytes, Timestamp } from '@lace-lib/util';
+import { BigNumber, ByteArray, Timestamp } from '@lace-lib/util';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import { createKeystore } from '@midnightntwrk/wallet-sdk/unshielded';
@@ -33,8 +33,10 @@ import {
   mergeAll,
   mergeMap,
   of,
+  pairwise,
   ReplaySubject,
   share,
+  startWith,
   switchMap,
   take,
   takeUntil,
@@ -48,20 +50,28 @@ import {
 
 import { FEATURE_FLAG_MIDNIGHT_UNSHIELDED } from '../../const';
 import { MidnightSyncFailureId } from '../../value-objects/midnight-sync-failure-id.vo';
+import { acrossMidnightEngineResets } from '../../worker/engine-client';
+import {
+  dustBalancesOf,
+  dustGenerationOf,
+  midnightStateOf$,
+  shieldedPublicKeysOf,
+} from '../../worker/state-accessors';
 import { createTemenosLedgerIndexerResolver } from '../temenos-ledger-indexer';
 
 import { createAccountKeyManager as createAccountKeyManagerImpl } from './account-key-manager';
 
 import type { ActionCreators, SideEffect } from '../../context';
+import type { MidnightEngineClient } from '../../worker/engine-client';
 import type { AuthSecret } from '@lace-contract/authentication-prompt';
 import type { FeatureFlag } from '@lace-contract/feature';
 import type {
-  MidnightWalletsByAccountId,
+  MidnightEngine,
+  MidnightEnginesByAccountId,
   AccountKeyManager,
   AccountKeys,
   CoinsByTokenType,
   CoinStatus,
-  DustGenerationDetails,
   MidnightAccountId,
   MidnightAccountProps,
   MidnightNetwork,
@@ -70,7 +80,6 @@ import type {
   MidnightShieldedAddress,
   MidnightTokenKind,
   MidnightUnshieldedAddress,
-  MidnightWallet,
   SerializedMidnightWallet,
 } from '@lace-contract/midnight-context';
 import type { ActionType } from '@lace-contract/module';
@@ -81,6 +90,7 @@ import type {
   AnyAccount,
   InMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { HexBytes } from '@lace-lib/util';
 
 type MidnightWatchAction = ActionType<ActionCreators>;
 
@@ -157,26 +167,8 @@ const buildAddressTokenData = ({
  * coin a pending transaction pays with, which is what the next transfer can
  * spend.
  */
-// Sums totalCoins rather than state.dust.balance: totalCoins is
-// availableCoins ++ pendingCoins, and a build moves the whole DUST coin it
-// pays with into pending.
-export const midnightDustBalances = ({
-  dust,
-}: {
-  dust: {
-    totalCoins: readonly { generatedNow: bigint }[];
-    availableCoins: readonly { generatedNow: bigint }[];
-  };
-}): { balance: bigint; available: bigint } => ({
-  balance: dust.totalCoins.reduce((sum, coin) => sum + coin.generatedNow, 0n),
-  available: dust.availableCoins.reduce(
-    (sum, coin) => sum + coin.generatedNow,
-    0n,
-  ),
-});
-
-// Dust balance subscription - emits setDustBalance when wallet.state() emits
-// Note: wallet.state() uses combineLatest([shielded, unshielded, dust]) internally.
+// Dust balance subscription - emits setDustBalance when the engine state emits
+// Note: an in-process wallet.state() uses combineLatest([shielded, unshielded, dust]) internally.
 // DustWallet emits state immediately upon restoration (before start() is called),
 // so this will emit as soon as the wallet is created/restored.
 // dustBalance is also persisted in Redux to show cached value on app restart
@@ -186,17 +178,17 @@ export const midnightDustBalances = ({
 // dispatch pushes the whole root state to every UI port.
 export const updateDustBalance =
   (
-    wallet: MidnightWallet,
-    wallets$: BehaviorSubject<MidnightWalletsByAccountId>,
+    wallet: MidnightEngine,
+    wallets$: BehaviorSubject<MidnightEnginesByAccountId>,
   ): SideEffect =>
   (_, __, { actions }) =>
-    wallet.state().pipe(
+    midnightStateOf$(wallet).pipe(
       throttleTime(500, undefined, { leading: true, trailing: true }),
       // Below the throttle: a queued trailing emission outlives the wallet and
       // would revive persisted dust state that a reset just cleared.
       filter(() => !!wallets$.value[wallet.accountId]),
       map(state => {
-        const { balance, available } = midnightDustBalances(state);
+        const { balance, available } = dustBalancesOf(state);
         return {
           dustBalance: BigNumber(balance),
           dustAvailable: BigNumber(available),
@@ -293,7 +285,7 @@ const buildTokenMetadata = ({
 // selectLoadedFeatures$ has emitted in the integration test environment.
 export const upsertAddresses =
   (
-    wallet: MidnightWallet,
+    wallet: MidnightEngine,
     isUnshieldedEnabled$: Observable<boolean>,
   ): SideEffect =>
   (_, __, { actions }) =>
@@ -318,9 +310,9 @@ export const upsertAddresses =
 // keeping the SW event loop responsive for navigation and other user actions.
 export const updateSyncProgress =
   (
-    wallet: MidnightWallet,
+    wallet: MidnightEngine,
     isUnshieldedEnabled$: Observable<boolean>,
-    wallets$: BehaviorSubject<MidnightWalletsByAccountId>,
+    wallets$: BehaviorSubject<MidnightEnginesByAccountId>,
   ): SideEffect =>
   (_, stateObservables, { actions }) =>
     wallet.syncProgress$.pipe(
@@ -429,54 +421,16 @@ export const updateSyncProgress =
 // Throttled for the same reason as updateDustBalance.
 export const updateDustGenerationDetails =
   (
-    wallet: MidnightWallet,
-    wallets$: BehaviorSubject<MidnightWalletsByAccountId>,
+    wallet: MidnightEngine,
+    wallets$: BehaviorSubject<MidnightEnginesByAccountId>,
   ): SideEffect =>
   (_, __, { actions }) =>
-    wallet.state().pipe(
+    midnightStateOf$(wallet).pipe(
       throttleTime(500, undefined, { leading: true, trailing: true }),
       // Below the throttle: a queued trailing emission outlives the wallet and
       // would revive persisted dust state that a reset just cleared.
       filter(() => !!wallets$.value[wallet.accountId]),
-      map((state): DustGenerationDetails | undefined => {
-        const coinsWithFullInfo = state.dust.totalCoins;
-        if (coinsWithFullInfo.length === 0) {
-          return undefined;
-        }
-        const totalCurrentValue = coinsWithFullInfo.reduce(
-          (sum, coin) => sum + coin.generatedNow,
-          0n,
-        );
-        const totalMaxCap = coinsWithFullInfo.reduce(
-          (sum, coin) => sum + coin.maxCap,
-          0n,
-        );
-        const totalRate = coinsWithFullInfo.reduce(
-          (sum, coin) => sum + coin.rate,
-          0n,
-        );
-        const earliestDecayTime = coinsWithFullInfo
-          .map(coin => coin.dtime)
-          .filter((d): d is Date => d !== undefined)
-          .reduce<Date | undefined>(
-            (earliest, d) => (!earliest || d < earliest ? d : earliest),
-            undefined,
-          );
-        const latestMaxCapReachedAt = coinsWithFullInfo
-          .map(coin => coin.maxCapReachedAt)
-          .filter((d): d is Date => d !== undefined)
-          .reduce<Date | undefined>(
-            (latest, d) => (!latest || d > latest ? d : latest),
-            undefined,
-          );
-        return {
-          currentValue: totalCurrentValue,
-          maxCap: totalMaxCap,
-          decayTime: earliestDecayTime?.getTime(),
-          maxCapReachedAt: latestMaxCapReachedAt?.getTime(),
-          rate: totalRate,
-        };
-      }),
+      map(dustGenerationOf),
       distinctUntilChanged(
         (a, b) =>
           a?.currentValue === b?.currentValue &&
@@ -496,7 +450,7 @@ export const updateDustGenerationDetails =
 // Token updates - emits setAddressTokens and upsertTokensMetadata when coins change.
 export const updateTokens =
   (
-    wallet: MidnightWallet,
+    wallet: MidnightEngine,
     isUnshieldedEnabled$: Observable<boolean>,
   ): SideEffect =>
   (_, stateObservables, { actions }) =>
@@ -556,17 +510,14 @@ export const updateTokens =
     );
 
 export const updateSetPublicKeys =
-  (wallet: MidnightWallet): SideEffect =>
+  (wallet: MidnightEngine): SideEffect =>
   (_, __, { actions }) =>
-    wallet.state().pipe(
+    midnightStateOf$(wallet).pipe(
       take(1),
-      map(({ shielded }) =>
+      map(state =>
         actions.midnightContext.setPublicKeys({
           accountId: wallet.accountId,
-          publicKeys: {
-            coin: HexBytes(shielded.coinPublicKey.toHexString()),
-            encryption: HexBytes(shielded.encryptionPublicKey.toHexString()),
-          },
+          publicKeys: shieldedPublicKeysOf(state),
         }),
       ),
     );
@@ -577,8 +528,8 @@ export const updateSetPublicKeys =
  */
 export const subscribeToWallet =
   (
-    wallet: MidnightWallet,
-    wallets$: BehaviorSubject<MidnightWalletsByAccountId>,
+    wallet: MidnightEngine,
+    wallets$: BehaviorSubject<MidnightEnginesByAccountId>,
   ): SideEffect =>
   (actionObservables, stateObservables, dependencies) => {
     const isUnshieldedEnabled$ =
@@ -607,9 +558,30 @@ export const subscribeToWallet =
   };
 
 /**
+ * {@link subscribeToWallet} for an engine of either kind; for a worker engine, again after each reset the worker ran
+ * in place, so that the fresh engine's values pass the change filters after the page cleared its caches.
+ */
+const subscribeToEngine =
+  (
+    wallet: MidnightEngine,
+    wallets$: BehaviorSubject<MidnightEnginesByAccountId>,
+  ): SideEffect =>
+  (actionObservables, stateObservables, dependencies) =>
+    acrossMidnightEngineResets<MidnightWatchAction>(
+      wallet,
+      () => [],
+      () =>
+        subscribeToWallet(wallet, wallets$)(
+          actionObservables,
+          stateObservables,
+          dependencies,
+        ),
+    );
+
+/**
  * Helper to decrypt an encrypted key buffer with an auth secret.
  */
-const decryptKey = async (
+export const decryptKey = async (
   encryptedKey: HexBytes,
   authSecret: AuthSecret,
 ): Promise<ByteArray> =>
@@ -620,7 +592,7 @@ const decryptKey = async (
  * the AccountKeys structure. Extracted as a top-level helper to avoid
  * deeply nested function expressions inside the requestKeys observable chain.
  */
-const buildAccountKeys = (
+export const buildAccountKeys = (
   [nightKeyBuffer, dustKeyBuffer, zswapKeyBuffer]: readonly [
     ByteArray,
     ByteArray,
@@ -744,7 +716,7 @@ export const watchMidnightAccount =
           });
         }),
         mergeMap(midnightWallet =>
-          subscribeToWallet(midnightWallet, midnightWallets$)(
+          subscribeToEngine(midnightWallet, midnightWallets$)(
             actionObservables,
             stateObservables,
             dependencies,
@@ -780,6 +752,59 @@ export const watchMidnightAccount =
         }),
       );
   };
+
+// The failure and the Failed sync operation of an account whose engine does not run. Without `retryAction`, the
+// failure offers no tap-to-retry.
+const midnightSyncFailedActions = (
+  actions: ActionCreators,
+  accountId: AccountId,
+  retryAction?: MidnightWatchAction,
+): MidnightWatchAction[] => {
+  const failedAt = Timestamp(Date.now());
+  return [
+    actions.failures.addFailure({
+      failureId: MidnightSyncFailureId(accountId),
+      message: 'sync.error.midnight-sync-failed',
+      retryAction,
+    }),
+    actions.sync.addSyncOperation({
+      accountId,
+      operation: {
+        operationId: `${accountId}-midnight-sync`,
+        status: 'Failed',
+        description: 'sync.operation.midnight-wallet-sync',
+        error: 'sync.error.midnight-sync-failed',
+        startedAt: failedAt,
+        failedAt,
+      },
+    }),
+  ];
+};
+
+/**
+ * Publishes each failure the Worker-mode engine client records for an account (a refused start, a worker that cannot
+ * start or run, or the end of the worker that served the account) as the watcher publishes a start whose retries ran
+ * out, but without a tap-to-retry (ADR 15's natural tier). The client holds the account's next start instead of
+ * failing it, so that the watcher does not retry what a retry cannot change; only a public operation asking for the
+ * engine lets it start again, which `restartWalletWatch` does not do. The recorded failures replay, so a failure
+ * recorded before this subscribes is still published. The failure clears once the next start syncs.
+ */
+export const surfaceMidnightEngineFailures =
+  (client: Pick<MidnightEngineClient, 'startFailures$'>): SideEffect =>
+  (_, __, { actions }) =>
+    client.startFailures$.pipe(
+      startWith<Readonly<Partial<Record<AccountId, Error>>>>({}),
+      pairwise(),
+      mergeMap(([before, after]) =>
+        (Object.keys(after) as AccountId[])
+          .filter(
+            accountId =>
+              after[accountId] !== undefined &&
+              after[accountId] !== before[accountId],
+          )
+          .flatMap(accountId => midnightSyncFailedActions(actions, accountId)),
+      ),
+    );
 
 type WatchSingleMidnightAccountOptions = {
   account: InMemoryWalletAccount<MidnightAccountProps>;
@@ -826,25 +851,13 @@ const watchSingleMidnightAccount =
       // whether or not sync ever started.
       catchError(error => {
         dependencies.logger.error('Account watch failure:', error);
-        const failedAt = Timestamp(Date.now());
-        return from([
-          dependencies.actions.failures.addFailure({
-            failureId: MidnightSyncFailureId(account.accountId),
-            message: 'sync.error.midnight-sync-failed',
-            retryAction: dependencies.actions.midnightSync.restartWalletWatch(),
-          }),
-          dependencies.actions.sync.addSyncOperation({
-            accountId: account.accountId,
-            operation: {
-              operationId: `${account.accountId}-midnight-sync`,
-              status: 'Failed',
-              description: 'sync.operation.midnight-wallet-sync',
-              error: 'sync.error.midnight-sync-failed',
-              startedAt: failedAt,
-              failedAt,
-            },
-          }),
-        ]);
+        return from(
+          midnightSyncFailedActions(
+            dependencies.actions,
+            account.accountId,
+            dependencies.actions.midnightSync.restartWalletWatch(),
+          ),
+        );
       }),
       // Account removal tears the watcher down — abandoning the retry loop
       // rather than burning the rest of its budget, and surfacing no failure

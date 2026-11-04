@@ -5,13 +5,20 @@
  * signature only when its mirror reproduces the challenge the device
  * signed.
  */
-import { TokenColor, UseCounter } from '@lace-contract/passport';
+import {
+  CircuitNotRegisteredError,
+  TokenColor,
+  UseCounter,
+} from '@lace-contract/passport';
 import { HexBytes } from '@lace-lib/util';
 import { jubjub } from '@noble/curves/misc.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { pureCircuits } from '../../src/acc/acc-module';
-import { jubjubChallenges } from '../../src/acc/challenges';
+import {
+  descriptorChallenge,
+  jubjubChallenges,
+} from '../../src/acc/challenges';
 import {
   prepareAppendInbox,
   prepareRotateEncKey,
@@ -27,7 +34,10 @@ import { bytesToBigIntLE, JUBJUB_R, JubjubDevice } from '../../src/acc/signer';
 
 import { AccountSim } from './account-sim';
 
-import type { GrantScopeInput } from '@lace-contract/passport';
+import type {
+  CircuitDescriptor,
+  GrantScopeInput,
+} from '@lace-contract/passport';
 
 const CONTRACT_ADDRESS = Uint8Array.from(
   { length: 32 },
@@ -288,5 +298,116 @@ describe('jubjubChallenges encryption key builders', () => {
         authorisation.grindNonce,
       ),
     ).rejects.toThrow(/unknown device entry/);
+  });
+});
+
+describe('descriptorChallenge', () => {
+  const TALLY_ADDRESS = { bytes: new Uint8Array(32).fill(0x21) };
+  const HELD_COIN = { nonce: new Uint8Array(32).fill(0x22), value: 5n };
+  const CHALLENGE = new Uint8Array(32).fill(0x33);
+  const descriptor: CircuitDescriptor = {
+    label: 'Set the tally',
+    args: [
+      { name: 'tally', label: 'Tally', type: 'contract', interface: 'Tally' },
+      { name: 'tally_addr', type: 'contract-address', of: 'tally' },
+      {
+        name: 'value',
+        label: 'Value',
+        type: 'uint',
+        maxval: '18446744073709551615',
+      },
+    ],
+    challenge: 'challenge_tally_set_with_jubjub',
+    challengeArgs: ['tally_addr', 'value'],
+    witnesses: [],
+  };
+  const args = [TALLY_ADDRESS, TALLY_ADDRESS, 5n];
+
+  const build = (
+    overrides: Partial<CircuitDescriptor> = {},
+    circuits: Record<string, unknown> = {},
+  ) => {
+    const challenge = vi.fn(() => CHALLENGE);
+    const builder = descriptorChallenge({
+      pureCircuits: { challenge_tally_set_with_jubjub: challenge, ...circuits },
+      circuit: 'tally_set_with_jubjub',
+      descriptor: { ...descriptor, ...overrides },
+      args,
+      witnessValues: [HELD_COIN],
+    })(context, device.pk);
+    return { builder, challenge };
+  };
+
+  it('calls the named pure circuit with the address, announcement, key, the challenge arguments in order, the nonce and the grind nonce', () => {
+    const { builder, challenge } = build();
+
+    expect(builder(SIG_R, 9n)).toBe(CHALLENGE);
+    expect(challenge).toHaveBeenCalledExactlyOnceWith(
+      { bytes: CONTRACT_ADDRESS },
+      SIG_R,
+      device.pk,
+      TALLY_ADDRESS,
+      5n,
+      AUTH_NONCE,
+      9n,
+    );
+  });
+
+  it('takes a witness value by its position among the witnesses, in the order the descriptor names it', () => {
+    const { builder, challenge } = build({
+      challengeArgs: ['held_coin', 'value'],
+      witnesses: [{ name: 'held_coin', label: 'Coin' }],
+    });
+
+    builder(SIG_R, 0n);
+    expect(challenge).toHaveBeenCalledExactlyOnceWith(
+      { bytes: CONTRACT_ADDRESS },
+      SIG_R,
+      device.pk,
+      HELD_COIN,
+      5n,
+      AUTH_NONCE,
+      0n,
+    );
+  });
+
+  it('refuses a challenge the module does not export as a pure circuit', () => {
+    expect(() => build({ challenge: 'challenge_tally_get' })).toThrow(
+      CircuitNotRegisteredError,
+    );
+    expect(() =>
+      build({ challenge: 'challenge_tally_get' }, { challenge_tally_get: 7 }),
+    ).toThrow(
+      "Circuit tally_set_with_jubjub names challenge 'challenge_tally_get', which its bundle module does not export.",
+    );
+  });
+
+  it('refuses a challenge argument that names no argument or witness of the call', () => {
+    expect(() => build({ challengeArgs: ['tally_addr', 'amount'] })).toThrow(
+      CircuitNotRegisteredError,
+    );
+    expect(() => build({ challengeArgs: ['tally_addr', 'amount'] })).toThrow(
+      "Circuit tally_set_with_jubjub has no value for challenge argument 'amount' its descriptor names.",
+    );
+  });
+
+  it('does not take an inherited property of the module for its challenge', () => {
+    expect(() => build({ challenge: 'constructor' })).toThrow(
+      "Circuit tally_set_with_jubjub names challenge 'constructor', which its bundle module does not export.",
+    );
+  });
+
+  it('refuses a challenge argument the call carries no value for', () => {
+    expect(() =>
+      descriptorChallenge({
+        pureCircuits: { challenge_tally_set_with_jubjub: () => CHALLENGE },
+        circuit: 'tally_set_with_jubjub',
+        descriptor,
+        args: [TALLY_ADDRESS],
+        witnessValues: [],
+      }),
+    ).toThrow(
+      "Circuit tally_set_with_jubjub has no value for challenge argument 'tally_addr' its descriptor names.",
+    );
   });
 });

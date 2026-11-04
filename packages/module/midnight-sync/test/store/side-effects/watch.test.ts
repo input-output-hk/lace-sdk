@@ -51,7 +51,7 @@ import type {
   CoinsByTokenType,
   MidnightWallet,
   MidnightWalletAddress,
-  MidnightWalletsByAccountId,
+  MidnightEnginesByAccountId,
 } from '@lace-contract/midnight-context';
 import type { CollectionStorage } from '@lace-contract/storage';
 import type { AccountSyncStatus } from '@lace-contract/sync';
@@ -90,7 +90,7 @@ const {
 } = stubData;
 const networkId = MidnightSDKNetworkIds.Preview;
 // The registry watchMidnightAccount hands to the per-wallet effects.
-const midnightWallets$ = new BehaviorSubject<MidnightWalletsByAccountId>({});
+const midnightWallets$ = new BehaviorSubject<MidnightEnginesByAccountId>({});
 
 const actions = {
   ...addressesActions,

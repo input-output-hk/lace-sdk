@@ -109,7 +109,7 @@ const bundleToolchain = async bundle => {
 };
 
 const usage =
-  'usage: inventory-artefacts.mjs <bundle-directory> --commit <upstream sha> [--check]\n';
+  'usage: inventory-artefacts.mjs <bundle-directory> --commit <upstream sha> [--check] [--out <file>]\n';
 
 const run = async () => {
   const { values, positionals } = parseArgs({
@@ -117,6 +117,7 @@ const run = async () => {
     options: {
       commit: { type: 'string' },
       check: { type: 'boolean', default: false },
+      out: { type: 'string' },
     },
   });
   const [bundle] = positionals;
@@ -130,22 +131,21 @@ const run = async () => {
     toolchain: await bundleToolchain(bundle),
     digests: await bundleDigests(bundle),
   });
+  const target = values.out ? path.resolve(values.out) : inventoryFile;
   const serialized = `${JSON.stringify(inventory, null, 2)}\n`;
   if (values.check) {
-    const committed = await readFile(inventoryFile, 'utf8');
+    const committed = await readFile(target, 'utf8');
     if (committed !== serialized) {
       process.stderr.write(
-        `${path.basename(inventoryFile)} does not match ${bundle}\n`,
+        `${path.basename(target)} does not match ${bundle}\n`,
       );
       process.exitCode = 1;
     }
     return;
   }
-  await writeFile(inventoryFile, serialized);
+  await writeFile(target, serialized);
   process.stdout.write(
-    `${
-      Object.keys(inventory.circuits).length
-    } circuits written to ${inventoryFile}\n`,
+    `${Object.keys(inventory.circuits).length} circuits written to ${target}\n`,
   );
 };
 

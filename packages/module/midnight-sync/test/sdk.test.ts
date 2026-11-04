@@ -1,4 +1,5 @@
 import { AuthSecret } from '@lace-contract/authentication-prompt';
+import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
 import { ByteArray } from '@lace-lib/util';
 import { firstValueFrom, of } from 'rxjs';
@@ -104,13 +105,23 @@ describe('createMidnightSyncModule', () => {
     const { default: init } = await module.store!.load();
     const loaded = await init(props, { logger: dummyLogger });
     const { default: initEngine } = await module.addons.loadMidnightEngine();
-    const engine = initEngine(props, { logger: dummyLogger });
+    const { engines$, startFailures$, requestEngine } = await initEngine(
+      props,
+      { logger: dummyLogger },
+    );
 
     expect(contractNames(module.implements)).toContain('midnight-engine-addon');
-    expect(engine).toBe(loaded.sideEffectDependencies!.midnightWallets$);
-    expect(engine).toBe(initEngine(props, { logger: dummyLogger }));
-    expect(initEngine(runtimeProps(), { logger: dummyLogger })).not.toBe(
-      engine,
+    expect(engines$).toBe(loaded.sideEffectDependencies!.midnightEngines$);
+    expect(engines$).toBe(
+      (await initEngine(props, { logger: dummyLogger })).engines$,
     );
+    expect(
+      (await initEngine(runtimeProps(), { logger: dummyLogger })).engines$,
+    ).not.toBe(engines$);
+    // Page mode: the engine retries its own starts, so nothing is ever recorded.
+    expect(() => {
+      requestEngine(stubData.accountId);
+    }).not.toThrow();
+    await expect(firstValueFrom(startFailures$)).resolves.toEqual({});
   });
 });

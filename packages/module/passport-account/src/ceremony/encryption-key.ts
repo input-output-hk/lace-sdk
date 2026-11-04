@@ -3,6 +3,7 @@ import { encryptionKeyOver, liveEnvelopeOver } from '../acc/enc-keys';
 import { asPassport } from './passkey-errors';
 
 import type { FindLiveEnvelope } from '../acc/enc-keys';
+import type { PassportRegistry } from '../acc/registry';
 import type { PassportEncryptionKey } from '@lace-contract/passport';
 import type { PasskeySessionKeySource } from '@lace-lib/passkey';
 
@@ -18,13 +19,20 @@ export type PasskeyEncryptionKey = Required<PassportEncryptionKey>;
  * at a time. Only public keys, inbox entries, the coins and bookkeeping
  * they open to, the sealed secret of a read grant and maintenance update
  * signatures leave this function, every secret being zeroed as soon as
- * its one use is over. A dismissed prompt or a PRF-less authenticator
- * surfaces as the matching Passport error.
+ * its one use is over. `registry` is what the host registers, the same
+ * value it gives the module and the authoriser: a verifier key install is signed only for an operation of
+ * the roster of the bundle it names, with the key that bundle pins. A
+ * dismissed prompt or a PRF-less authenticator surfaces as the matching
+ * Passport error.
  */
 export const createPasskeyEncryptionKey = (
   keySource: PasskeySessionKeySource,
+  registry?: PassportRegistry,
 ): PasskeyEncryptionKey => {
-  const key = encryptionKeyOver(async params => keySource.deriveSecret(params));
+  const key = encryptionKeyOver(
+    async params => keySource.deriveSecret(params),
+    registry,
+  );
   return {
     readerPublicKey: async networkId =>
       asPassport(async () => key.readerPublicKey(networkId)),

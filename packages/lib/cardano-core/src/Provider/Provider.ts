@@ -1,5 +1,5 @@
 import type { Cardano } from '..';
-import type { Percent } from '@lace-lib/util/common';
+import type { Percent } from '@lace-lib/cardano-util';
 import type { Logger } from 'ts-log';
 
 export type HealthCheckResponse = {

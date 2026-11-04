@@ -7,13 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
-const sourceRoots = [
-  ...fs
-    .readdirSync(path.join(repositoryRoot, 'packages/lib'))
-    .filter(name => name.startsWith('cardano-'))
-    .map(name => path.join('packages/lib', name, 'src')),
-  'packages/lib/util/src/common',
-];
+const sourceRoots = fs
+  .readdirSync(path.join(repositoryRoot, 'packages/lib'))
+  .filter(name => name.startsWith('cardano-'))
+  .map(name => path.join('packages/lib', name, 'src'));
 // A default import and a namespace import are separate bindings, so each kind
 // is held to one name on its own.
 const IMPORT =

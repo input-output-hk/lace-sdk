@@ -1,4 +1,4 @@
-import { HexBlob, InvalidArgumentError } from '@lace-lib/util/common';
+import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { NativeScriptKind, ScriptType } from '../../../Cardano/types/Script';
 import { CborReader, CborWriter } from '../../CBOR';

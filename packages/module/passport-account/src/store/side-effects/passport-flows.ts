@@ -3,6 +3,7 @@ import { concat, exhaustMap, map, merge, of, withLatestFrom } from 'rxjs';
 
 import { flowActions, toFlowError } from './flow-actions';
 
+import type { ContractCallResult } from '../../flows/call-contract';
 import type { CreateAccountInput } from '../../flows/create-account';
 import type { DeviceRoster } from '../../flows/devices';
 import type { GrantRoster, IssuedGrant } from '../../flows/grants';
@@ -12,6 +13,7 @@ import type { RecognisedAccount } from '../../flows/sign-in';
 import type { AccountCallInput, FlowAccountState } from '../../flows/types';
 import type { FlowEvent } from '../dependencies';
 import type {
+  CallContractPayload,
   DeviceReader,
   GrantId,
   GrantScopeInput,
@@ -37,6 +39,8 @@ const REVOKE_ALL_GRANTS_FALLBACK_ERROR_CODE = 'grant-revoke-all-failed';
 const READ_HOLDINGS_FALLBACK_ERROR_CODE = 'holdings-read-failed';
 /** Flow error code for installs that carry no typed code of their own. */
 const INSTALL_OPERATIONS_FALLBACK_ERROR_CODE = 'operations-install-failed';
+/** Flow error code for contract calls that carry no typed code of their own. */
+const CALL_CONTRACT_FALLBACK_ERROR_CODE = 'contract-call-failed';
 
 /**
  * Flows an account call may start from. 'error' is a settled state, not
@@ -357,6 +361,35 @@ const installOperationsCall: AccountCallConfig<
 };
 
 /**
+ * The callContract flow behind its action: the roster and counter the
+ * call advanced, then the call itself, last so a consumer reacting to it
+ * finds the roster already moved, then 'ready'. The call rotates no key,
+ * so a failure leaves the key state as it was.
+ */
+const callContractCall: AccountCallConfig<
+  CallContractPayload,
+  ContractCallResult
+> = {
+  start: ({ circuit, args, witnesses }, input, dependencies) =>
+    dependencies.passportFlows.callContract(
+      { circuit, args, ...(witnesses ? { witnesses } : {}), ...input },
+      dependencies,
+    ),
+  onDone:
+    actions =>
+    ({ circuit, txId, result, ...roster }) =>
+      [
+        ...publishDeviceRoster(actions)(roster),
+        actions.passport.setLastContractCall({
+          circuit,
+          txId,
+          ...(result === undefined ? {} : { result }),
+        }),
+      ],
+  fallbackCode: CALL_CONTRACT_FALLBACK_ERROR_CODE,
+};
+
+/**
  * An account call behind its action, as the actions it publishes: what
  * the call left behind, then 'ready', or, when it fails, the actions
  * undoing what state may wrongly claim, then the error. The flow itself
@@ -440,8 +473,8 @@ const accountCallStarts = <Payload, Result>({
  * Runs whichever passport flow was requested: {@link runCreateAccount}
  * behind the createAccount action, {@link runSignIn} behind signIn, and
  * {@link runAccountCall} behind addDevice, removeDevice, issueGrant,
- * revokeGrant, revokeAllGrants, readShieldedHoldings and
- * installOperations.
+ * revokeGrant, revokeAllGrants, readShieldedHoldings, installOperations
+ * and callContract.
  *
  * Every flow owns the same account record, the same device key and the
  * same flow state, and each chain call resolves the account's use counter
@@ -474,6 +507,7 @@ export const runPassportFlow: SideEffect = (
   {
     passport: {
       addDevice$,
+      callContract$,
       createAccount$,
       installOperations$,
       issueGrant$,
@@ -535,6 +569,12 @@ export const runPassportFlow: SideEffect = (
     accountCallStarts({
       config: installOperationsCall,
       trigger$: installOperations$,
+      stateObservables,
+      dependencies,
+    }),
+    accountCallStarts({
+      config: callContractCall,
+      trigger$: callContract$,
       stateObservables,
       dependencies,
     }),

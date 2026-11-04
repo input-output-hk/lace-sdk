@@ -1,17 +1,6 @@
-import {
-  defaultTxTtlLength,
-  getDesignationTargetType,
-  NIGHT_TOKEN_ID,
-} from '@lace-contract/midnight-context';
-import { BigNumber } from '@lace-lib/util';
-import {
-  DustAddress,
-  MidnightBech32m,
-} from '@midnightntwrk/wallet-sdk-address-format';
-import { combineLatest, map, switchMap, take } from 'rxjs';
+import { defer } from 'rxjs';
 
-import { balanceMidnightRecipe } from './balance-midnight-recipe';
-import { MidnightNothingToRegisterError } from './midnight-errors';
+import { midnightOperationsOf } from './midnight-engine-operations';
 import { withMidnightWallet } from './midnight-wallet';
 
 import type { MidnightTxRecipe } from './build-midnight-transfer';
@@ -19,12 +8,7 @@ import type {
   MidnightAccountProps,
   WalletWithMidnight,
 } from './midnight-wallet';
-import type { MidnightWallet } from '@lace-contract/midnight-context';
 import type { Result } from '@lace-lib/util';
-import type {
-  FacadeState,
-  UtxoWithMeta,
-} from '@midnightntwrk/wallet-sdk/facade';
 
 /** The options of `registerMidnightDust`. */
 export interface RegisterMidnightDustProps extends MidnightAccountProps {
@@ -43,69 +27,15 @@ export interface RegisterMidnightDustProps extends MidnightAccountProps {
 }
 
 /**
- * Whether the account already takes part in DUST generation: registered
- * NIGHT, generated DUST, or generation capacity (the contract's
- * `getDesignationTargetType` plus capacity). The engine does not report where
- * registered NIGHT generates, so this covers a designation to the account's
- * own address and to an external one alike.
+ * Refuses `ttl` before the engine is asked: the engine sets a registration's validity window, and the fee estimate
+ * prices the same window.
  */
-const isDesignatedForDust = (
-  state: FacadeState,
-  nightCoins: readonly UtxoWithMeta[],
-) =>
-  getDesignationTargetType(
-    nightCoins.map(({ utxo, meta }) => ({
-      status: 'available' as const,
-      value: BigNumber(utxo.value),
-      registeredForDustGeneration: meta.registeredForDustGeneration,
-    })),
-    state.dust.totalCoins.reduce((sum, coin) => sum + coin.generatedNow, 0n),
-  ) !== 'none' || state.dust.totalCoins.some(coin => coin.maxCap > 0n);
-
-/** Internal unsigned selection shared with fee estimation. */
-export const prepareMidnightDustRegistration = (
-  midnightWallet: MidnightWallet,
-  {
-    dustAddress: destination,
-    ttl,
-  }: Pick<RegisterMidnightDustProps, 'dustAddress' | 'ttl'>,
-) =>
-  combineLatest([
-    midnightWallet.state().pipe(take(1)),
-    midnightWallet.address$.pipe(take(1)),
-  ]).pipe(
-    map(([state, address]) => {
-      if (ttl !== undefined)
-        throw new Error(
-          'A DUST registration does not accept ttl: the engine sets its validity window',
-        );
-      const nightCoins = state.unshielded.availableCoins.filter(
-        ({ utxo }) => utxo.type === NIGHT_TOKEN_ID,
-      );
-      if (
-        nightCoins.length === 0 ||
-        nightCoins.every(({ utxo }) => utxo.value <= 0n)
-      )
-        throw new MidnightNothingToRegisterError(midnightWallet.accountId);
-      const dustAddress = DustAddress.codec.decode(
-        midnightWallet.networkId,
-        MidnightBech32m.parse(destination ?? address.dust),
-      );
-      if (destination !== undefined && isDesignatedForDust(state, nightCoins))
-        throw new Error(
-          'DUST destination cannot be changed while the account is designated for DUST generation',
-        );
-      return {
-        state,
-        nightCoins,
-        dustAddress,
-        destination: destination ?? address.dust,
-        isRepeatRegistration: nightCoins.some(
-          coin => coin.meta.registeredForDustGeneration,
-        ),
-      };
-    }),
-  );
+export const assertNoRegistrationTtl = (ttl: unknown): void => {
+  if (ttl !== undefined)
+    throw new Error(
+      'A DUST registration does not accept ttl: the engine sets its validity window',
+    );
+};
 
 /**
  * Registers every available NIGHT UTXO. Obtain consumer consent before
@@ -128,31 +58,14 @@ export const prepareMidnightDustRegistration = (
  */
 export const registerMidnightDust = async (
   wallet: WalletWithMidnight,
-  { ttl, dustAddress: destination, ...account }: RegisterMidnightDustProps = {},
+  { ttl, dustAddress, ...account }: RegisterMidnightDustProps = {},
 ): Promise<Result<MidnightTxRecipe, Error>> =>
-  withMidnightWallet(wallet, account, midnightWallet =>
-    prepareMidnightDustRegistration(midnightWallet, {
-      dustAddress: destination,
-      ttl,
-    }).pipe(
-      switchMap(({ nightCoins, dustAddress, isRepeatRegistration }) => {
-        const registration$ =
-          midnightWallet.registerNightUtxosForDustGeneration(
-            nightCoins,
-            dustAddress,
-          );
-        if (!isRepeatRegistration) return registration$;
-        return registration$.pipe(
-          switchMap(registration =>
-            // The engine reserved the NIGHT when it built the registration;
-            // the caller never receives that recipe, so release it on failure.
-            balanceMidnightRecipe(
-              midnightWallet,
-              registration,
-              new Date(Date.now() + defaultTxTtlLength),
-            ),
-          ),
-        );
-      }),
-    ),
+  withMidnightWallet(wallet, account, engine =>
+    defer(() => {
+      assertNoRegistrationTtl(ttl);
+      return midnightOperationsOf(engine).build({
+        kind: 'dust-registration',
+        dustAddress,
+      });
+    }),
   );

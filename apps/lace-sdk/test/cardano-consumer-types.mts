@@ -21,8 +21,8 @@ import {
   type WithMnemonicWords as RootWithMnemonicWords,
 } from '@laceio/sdk';
 
-// Both builds' fixture: the canary build adds no Cardano or root export it
-// names. A consumer that lacks a package the declarations import
+// The stable build's fixture; test/cardano-consumer-types.canary.mts covers
+// the canary build. A consumer that lacks a package the declarations import
 // reads its types as `any`, which accepts every value, so each directive below
 // goes unused. A type-level `0 extends 1 & T` test misses this `any`, because
 // the `any` of an unresolved import satisfies `false` as well as `true`.
@@ -51,6 +51,28 @@ void rootEntry.m.createPassportAccountModule;
 void rootEntry.createRemotePassportSeams;
 // @ts-expect-error MIP-0015 secrets are experimental.
 void rootEntry.deriveSymmetricSecret;
+
+// Hydra Head recognition is a preview feature of the canary Cardano entry.
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.findAccountHydraHeads;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.hydraHeadsIndexSelectors;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.toHydraHeadPositions;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.toHydraHeadCards;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.fromHydraHeadsIndexSnapshot;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.toHydraDepositActivityStates;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.fromBlockfrostUtxo;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.parseHydraTxTagFromJsonMetadata;
+// @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.HYDRA_HEAD_HISTORY_LIMITS;
+// @ts-expect-error Hydra Head recognition is canary.
+void rootEntry.findAccountHydraHeads;
 
 declare const source: WithMnemonicWords;
 const rootSource: RootWithMnemonicWords = source;
@@ -84,6 +106,9 @@ const wallet = await createLaceWallet({
   config: {},
 });
 void wallet;
+// Every scope name indexes `stateObservables`, so the check reads a selector.
+// @ts-expect-error Hydra Head state is canary.
+void wallet.stateObservables.hydraHeadsIndex.selectIndexByAccount$;
 const hostedSigner = createRemotePasskeySigner({
   signerUrl: 'https://signer.example',
 });

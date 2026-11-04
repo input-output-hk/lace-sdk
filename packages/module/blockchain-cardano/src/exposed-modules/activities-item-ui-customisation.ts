@@ -1,6 +1,7 @@
 import {
   isCardanoAddress,
   LOVELACE_TOKEN_ID,
+  selectHydraDepositActivityStates,
 } from '@lace-contract/cardano-context';
 import { BigNumber } from '@lace-lib/util';
 import {
@@ -29,8 +30,8 @@ const INSIGNIFICANT_LOVELACE_THRESHHOLD_IN_MULTI_ASSET_TX = 5000000n;
  *
  * This method provides various customizations required for displaying Cardano-specific activities.
  * It includes the ability to identify Cardano activities, construct transaction explorer URLs, determine balance
- * changes for the primary token (ADA), and summarize information about associated tokens such as NFTs and other
- * native assets.
+ * changes for the primary token (ADA), summarize information about associated tokens such as NFTs and other
+ * native assets, and select the live states of Hydra deposits.
  */
 const activitiesListUiCustomisation = () =>
   createUICustomisation<ActivitiesItemUICustomisation<CardanoAddressData>>({
@@ -47,6 +48,7 @@ const activitiesListUiCustomisation = () =>
       }
       return '';
     },
+    selectActivityStates: selectHydraDepositActivityStates,
     getMainTokenBalanceChange: (
       tokenBalanceChanges: ActivityTokenBalanceChange[],
     ) =>

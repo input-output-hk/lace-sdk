@@ -1,5 +1,5 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { Base64Blob, HexBlob, InvalidStateError } from '@lace-lib/util/common';
+import { Base64Blob, HexBlob, InvalidStateError } from '@lace-lib/cardano-util';
 
 import { BootstrapWitness } from '../../../src/Serialization';
 

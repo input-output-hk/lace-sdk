@@ -1,4 +1,4 @@
-import { InvalidStringError } from '@lace-lib/util/common';
+import { InvalidStringError } from '@lace-lib/cardano-util';
 
 import { TxCBOR } from '../../src/Serialization';
 

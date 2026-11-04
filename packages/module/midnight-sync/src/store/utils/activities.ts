@@ -136,5 +136,9 @@ export const deriveUnshieldedActivity = ({
   };
 };
 
+/**
+ * An empty string when the SDK reports no fee: `ActivityDetail`'s "no fee"
+ * value, so the detail view shows none rather than a zero-cost transaction.
+ */
 export const formatFee = (fees: WalletEntry['fees']): string =>
-  fees === null || fees === undefined ? '0' : String(fees);
+  fees === null || fees === undefined ? '' : String(fees);

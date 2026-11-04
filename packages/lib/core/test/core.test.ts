@@ -1,4 +1,4 @@
-import { Crypto } from '@lace-lib/vendor';
+import { Cardano, Crypto } from '@lace-lib/vendor';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -6,7 +6,10 @@ import {
   deriveBip32PublicKey,
   emip3decrypt,
   emip3encrypt,
+  encodeBaseAddress,
+  encodeRewardAddress,
   encryptRecoveryPhrase,
+  getPaymentCredential,
   hashEd25519PublicKey,
   KeyRole,
   WalletId,
@@ -82,5 +85,35 @@ describe('@lace-lib/core', () => {
     expect(hashEd25519PublicKey(publicKey)).toBe(
       '00b7847c89d5721592fc0cc8932f50a8f8258b39b93861140a1b99fb',
     );
+  });
+
+  it('reads the payment credential of a base or enterprise address, and none from a reward address or garbage', () => {
+    const payment: Cardano.Credential = {
+      type: Cardano.CredentialType.KeyHash,
+      hash: Crypto.Hash28ByteBase16('aa'.repeat(28)),
+    };
+    const stake: Cardano.Credential = {
+      type: Cardano.CredentialType.KeyHash,
+      hash: Crypto.Hash28ByteBase16('bb'.repeat(28)),
+    };
+    const enterprise = Cardano.EnterpriseAddress.fromCredentials(
+      Cardano.NetworkId.Testnet,
+      payment,
+    )
+      .toAddress()
+      .toBech32() as Cardano.PaymentAddress;
+
+    expect(getPaymentCredential(encodeBaseAddress(0, payment, stake))).toEqual(
+      payment,
+    );
+    expect(getPaymentCredential(enterprise)).toEqual(payment);
+    expect(
+      getPaymentCredential(
+        encodeRewardAddress(0, stake) as unknown as Cardano.PaymentAddress,
+      ),
+    ).toBeUndefined();
+    expect(
+      getPaymentCredential('not-an-address' as Cardano.PaymentAddress),
+    ).toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
 import type { Cardano, Provider } from '../../..';
 import type { Paginated, PaginationArgs } from '../../types/Pagination';
 import type { SortFields } from '../util';
-import type { DeepPartial } from '@lace-lib/util/common';
+import type { DeepPartial } from '@lace-lib/cardano-util';
 
 export type FilterCondition = 'and' | 'or';
 export type SortOrder = 'asc' | 'desc';

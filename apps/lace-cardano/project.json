@@ -13,7 +13,6 @@
       "inputs": [
         "{projectRoot}/**/*",
         "{workspaceRoot}/packages/lib/cardano-*/src/**/*",
-        "{workspaceRoot}/packages/lib/util/src/common/**/*",
         "{workspaceRoot}/tsconfig.base.json"
       ],
       "outputs": ["{projectRoot}/dist"],

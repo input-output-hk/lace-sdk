@@ -64,6 +64,23 @@ export const CANARY_ONLY_ENTRIES = [
   },
 ];
 
+/**
+ * Worker mode's SharedWorker script: a build input of the canary build alone,
+ * which the bundler builds on its own as `dist/<name>.js`, next to the
+ * Midnight entry that starts it by that path. It is not a package export, so
+ * it has no `exports` entry, no declarations and no consumer fixture. The
+ * release check counts the source it reaches as the canary build's, so a
+ * change to that source alone releases no stable package.
+ */
+export const MIDNIGHT_WORKER = {
+  name: 'midnight-worker',
+  source: 'src/midnight-worker/worker.ts',
+};
+
+/** The source files of a channel's build inputs that are not entries. */
+export const channelBuildInputSources = channel =>
+  channel === 'canary' ? [MIDNIGHT_WORKER.source] : [];
+
 /** The entries of a build channel, in build order. */
 export const channelEntryNames = channel => [
   ...STABLE_ENTRIES,

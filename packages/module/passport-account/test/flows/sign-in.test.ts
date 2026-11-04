@@ -1,5 +1,6 @@
 import {
   AccAddress,
+  AccountBundleUnknownError,
   AccountContractMissingError,
   AccountCreationPendingError,
   AccountNotFoundError,
@@ -19,6 +20,9 @@ import { jubjub } from '@noble/curves/misc.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { expectedVk } from '../../src/acc/acc-module';
+import { createBundleRegistry } from '../../src/acc/bundle';
+import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
 import {
   encodeDevicePublicKey,
   openGrantRecord,
@@ -38,6 +42,7 @@ import { signIn } from '../../src/flows/sign-in';
 import { issuedGrant } from './issued-grant';
 
 import type * as AccModule from '../../src/acc/acc-module';
+import type * as AccountCall from '../../src/flows/account-call';
 import type {
   AccountRecords,
   FlowContext,
@@ -55,11 +60,16 @@ import type {
 const mocks = vi.hoisted(() => ({
   createIndexerClient: vi.fn(),
   ledger: vi.fn(),
+  queryAccountVerifierKeys: vi.fn(),
   readGrants: vi.fn(),
 }));
 
 vi.mock('../../src/infra/indexer', () => ({
   createIndexerClient: mocks.createIndexerClient,
+}));
+vi.mock('../../src/flows/account-call', async importOriginal => ({
+  ...(await importOriginal<typeof AccountCall>()),
+  queryAccountVerifierKeys: mocks.queryAccountVerifierKeys,
 }));
 vi.mock('../../src/acc/acc-module', async importOriginal => ({
   ...(await importOriginal<typeof AccModule>()),
@@ -90,6 +100,9 @@ const network = {
   artefactUrl: 'http://artefacts.example.com/account',
 };
 const contractState = { data: 'charged-state' };
+const vendoredKeys = new Map(
+  DEPLOYED_OPERATIONS.map(operation => [operation, expectedVk[operation]]),
+);
 const encKey = new Uint8Array(32).fill(2);
 const encKeyHex = HexBytes.fromByteArray(encKey);
 const accountSecrets = {
@@ -327,6 +340,7 @@ const createContext = ({
       stages.push(stage);
     },
     rpId,
+    bundles: createBundleRegistry(),
   };
   return {
     authoriser,
@@ -356,6 +370,7 @@ describe('signIn', () => {
     queryContractState.mockResolvedValue(contractState);
     mocks.createIndexerClient.mockReturnValue({ queryContractState });
     mocks.ledger.mockReturnValue(ledgerStateFor([2n]));
+    mocks.queryAccountVerifierKeys.mockResolvedValue(vendoredKeys);
     mocks.readGrants.mockReturnValue([]);
   });
 
@@ -366,6 +381,7 @@ describe('signIn', () => {
       account: {
         address: accountAddress,
         bindingVersion: record.bindingVersion,
+        bundleId: 'account',
         status: 'ready',
         networkId: 'undeployed',
       },
@@ -382,6 +398,33 @@ describe('signIn', () => {
     });
     expect(queryContractState).toHaveBeenCalledExactlyOnceWith(accountAddress);
     expect(mocks.ledger).toHaveBeenCalledExactlyOnceWith(contractState.data);
+  });
+
+  it('publishes the id of the bundle the on-chain verifier keys resolve to, read through the same indexer client', async () => {
+    const { context } = createContext({ stored: record });
+
+    await expect(signIn(context)).resolves.toMatchObject({
+      account: { bundleId: 'account' },
+    });
+    expect(mocks.queryAccountVerifierKeys).toHaveBeenCalledExactlyOnceWith(
+      { queryContractState },
+      accountAddress,
+    );
+  });
+
+  it('rejects with AccountBundleUnknownError before the keys are opened when no registered bundle covers the on-chain verifier keys', async () => {
+    mocks.queryAccountVerifierKeys.mockResolvedValue(
+      new Map([['add_device_with_jubjub', 'ff'.repeat(32)]]),
+    );
+    const { context, authoriser, encryptionKey, accountRecords } =
+      createContext({ stored: record });
+
+    const signedIn = signIn(context);
+    await expect(signedIn).rejects.toThrow(AccountBundleUnknownError);
+    await expect(signedIn).rejects.toThrow('add_device_with_jubjub');
+    expect(encryptionKey.openInbox).not.toHaveBeenCalled();
+    expect(authoriser.deviceCommitment).not.toHaveBeenCalled();
+    expect(accountRecords.write).not.toHaveBeenCalled();
   });
 
   it('opens the Lace records of the inbox with the keyring of the ledger enc_key and this device envelopes alone', async () => {

@@ -35,7 +35,7 @@ import {
   HexBlob,
   areNumbersEqualInConstantTime,
   areStringsEqualInConstantTime,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 // The transports' CommonJS builds: their ESM builds, and @ledgerhq/errors' that
 // they import, import their own files without extensions, which Node's ESM
 // loader refuses. The CommonJS builds load under import and require() in Node
@@ -492,9 +492,9 @@ export class LedgerKeyAgent extends KeyAgentBase {
     communicationType: CommunicationType,
   ): Promise<Array<USBDevice | string>> {
     try {
-      return communicationType === CommunicationType.Node
+      return await (communicationType === CommunicationType.Node
         ? TransportNodeHid.list()
-        : TransportWebUSB.list();
+        : TransportWebUSB.list());
     } catch (error) {
       throw new errors.TransportError('Cannot fetch device list', error);
     }

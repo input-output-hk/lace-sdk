@@ -1,4 +1,4 @@
-import { InvalidStateError } from '@lace-lib/util/common';
+import { InvalidStateError } from '@lace-lib/cardano-util';
 
 import { CborReader } from '../../../CBOR';
 
@@ -7,7 +7,7 @@ import { SingleHostAddr } from './SingleHostAddr';
 import { SingleHostName } from './SingleHostName';
 
 import type * as Cardano from '../../../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** The relay kind. */
 export enum RelayKind {

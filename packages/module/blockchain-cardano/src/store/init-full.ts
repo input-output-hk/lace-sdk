@@ -1,6 +1,8 @@
 import { composerFlowSideEffects } from './composer-flow-side-effects';
 import { composerFlowTxSideEffects } from './composer-flow-tx-side-effects';
 import { initializeDependencies } from './dependencies';
+import { makeHydraHeadsIndexSweep } from './hydra-heads/index-side-effect';
+import { makeHydraActivitiesRetagging } from './hydra-heads/retag-activities-side-effect';
 import { nightDesignationFlowSideEffects } from './night-designation-flow-side-effects';
 import { nightDesignationFlowTxSideEffects } from './night-designation-flow-tx-side-effects';
 import { createCardanoSideEffects } from './side-effects';
@@ -20,6 +22,8 @@ const redux: LaceInit<LaceModuleStoreInit> = async (props, dependencies) => ({
     ...composerFlowTxSideEffects,
     ...nightDesignationFlowSideEffects,
     ...nightDesignationFlowTxSideEffects,
+    makeHydraHeadsIndexSweep(),
+    makeHydraActivitiesRetagging(),
   ],
   sideEffectDependencies: await initializeDependencies(props, dependencies),
 });

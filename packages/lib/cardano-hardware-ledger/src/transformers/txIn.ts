@@ -3,7 +3,7 @@ import { TxInId, util } from '@lace-lib/cardano-key-management';
 import type { LedgerTxTransformerContext } from '../types';
 import type * as Ledger from '@cardano-foundation/ledgerjs-hw-app-cardano';
 import type { Cardano } from '@lace-lib/cardano-core';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 
 const resolveKeyPath = (
   txIn: Cardano.TxIn,

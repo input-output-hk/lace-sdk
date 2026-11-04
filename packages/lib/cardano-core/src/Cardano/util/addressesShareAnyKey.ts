@@ -1,4 +1,4 @@
-import { InvalidStringError } from '@lace-lib/util/common';
+import { InvalidStringError } from '@lace-lib/cardano-util';
 
 import { Address, AddressType } from '../Address/Address';
 

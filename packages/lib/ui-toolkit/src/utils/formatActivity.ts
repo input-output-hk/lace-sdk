@@ -1,6 +1,7 @@
 import {
   ActivityType,
   type Activity,
+  type ActivityStates,
   type GetActivityTokenBalanceChange,
   type GetActivityTokensInfoSummary,
 } from '@lace-contract/activities';
@@ -13,12 +14,19 @@ import {
 import groupBy from 'lodash/groupBy';
 
 import type { IconName } from '../design-system/atoms/icons/Icon';
-import type { ActivityCardProps } from '../design-system/molecules/activityCard/activityCard';
+import type {
+  ActivityCardProps,
+  ActivityTag,
+} from '../design-system/molecules/activityCard/activityCard';
 import type {
   ActivitySection,
   FormattedActivityListItem,
 } from '../design-system/organisms/activityList/activityList';
-import type { CardanoNightDesignationActivityMetadata } from '@lace-contract/cardano-context';
+import type {
+  CardanoHydraActivityMetadata,
+  CardanoHydraDepositActivityState,
+  CardanoNightDesignationActivityMetadata,
+} from '@lace-contract/cardano-context';
 import type { TFunction } from '@lace-contract/i18n';
 import type { MetadataByTokenId, TokenId } from '@lace-contract/tokens';
 
@@ -77,6 +85,80 @@ const nightDesignationLabelKey = (blockchainSpecific: unknown) => {
   }
 };
 
+/**
+ * Builds the pill for a row whose Cardano metadata carries a Hydra marker.
+ * Deposits and recoveries get their own tint, every other Hydra transaction
+ * name shares the generic tint, and names this build does not know fall back
+ * to a plain "Hydra" label. The marker is a hint that anyone can attach to a
+ * transaction, so it only labels the row.
+ */
+const hydraTag = (
+  blockchainSpecific: unknown,
+  t: TFunction,
+): ActivityTag | undefined => {
+  const txName = (
+    blockchainSpecific as
+      | { Cardano?: { hydra?: CardanoHydraActivityMetadata } }
+      | undefined
+  )?.Cardano?.hydra?.txName;
+  if (txName === undefined) return undefined;
+  switch (txName) {
+    case 'DepositTx':
+      return {
+        label: t('activity.history.hydra.deposit'),
+        tone: 'hydraDeposit',
+      };
+    case 'RecoverTx':
+      return {
+        label: t('activity.history.hydra.recover'),
+        tone: 'hydraRecover',
+      };
+    case 'InitTx':
+      return { label: t('activity.history.hydra.init'), tone: 'hydra' };
+    case 'AbortTx':
+      return { label: t('activity.history.hydra.abort'), tone: 'hydra' };
+    case 'CommitTx':
+      return { label: t('activity.history.hydra.commit'), tone: 'hydra' };
+    case 'CollectComTx':
+      return { label: t('activity.history.hydra.collect'), tone: 'hydra' };
+    case 'IncrementTx':
+      return { label: t('activity.history.hydra.increment'), tone: 'hydra' };
+    case 'DecrementTx':
+      return { label: t('activity.history.hydra.decommit'), tone: 'hydra' };
+    case 'CloseTx':
+      return { label: t('activity.history.hydra.close'), tone: 'hydra' };
+    case 'ContestTx':
+      return { label: t('activity.history.hydra.contest'), tone: 'hydra' };
+    case 'FanoutTx':
+    case 'PartialFanoutTx':
+    case 'FinalPartialFanoutTx':
+      return { label: t('activity.history.hydra.fanout'), tone: 'hydra' };
+    case 'HeadTx':
+    default:
+      return { label: t('activity.history.hydra'), tone: 'hydra' };
+  }
+};
+
+/**
+ * The pills of a Hydra row. A deposit whose funds can only be recovered gains
+ * a warning pill after its own; a pending one keeps its single pill.
+ */
+const hydraTags = (
+  tag: ActivityTag | undefined,
+  depositState: CardanoHydraDepositActivityState | undefined,
+  t: TFunction,
+): ActivityTag[] | undefined => {
+  if (!tag) return undefined;
+  if (depositState?.status !== 'recoverable') return [tag];
+  return [
+    tag,
+    {
+      label: t('activity.history.hydra.deposit.recoverable'),
+      tone: 'warning',
+    },
+  ];
+};
+
 const mapActivityToLabel = (activity: Activity, t: TFunction) => {
   switch (activity.type) {
     case ActivityType.Send:
@@ -130,6 +212,12 @@ export type FormatAndGroupActivitiesByDateParams = {
   getTokensInfoSummary?: GetActivityTokensInfoSummary;
   /** When true, skip the internal sort — caller guarantees descending timestamp order. */
   preSorted?: boolean;
+  /**
+   * The live states of the activities from the blockchain's activity
+   * customisation. A Cardano Hydra deposit row reads its deposit state here,
+   * and rows show Hydra tags only while the states enable tagging.
+   */
+  activityStates?: ActivityStates;
 };
 
 /** Stable React list key: one tx can surface as multiple activity rows (different `type`). */
@@ -144,6 +232,7 @@ export const formatAndGroupActivitiesByDate = ({
   preSorted,
   getMainTokenBalanceChange,
   getTokensInfoSummary,
+  activityStates,
 }: FormatAndGroupActivitiesByDateParams): ActivitySection[] => {
   const getActivityCard = (activity: Activity): FormattedActivityListItem => {
     const rowKey = activityListRowKey(activity);
@@ -199,6 +288,16 @@ export const formatAndGroupActivitiesByDate = ({
       : mapActivityToLabel(activity, t);
 
     const status = ActivityToFormattedType[type];
+    const tag = activityStates?.isTaggingEnabled
+      ? hydraTag(activity.blockchainSpecific, t)
+      : undefined;
+    const depositState =
+      tag?.tone === 'hydraDeposit'
+        ? (activityStates?.byActivityId[activityId] as
+            | CardanoHydraDepositActivityState
+            | undefined)
+        : undefined;
+    const tags = hydraTags(tag, depositState, t);
     const iconName = activityToIconName[type];
 
     const commonProps = {
@@ -222,9 +321,13 @@ export const formatAndGroupActivitiesByDate = ({
             info: {
               title,
               subtitle: formattedTimeOfDay,
+              ...(tags && { tags }),
             },
-            value: tokensInfoSummary,
-            iconName,
+            value:
+              depositState?.status === 'pending'
+                ? { subtitle: t('activity.history.hydra.deposit.pending') }
+                : tokensInfoSummary,
+            iconName: tag ? 'FlowConnection' : iconName,
             iconBackground:
               type === ActivityType.Send || type === ActivityType.Receive
                 ? 'positive'

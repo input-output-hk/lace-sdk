@@ -26,6 +26,15 @@ const issueGrantFlow = {
   scopeSalt: SCOPE_SALT,
   scopeDigest: SCOPE_DIGEST,
 };
+const TALLY_ADDRESS = 'ab'.repeat(32);
+const callContractFlow = {
+  kind: 'call-contract',
+  account: ACCOUNT,
+  bundleId: 'account-tally',
+  circuit: 'tally_set_with_jubjub',
+  args: [TALLY_ADDRESS, '42'],
+  callees: [TALLY_ADDRESS],
+};
 
 const refusalOf = (flow: unknown): unknown => {
   try {
@@ -59,7 +68,193 @@ describe('decodeSignerFlow', () => {
     );
   });
 
-  it('reads an install-operations descriptor as the account and the operations it installs', () => {
+  it('reads the bundle and constructor arguments a create-account descriptor names, kept only when carried', () => {
+    const constructorArgs = ['ab'.repeat(32), '7', 'true'];
+
+    expect(
+      decodeSignerFlow({
+        kind: 'create-account',
+        lockAccount: false,
+        bundleId: 'account-tally',
+        constructorArgs,
+      }),
+    ).toEqual({
+      kind: 'create-account',
+      lockAccount: false,
+      bundleId: 'account-tally',
+      constructorArgs,
+    });
+    expect(
+      decodeSignerFlow({
+        kind: 'create-account',
+        lockAccount: false,
+        bundleId: 'account-tally',
+      }),
+    ).toEqual({
+      kind: 'create-account',
+      lockAccount: false,
+      bundleId: 'account-tally',
+    });
+    expect(
+      decodeSignerFlow({
+        kind: 'create-account',
+        lockAccount: false,
+        constructorArgs: ['a'.repeat(128)],
+      }),
+    ).toEqual({
+      kind: 'create-account',
+      lockAccount: false,
+      constructorArgs: ['a'.repeat(128)],
+    });
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['a bundle id in another case', { bundleId: 'Account' }, 'flow.bundleId'],
+    ['an empty bundle id', { bundleId: '' }, 'flow.bundleId'],
+    ['a bundle id with a dot', { bundleId: 'account.1' }, 'flow.bundleId'],
+    ['a bundle id that is not a string', { bundleId: 7 }, 'flow.bundleId'],
+    [
+      'constructor arguments that are not a list',
+      { constructorArgs: 'ab' },
+      'flow.constructorArgs',
+    ],
+    [
+      'a constructor argument that is not a string',
+      { constructorArgs: ['7', 7] },
+      'flow.constructorArgs[1]',
+    ],
+    [
+      'a constructor argument longer than any value',
+      { constructorArgs: ['a'.repeat(129)] },
+      'flow.constructorArgs[0]',
+    ],
+  ])(
+    'refuses a create-account descriptor carrying %s',
+    (_case, carried, field) => {
+      expect(
+        refusalOf({ kind: 'create-account', lockAccount: true, ...carried }),
+      ).toEqual(new MalformedPayloadError(field));
+    },
+  );
+
+  it.each([
+    'add-device',
+    'issue-grant',
+    'read-holdings',
+    'remove-device',
+    'revoke-all-grants',
+    'revoke-grant',
+    'sign-in',
+  ] as const)(
+    'refuses a bundle or constructor arguments on a %s descriptor',
+    kind => {
+      expect(refusalOf({ kind, bundleId: 'account' })).toEqual(
+        new MalformedPayloadError('flow.bundleId'),
+      );
+      expect(refusalOf({ kind, constructorArgs: [] })).toEqual(
+        new MalformedPayloadError('flow.constructorArgs'),
+      );
+    },
+  );
+
+  it('refuses constructor arguments on an install-operations descriptor, which names its bundle alone', () => {
+    expect(
+      refusalOf({
+        kind: 'install-operations',
+        account: ACCOUNT,
+        operations: ['deposit_shielded'],
+        constructorArgs: [],
+      }),
+    ).toEqual(new MalformedPayloadError('flow.constructorArgs'));
+  });
+
+  it('reads a call-contract descriptor as the account, bundle, circuit, arguments and callees it names', () => {
+    expect(decodeSignerFlow(callContractFlow)).toEqual(callContractFlow);
+    expect(
+      decodeSignerFlow({ ...callContractFlow, args: [], callees: [] }),
+    ).toEqual({ ...callContractFlow, args: [], callees: [] });
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['no account', { account: undefined }, 'flow.account'],
+    ['an unreadable account', { account: 'xyz' }, 'flow.account'],
+    ['no bundle id', { bundleId: undefined }, 'flow.bundleId'],
+    ['a bundle id in another case', { bundleId: 'Account' }, 'flow.bundleId'],
+    ['no circuit', { circuit: undefined }, 'flow.circuit'],
+    ['a circuit name with a hyphen', { circuit: 'tally-set' }, 'flow.circuit'],
+    ['an empty circuit name', { circuit: '' }, 'flow.circuit'],
+    ['a circuit that is not a string', { circuit: 7 }, 'flow.circuit'],
+    ['no arguments', { args: undefined }, 'flow.args'],
+    ['arguments that are not a list', { args: 'ab' }, 'flow.args'],
+    ['an argument that is not a string', { args: ['7', 7] }, 'flow.args[1]'],
+    [
+      'an argument longer than any value',
+      { args: ['a'.repeat(129)] },
+      'flow.args[0]',
+    ],
+    ['no callees', { callees: undefined }, 'flow.callees'],
+    ['callees that are not a list', { callees: 'ab' }, 'flow.callees'],
+    [
+      'a callee in uppercase',
+      { callees: ['AB'.repeat(32)] },
+      'flow.callees[0]',
+    ],
+    ['a callee that is not an address', { callees: ['ab'] }, 'flow.callees[0]'],
+    [
+      'a callee twice',
+      { callees: [TALLY_ADDRESS, TALLY_ADDRESS] },
+      'flow.callees',
+    ],
+    [
+      'more callees than a call names',
+      {
+        callees: Array.from({ length: 9 }, (_, index) =>
+          index.toString(16).padStart(64, '0'),
+        ),
+      },
+      'flow.callees',
+    ],
+  ])(
+    'refuses a call-contract descriptor carrying %s',
+    (_case, carried, field) => {
+      expect(refusalOf({ ...callContractFlow, ...carried })).toEqual(
+        new MalformedPayloadError(field),
+      );
+    },
+  );
+
+  it('refuses constructor arguments on a call-contract descriptor, which names its bundle', () => {
+    expect(refusalOf({ ...callContractFlow, constructorArgs: ['7'] })).toEqual(
+      new MalformedPayloadError('flow.constructorArgs'),
+    );
+  });
+
+  it.each([
+    'add-device',
+    'create-account',
+    'install-operations',
+    'issue-grant',
+    'read-holdings',
+    'remove-device',
+    'revoke-all-grants',
+    'revoke-grant',
+    'sign-in',
+  ] as const)(
+    'refuses a circuit, arguments or callees on a %s descriptor',
+    kind => {
+      expect(refusalOf({ kind, circuit: 'tally_set_with_jubjub' })).toEqual(
+        new MalformedPayloadError('flow.circuit'),
+      );
+      expect(refusalOf({ kind, args: [] })).toEqual(
+        new MalformedPayloadError('flow.args'),
+      );
+      expect(refusalOf({ kind, callees: [] })).toEqual(
+        new MalformedPayloadError('flow.callees'),
+      );
+    },
+  );
+
+  it('reads an install-operations descriptor as the account, the operations it installs and the bundle it names, kept only when carried', () => {
     const operations = [
       'withdraw_unshielded_with_grant_k256',
       'withdraw_shielded_with_grant_k256',
@@ -72,14 +267,40 @@ describe('decodeSignerFlow', () => {
         operations,
       }),
     ).toEqual({ kind: 'install-operations', account: ACCOUNT, operations });
+    expect(
+      decodeSignerFlow({
+        kind: 'install-operations',
+        account: ACCOUNT,
+        operations,
+        bundleId: 'account-tally',
+      }),
+    ).toEqual({
+      kind: 'install-operations',
+      account: ACCOUNT,
+      operations,
+      bundleId: 'account-tally',
+    });
+    expect(
+      refusalOf({
+        kind: 'install-operations',
+        account: ACCOUNT,
+        operations,
+        bundleId: 'Account',
+      }),
+    ).toEqual(new MalformedPayloadError('flow.bundleId'));
   });
 
   it.each<[string, unknown, string]>([
     ['no operations', undefined, 'flow.operations'],
     ['an empty list', [], 'flow.operations'],
     [
-      'an operation outside the deployed roster',
-      ['recover_submit'],
+      'more operations than any build has',
+      Array.from({ length: 65 }, (_, index) => `circuit_${index}`),
+      'flow.operations',
+    ],
+    [
+      'an operation that is not a circuit name',
+      ['recover-submit'],
       'flow.operations[0]',
     ],
     ['an operation that is not a string', [7], 'flow.operations[0]'],

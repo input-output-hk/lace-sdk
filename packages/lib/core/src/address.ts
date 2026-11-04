@@ -1,7 +1,7 @@
 /**
  * CIP-19 Cardano address encoding — credentials → bech32, via `@cardano-sdk/core`'s
  * `*Address.fromCredentials(...).toAddress().toBech32()` through the `@lace-lib/vendor`
- * seam (ADR 37). Callers pass `Cardano.Credential` / `Cardano.CredentialType` (reachable
+ * seam (ADR 37) — and the reverse read of an address's payment credential. Callers pass `Cardano.Credential` / `Cardano.CredentialType` (reachable
  * through the seam) directly — core does not mirror them.
  *
  * Returns intersect the SDK Tagged address types with the blockchain-agnostic `Address`
@@ -25,6 +25,22 @@ export const encodeBaseAddress = (
   )
     .toAddress()
     .toBech32() as Address & Cardano.PaymentAddress;
+
+/**
+ * The payment credential of a base, enterprise or pointer address; `undefined`
+ * for anything else (reward, Byron, unparseable).
+ */
+export const getPaymentCredential = (
+  address: Cardano.PaymentAddress,
+): Cardano.Credential | undefined => {
+  const parsed = Cardano.Address.fromString(address);
+  if (!parsed) return undefined;
+  return (
+    parsed.asBase()?.getPaymentCredential() ??
+    parsed.asEnterprise()?.getPaymentCredential() ??
+    parsed.asPointer()?.getPaymentCredential()
+  );
+};
 
 /** Encode a reward (stake) address to bech32. */
 export const encodeRewardAddress = (

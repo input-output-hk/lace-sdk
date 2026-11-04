@@ -47,14 +47,10 @@ else
   log "Reusing the checkout at $upstream"
 fi
 
-# Where the workspace keeps each upstream package's sources: upstream's util is
-# @lace-lib/util's common subpath, every other package @lace-lib/cardano-<name>.
+# Where the workspace keeps each upstream package's sources:
+# @lace-lib/cardano-<name>.
 workspace_sources() {
-  if [ "$1" = util ]; then
-    echo "$workspace/packages/lib/util/src/common"
-  else
-    echo "$workspace/packages/lib/cardano-$1/src"
-  fi
+  echo "$workspace/packages/lib/cardano-$1/src"
 }
 
 log "Replacing the published packages' sources with the workspace's"
@@ -72,12 +68,10 @@ for name in "${PUBLISHED_PACKAGES[@]}"; do
   echo "  $name: $(find "$src" -name '*.ts' | wc -l | tr -d ' ') files"
 done
 # The ported imports resolve to upstream's own packages.
-mkdir -p "$upstream/node_modules/@lace-lib/util"
+mkdir -p "$upstream/node_modules/@lace-lib"
 for name in "${ALL_PACKAGES[@]}"; do
-  [ "$name" = util ] && continue
   ln -sfn "../../packages/$name" "$upstream/node_modules/@lace-lib/cardano-$name"
 done
-ln -sfn "../../../packages/util" "$upstream/node_modules/@lace-lib/util/common"
 # The CML key strategy is not ported; the suite runs on the sodium one.
 factories=$upstream/packages/e2e/src/factories.ts
 sed -i.bak "/^import \* as CML from '@dcspark\/cardano-multiplatform-lib-nodejs';$/d; /bip32Ed25519Factory.register('CML'/d" "$factories"

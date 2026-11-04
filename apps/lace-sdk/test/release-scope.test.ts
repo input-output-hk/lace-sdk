@@ -22,15 +22,11 @@ import { internalTermFindings } from '../scripts/release-notes-check';
 import {
   cleanTitle,
   dependencyLineChanges,
-  type Fragment,
-  fragmentProblems,
-  fragmentsOf,
-  fragmentsSince,
   isBuildTargetUnchanged,
+  isInScope,
   otherChannelSource,
+  packageScope,
   type NotesApi,
-  parseFragment,
-  pullRequestFragments,
   renderNotes,
   renderPublicNotes,
   workspaceManifestChanges,
@@ -161,6 +157,28 @@ describe("a channel's release", () => {
   it('leaves out nothing for a release of both channels', () => {
     expect(otherChannelSource(['canary', 'stable']).size).toBe(0);
   });
+
+  it(
+    'ships a change to a source only the canary worker reaches in a canary release alone',
+    { timeout: 120_000 },
+    () => {
+      const workerOnly = [
+        'apps/lace-sdk/src/midnight-worker/worker.ts',
+        'apps/lace-sdk/src/midnight-worker/run-engine-worker.ts',
+        'apps/lace-sdk/src/midnight-worker/engine-host.ts',
+        'apps/lace-sdk/src/midnight-worker/serve-engine-host.ts',
+      ];
+      const stable = packageScope('apps/lace-sdk', ['stable']);
+      const canary = packageScope('apps/lace-sdk', ['canary']);
+
+      expect(workerOnly.map(file => isInScope(file, stable))).toEqual(
+        workerOnly.map(() => false),
+      );
+      expect(workerOnly.map(file => isInScope(file, canary))).toEqual(
+        workerOnly.map(() => true),
+      );
+    },
+  );
 
   it("finds the canary entries in the canary build's own source alone", () => {
     const stable = reachedOwnSource('stable');
@@ -788,358 +806,50 @@ describe('the public release notes', () => {
   });
 });
 
-describe('changelog fragments', () => {
-  const fragment = (
-    kind: Fragment['kind'],
-    body: string,
-    {
-      time,
-      build = 'stable',
-      packageId = 'sdk',
-    }: { time: string; build?: Fragment['build']; packageId?: string },
-  ) =>
-    parseFragment(
-      `apps/lace-sdk/.changes/fragments/${kind}-${time}.yaml`,
-      `kind: ${kind}\nbody: ${body}\ntime: ${time}\ncustom:\n    Package: ${packageId}\n    Build: ${build}\n`,
-    );
+describe("the notes' What's new", () => {
+  const section = [
+    "## What's new",
+    '',
+    '### Added',
+    '',
+    '- Passport grants to secp256k1 keys',
+    '',
+    '### Fixed',
+    '',
+    '- Signing no longer drops the change output',
+    '',
+  ].join('\n');
+  const api = {
+    tag: 'lace-sdk@0.1.1',
+    version: '0.1.1',
+    channel: 'stable',
+    previous: 'lace-sdk@0.1.0',
+    bump: 'patch',
+    added: [],
+    removed: [],
+    changed: [],
+    compatible: [],
+  };
 
-  it('read the kind and body changie writes', () => {
-    expect(
-      parseFragment(
-        'apps/lace-sdk/.changes/fragments/Added-1.yaml',
-        'kind: Added\nbody: |-\n    Grantees can be secp256k1 keys\n    for agent wallets\ntime: 2026-10-20T18:15:22.47633+01:00\ncustom:\n    Package: sdk\n    Build: canary\n',
-      ),
-    ).toEqual({
-      file: 'apps/lace-sdk/.changes/fragments/Added-1.yaml',
-      kind: 'Added',
-      body: 'Grantees can be secp256k1 keys\nfor agent wallets',
-      packages: ['@laceio/sdk'],
-      packageNamed: true,
-      build: 'canary',
-      time: '2026-10-20T18:15:22.47633+01:00',
-    });
-  });
-
-  it('read every package for `all`, and every package for a fragment that names none', () => {
-    expect(
-      fragment('Changed', 'Each package releases on its own', {
-        time: '1',
-        packageId: 'all',
-      }).packages,
-    ).toEqual([
-      '@laceio/cardano',
-      '@laceio/cardano-ledger',
-      '@laceio/cardano-trezor',
-      '@laceio/sdk',
-    ]);
-    // One written before fragments named a package lists in every package's
-    // notes, and the check asks a change that touches it to name one.
-    const unnamed = parseFragment(
-      'f.yaml',
-      'kind: Fixed\nbody: a fix\ncustom:\n    Build: stable\n',
-    );
-    expect(unnamed).toMatchObject({ packageNamed: false });
-    expect(unnamed.packages).toHaveLength(4);
-    expect(fragmentProblems({ shipped: {}, fragments: [unnamed] })).toEqual([
-      expect.stringContaining('names no package'),
-    ]);
-    expect(() =>
-      parseFragment(
-        'f.yaml',
-        'kind: Fixed\nbody: a fix\ncustom:\n    Package: wallet\n    Build: stable\n',
-      ),
-    ).toThrow('custom.Package must be one of sdk, cardano');
-  });
-
-  it("list in a package's notes only the fragments that name it", () => {
-    const fragments = [
-      fragment('Fixed', 'Signing keeps the change output', { time: '1' }),
-      fragment('Fixed', 'Fees round up', { time: '2', packageId: 'cardano' }),
-      fragment('Changed', 'Releases on its own', {
-        time: '3',
-        packageId: 'all',
-      }),
-    ];
-    const bodies = (name?: string) =>
-      fragmentsOf(fragments, name).map(({ body }) => body);
-    expect(bodies('@laceio/cardano')).toEqual([
-      'Fees round up',
-      'Releases on its own',
-    ]);
-    expect(bodies('@laceio/cardano-ledger')).toEqual(['Releases on its own']);
-    expect(bodies(undefined)).toHaveLength(3);
-  });
-
-  it('refuse an unknown kind, an empty body or no build', () => {
-    expect(() =>
-      parseFragment('f.yaml', 'kind: Improved\nbody: faster\n'),
-    ).toThrow('kind must be one of Added, Changed');
-    expect(() => parseFragment('f.yaml', 'kind: Fixed\nbody: ""\n')).toThrow(
-      'has no body',
-    );
-    expect(() =>
-      parseFragment(
-        'f.yaml',
-        'kind: Fixed\nbody: a fix\ncustom:\n    Package: sdk\n',
-      ),
-    ).toThrow('custom.Build must be stable or canary');
-  });
-
-  it("leave a canary-only change out of a stable release's notes", () => {
-    const fragments = [
-      fragment('Added', 'Spending grants for agent keys', {
-        time: '1',
-        build: 'canary',
-      }),
-      fragment('Fixed', 'Signing keeps the change output', { time: '2' }),
-    ];
-    const api = {
-      previous: 'lace-sdk@0.1.0',
-      bump: 'patch',
-      added: [],
-      removed: [],
-      changed: [],
-      compatible: [],
-    };
-    const stable = renderPublicNotes({ ...api, channel: 'stable' }, fragments);
-    expect(stable).toContain('- Signing keeps the change output');
-    expect(stable).not.toContain('Spending grants');
-    expect(
-      renderPublicNotes({ ...api, channel: 'canary' }, fragments),
-    ).toContain('- Spending grants for agent keys');
-    expect(
-      renderNotes({
-        ref: 'lace-sdk@0.1.0',
-        changes: [],
-        api: { ...api, channel: 'stable' },
-        fragments,
-      }),
-    ).not.toContain('Spending grants');
-  });
-
-  it("open both notes, by kind in Keep a Changelog's order", () => {
-    const fragments = [
-      fragment('Fixed', 'Signing no longer drops the change output', {
-        time: '2',
-      }),
-      fragment('Added', 'Passport grants to secp256k1 keys', { time: '3' }),
-      fragment('Added', 'A Bitcoin wallet in the canary build', { time: '1' }),
-    ];
-    const section = [
-      "## What's new",
-      '',
-      '### Added',
-      '',
-      '- A Bitcoin wallet in the canary build',
-      '- Passport grants to secp256k1 keys',
-      '',
-      '### Fixed',
-      '',
-      '- Signing no longer drops the change output',
-      '',
-    ].join('\n');
-    const api = {
-      tag: 'lace-sdk@0.1.1',
-      version: '0.1.1',
-      channel: 'stable',
-      previous: 'lace-sdk@0.1.0',
-      bump: 'patch',
-      added: [],
-      removed: [],
-      changed: [],
-      compatible: [],
-    };
-    const publicNotes = renderPublicNotes(api, fragments);
+  it('opens both notes with the section the changelog tooling writes', () => {
+    const publicNotes = renderPublicNotes(api, section);
     expect(publicNotes).toContain(`A stable release.\n\n${section}\n## API`);
     expect(internalTermFindings(publicNotes)).toEqual([]);
-    expect(
-      renderNotes({ ref: 'lace-sdk@0.1.0', changes: [], fragments }),
-    ).toContain(`${section}\n## Changes`);
-    expect(
-      renderNotes({ ref: 'lace-sdk@0.1.0', changes: [], fragments }),
-    ).toMatch(/^## What's new\n/);
-    // Without fragments, the notes read as before.
+    const notes = renderNotes({
+      ref: 'lace-sdk@0.1.0',
+      changes: [],
+      whatsNew: section,
+    });
+    expect(notes).toMatch(/^## What's new\n/);
+    expect(notes).toContain(`${section}\n## Changes`);
+  });
+
+  it('reads as before without one', () => {
     expect(renderPublicNotes(api)).not.toContain("What's new");
-  });
-
-  it('indent a multi-line entry under its item', () => {
-    const notes = renderPublicNotes(
-      {
-        previous: null,
-        bump: 'first',
-        added: [],
-        removed: [],
-        changed: [],
-        compatible: [],
-      },
-      [
-        parseFragment(
-          'f.yaml',
-          'kind: Changed\nbody: |-\n    One line\n    and the next\ncustom:\n    Package: sdk\n    Build: stable\n',
-        ),
-      ],
+    expect(renderPublicNotes(api, '\n')).not.toContain("What's new");
+    expect(renderNotes({ ref: 'lace-sdk@0.1.0', changes: [] })).toMatch(
+      /^## Changes\n/,
     );
-    expect(notes).toContain('- One line\n  and the next\n');
-  });
-
-  const sdkShips = { '@laceio/sdk': ['apps/lace-sdk/src/index.ts'] };
-
-  it('are required of a change to what ships, and of nothing else', () => {
-    const fixed = [fragment('Fixed', 'A fix', { time: '1' })];
-    expect(
-      fragmentProblems({
-        shipped: sdkShips,
-        fragments: [],
-      }),
-    ).toEqual([expect.stringContaining('npx changie new')]);
-    expect(
-      fragmentProblems({
-        shipped: {},
-        fragments: [
-          fragment('Fixed', 'Signing works again (LW-1234)', { time: '1' }),
-        ],
-      }),
-    ).toEqual([expect.stringContaining('names an internal term')]);
-    expect(
-      fragmentProblems({
-        shipped: sdkShips,
-        fragments: fixed,
-      }),
-    ).toEqual([]);
-    expect(fragmentProblems({ shipped: {}, fragments: [] })).toEqual([]);
-  });
-
-  it('are required of each package the change reaches', () => {
-    const shipped = {
-      ...sdkShips,
-      '@laceio/cardano': ['packages/lib/cardano-core/src/index.ts'],
-      '@laceio/cardano-ledger': [],
-    };
-    expect(
-      fragmentProblems({
-        shipped,
-        fragments: [fragment('Fixed', 'A fix', { time: '1' })],
-      }),
-    ).toEqual([expect.stringContaining('`@laceio/cardano` ships')]);
-    expect(
-      fragmentProblems({
-        shipped,
-        fragments: [
-          fragment('Fixed', 'A fix', { time: '1', packageId: 'all' }),
-        ],
-      }),
-    ).toEqual([]);
-  });
-
-  it('count no edit to a fragment a release holds', () => {
-    const fixed = [fragment('Fixed', 'A fix', { time: '1' })];
-    expect(
-      fragmentProblems({
-        shipped: sdkShips,
-        fragments: fixed,
-        released: fixed.map(({ file }) => file),
-      }),
-    ).toEqual([expect.stringContaining('a release already holds')]);
-  });
-
-  describe('in a repository with a release', () => {
-    const git = (cwd: string, ...args: string[]) =>
-      execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
-    const directory = 'apps/lace-sdk/.changes/fragments';
-    const write = (repository: string, name: string, body: string) => {
-      fs.mkdirSync(path.join(repository, directory), { recursive: true });
-      fs.writeFileSync(
-        path.join(repository, directory, name),
-        `kind: Fixed\nbody: ${body}\ntime: ${name}\ncustom:\n    Package: sdk\n    Build: stable\n`,
-      );
-    };
-    const commit = (repository: string, message: string) => {
-      git(repository, 'add', '-A');
-      git(repository, 'commit', '-q', '-m', message);
-      return git(repository, 'rev-parse', 'HEAD');
-    };
-
-    /**
-     * main with `Fixed-1.yaml` in the canary `lace-sdk@0.1.0-canary.1` and
-     * `Fixed-2.yaml` added after it; `run` gets the repository and main's
-     * tip, the base a pull request is compared with.
-     */
-    const withRepository = (
-      run: (repository: string, base: string) => void,
-      tag = 'lace-sdk@0.1.0-canary.1',
-    ) => {
-      const repository = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'sdk-fragments-'),
-      );
-      try {
-        git(repository, 'init', '-q', '-b', 'main');
-        git(repository, 'config', 'user.email', 'test@example.invalid');
-        git(repository, 'config', 'user.name', 'test');
-        git(repository, 'config', 'commit.gpgsign', 'false');
-        git(repository, 'config', 'tag.gpgsign', 'false');
-        write(repository, 'Fixed-1.yaml', 'Signing keeps the change');
-        commit(repository, 'a fix');
-        git(repository, 'tag', tag);
-        write(repository, 'Fixed-2.yaml', 'Fees round up');
-        run(repository, commit(repository, 'another fix'));
-      } finally {
-        fs.rmSync(repository, { recursive: true, force: true });
-      }
-    };
-    const shipped = sdkShips;
-    const bodiesSinceCanary = (repository: string) =>
-      fragmentsSince('lace-sdk@0.1.0-canary.1', repository).map(
-        ({ body }) => body,
-      );
-
-    it("refuse an edit to a released fragment, which the next release's notes would leave out", () => {
-      withRepository((repository, base) => {
-        write(repository, 'Fixed-1.yaml', 'Signing keeps the change output');
-        commit(repository, 'refine the fix');
-        const touched = pullRequestFragments(base, repository);
-        expect(touched.released).toEqual([`${directory}/Fixed-1.yaml`]);
-        expect(fragmentProblems({ shipped, ...touched })).toEqual([
-          expect.stringContaining('a release already holds'),
-        ]);
-        expect(bodiesSinceCanary(repository)).toEqual(['Fees round up']);
-
-        write(repository, 'Fixed-3.yaml', 'Signing keeps the change output');
-        commit(repository, 'describe the refinement');
-        expect(
-          fragmentProblems({
-            shipped,
-            ...pullRequestFragments(base, repository),
-          }),
-        ).toEqual([]);
-        expect(bodiesSinceCanary(repository)).toEqual([
-          'Fees round up',
-          'Signing keeps the change output',
-        ]);
-      });
-    });
-
-    it("count a package's own release as holding a fragment", () => {
-      withRepository((repository, base) => {
-        write(repository, 'Fixed-1.yaml', 'Signing keeps the change output');
-        commit(repository, 'refine the fix');
-        expect(pullRequestFragments(base, repository).released).toEqual([
-          `${directory}/Fixed-1.yaml`,
-        ]);
-      }, '@laceio/sdk@0.1.1-canary.0');
-    });
-
-    it('count an edit to a fragment no release holds', () => {
-      withRepository((repository, base) => {
-        write(repository, 'Fixed-2.yaml', 'Fees round up, never down');
-        commit(repository, 'refine the unreleased fix');
-        const touched = pullRequestFragments(base, repository);
-        expect(touched.released).toEqual([]);
-        expect(fragmentProblems({ shipped, ...touched })).toEqual([]);
-        expect(bodiesSinceCanary(repository)).toEqual([
-          'Fees round up, never down',
-        ]);
-      });
-    });
   });
 });
 

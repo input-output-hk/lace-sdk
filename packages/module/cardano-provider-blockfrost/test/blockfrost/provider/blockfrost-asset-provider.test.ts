@@ -1,5 +1,7 @@
 import { Asset, Cardano } from '@cardano-sdk/core';
 import { logger } from '@cardano-sdk/util-dev';
+import { CARDANO_TOKEN_METADATA_SCHEMA_VERSION } from '@lace-contract/cardano-context';
+import { toContractTokenMetadata } from '@lace-lib/cardano-provider-core';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { BlockfrostAssetProvider } from '../../../src/blockfrost';
@@ -45,6 +47,86 @@ describe('BlockfrostAssetProvider', () => {
       policy_id: Cardano.AssetId.getPolicyId(mockedAssetId),
       quantity: '12000',
     } as Responses['asset'];
+
+    test.each([
+      {
+        label: 'on-chain only with token presentation fallback',
+        onchain: mockedAssetResponse.onchain_metadata,
+        registry: null,
+        sources: ['on-chain'],
+      },
+      {
+        label: 'registry only with a raw base64 logo',
+        onchain: null,
+        registry: mockedAssetResponse.metadata,
+        sources: ['token-registry'],
+      },
+      {
+        label: 'registry only with NFT presentation fallback',
+        onchain: null,
+        registry: {
+          ...mockedAssetResponse.metadata!,
+          logo: 'https://example.com/token.png',
+        },
+        sources: ['token-registry'],
+      },
+      {
+        label: 'both sources',
+        onchain: mockedAssetResponse.onchain_metadata,
+        registry: mockedAssetResponse.metadata,
+        sources: ['on-chain', 'token-registry'],
+      },
+      {
+        label: 'neither source with an empty token presentation object',
+        onchain: null,
+        registry: null,
+        sources: [],
+      },
+      {
+        label: 'on-chain metadata without an image',
+        onchain: { name: 'Text only' },
+        registry: null,
+        sources: ['on-chain'],
+      },
+      {
+        label: 'on-chain metadata with an invalid image URI',
+        onchain: { name: 'Invalid image', image: 'not-a-uri' },
+        registry: null,
+        sources: ['on-chain'],
+      },
+    ])(
+      'maps response provenance: $label',
+      async ({ onchain, registry, sources }) => {
+        mockResponses(request, [
+          [
+            `assets/${mockedAssetId}`,
+            {
+              data: {
+                ...mockedAssetResponse,
+                onchain_metadata: onchain,
+                metadata: registry,
+              },
+            },
+          ],
+        ]);
+        const asset = await provider.getAsset({
+          assetId: mockedAssetId,
+          extraData: { nftMetadata: true, tokenMetadata: true },
+        });
+        const metadata = toContractTokenMetadata(asset);
+        expect(asset.metadataSources).toEqual(sources);
+        expect(metadata.blockchainSpecific).toMatchObject({
+          metadataSources: sources,
+          metadataSchemaVersion: CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
+        });
+        expect(metadata.blockchainSpecific).not.toHaveProperty('verified');
+        expect(metadata.name).toBe(
+          onchain?.name ?? registry?.name ?? asset.fingerprint,
+        );
+        expect(metadata.decimals).toBe(registry?.decimals ?? 0);
+        expect(metadata.ticker).toBe(registry?.ticker);
+      },
+    );
 
     test('combines onchain and offchain metadata', async () => {
       mockResponses(request, [
@@ -138,6 +220,7 @@ describe('BlockfrostAssetProvider', () => {
         extraData: { nftMetadata: false, tokenMetadata: false },
       });
 
+      expect(response.metadataSources).toEqual(['on-chain', 'token-registry']);
       expect(response).toMatchObject<Asset.AssetInfo>({
         assetId: mockedAssetId,
         fingerprint: Cardano.AssetFingerprint(

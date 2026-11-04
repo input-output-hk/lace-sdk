@@ -1,4 +1,4 @@
-import type { OpaqueNumber } from '@lace-lib/util/common';
+import type { OpaqueNumber } from '@lace-lib/cardano-util';
 
 /** Milliseconds time unit. */
 export type Milliseconds = OpaqueNumber<'Milliseconds'>;

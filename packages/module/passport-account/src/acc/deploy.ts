@@ -12,14 +12,9 @@ import {
   submitWithDustRetry,
 } from '../infra/submit';
 
-import {
-  Contract,
-  ledger as decodeLedger,
-  expectedVk,
-  pureCircuits,
-} from './acc-module';
-import { DEPLOYED_OPERATIONS } from './deployed-operations';
+import { ACTIVATE_INITIAL_DEVICE_CIRCUIT } from './deployed-operations';
 import { isSameAuthority } from './maintenance-authority';
+import { ACCOUNT_BUNDLE_ID } from './manifest';
 import { JubjubDevice } from './signer';
 import {
   assertVerifierKeyHeader,
@@ -27,11 +22,12 @@ import {
 } from './verifier-key-insert';
 import { planDeployWaves, planResumeWaves } from './wave-plan';
 
-import type { JubjubPoint, Witnesses } from './acc-module';
+import type * as AccModule from './acc-module';
 import type { PendingDeployment } from './pending-deployment';
 import type { DeployWave, VerifierKeySizes } from './wave-plan';
 import type { Sleep } from '../infra/submit';
 import type {
+  AccountBundle,
   MaintenanceVerifyingKey,
   PassportAuthoriser,
 } from '@lace-contract/passport';
@@ -39,8 +35,6 @@ import type * as NetworkIdModule from '@midnight-ntwrk/midnight-js-network-id';
 import type * as Ledger from '@midnightntwrk/ledger-v9';
 
 export type { PendingDeployment } from './pending-deployment';
-
-const ACTIVATE_INITIAL_DEVICE_CIRCUIT = 'activate_initial_device_with_jubjub';
 
 const SALT_LENGTH = 32;
 const RECOVERY_WRAP_LENGTH = 64;
@@ -69,7 +63,8 @@ export type RandomBytes = (length: number) => Uint8Array;
  * The midnight-js providers the deployment runs through, assembled by the
  * caller and treated as opaque here: every member is only passed on to
  * midnight-js itself, except the two reads the waves make, narrowed where
- * they are used.
+ * they are used. `contractModuleProvider` is what a call resolves the
+ * module of a called contract through.
  */
 export type AccProviders = {
   publicDataProvider: unknown;
@@ -78,6 +73,7 @@ export type AccProviders = {
   privateStateProvider: unknown;
   walletProvider: unknown;
   midnightProvider: unknown;
+  contractModuleProvider: unknown;
 };
 
 /** The verifier key read the waves make through the zk config provider. */
@@ -92,7 +88,7 @@ type VerifierKeyProvider = {
  */
 type ProvidedContractState = {
   serialize: () => Uint8Array;
-  data: Parameters<typeof decodeLedger>[0];
+  data: Parameters<typeof AccModule.ledger>[0];
 };
 
 /** The state read the waves make through the public data provider. */
@@ -113,6 +109,22 @@ type StoredCoin = {
   mtIndex: string;
 };
 
+/** The qualified coin a stored description names, as a circuit takes it. */
+type HeldCoin = {
+  nonce: Uint8Array;
+  color: Uint8Array;
+  value: bigint;
+  mt_index: bigint;
+};
+
+/** The coin a stored description names, as the contract's `held_coin` witness hands it to a spend. */
+export const toHeldCoin = (stored: StoredCoin): HeldCoin => ({
+  nonce: ByteArray.fromHex(HexBytes(stored.nonceHex)),
+  color: ByteArray.fromHex(HexBytes(stored.colorHex)),
+  value: BigInt(stored.value),
+  mt_index: BigInt(stored.mtIndex),
+});
+
 /**
  * The wallet-local private state behind the contract's `held_coin`
  * witness: the captured coins, keyed by color. Coin descriptions live only
@@ -132,7 +144,7 @@ export type AccountPrivateState = {
  * a color the store has not captured cannot be spent by a conforming
  * client, so the witness refuses it.
  */
-export const accountWitnesses: Witnesses<AccountPrivateState> = {
+export const accountWitnesses: AccModule.Witnesses<AccountPrivateState> = {
   held_coin: (context, color) => {
     const key = HexBytes.fromByteArray(color);
     const stored = context.privateState.coins[key];
@@ -141,21 +153,25 @@ export const accountWitnesses: Witnesses<AccountPrivateState> = {
         `held_coin witness: no coin for color ${key} in the local store`,
       );
     }
-    return [
-      context.privateState,
-      {
-        nonce: ByteArray.fromHex(HexBytes(stored.nonceHex)),
-        color: ByteArray.fromHex(HexBytes(stored.colorHex)),
-        value: BigInt(stored.value),
-        mt_index: BigInt(stored.mtIndex),
-      },
-    ];
+    return [context.privateState, toHeldCoin(stored)];
   },
 };
 
 /** The private state a handle starts from: no captured coins yet. */
 export const initialAccountPrivateState = (): AccountPrivateState => ({
   coins: {},
+});
+
+/**
+ * The private state a handle starts from when its call spends `coins`:
+ * those coins alone, each keyed by its colour as the witness looks it up.
+ */
+export const heldCoinPrivateState = (
+  coins: readonly StoredCoin[],
+): AccountPrivateState => ({
+  coins: Object.fromEntries(
+    coins.map(coin => [coin.colorHex.toLowerCase(), coin]),
+  ),
 });
 
 /**
@@ -172,12 +188,26 @@ type UnprovenAccountDeploy = {
   };
 };
 
+/**
+ * The constructor arguments every build of the account takes, followed by
+ * the ones its bundle declares: the boot commitment, `enc_key`, the
+ * recovery public key, the recovery wrap and the veto window.
+ */
+type ConstructorArgs = [
+  Uint8Array,
+  Uint8Array,
+  AccModule.JubjubPoint,
+  Uint8Array,
+  bigint,
+  ...unknown[],
+];
+
 type CreateUnprovenAccountDeployTx = (
   providers: AccProviders,
   options: {
     compiledContract: unknown;
     initialPrivateState: AccountPrivateState;
-    args: [Uint8Array, Uint8Array, JubjubPoint, Uint8Array, bigint];
+    args: ConstructorArgs;
   },
 ) => Promise<UnprovenAccountDeploy>;
 
@@ -197,7 +227,18 @@ type FindDeployedAccountContract = (
 ) => Promise<AccContractHandle>;
 
 export type DeployAccountProps = {
+  /** Built for `bundle`, so its verifier keys download against that bundle's pins. */
   providers: AccProviders;
+  /** The build to deploy: its compiled contract, roster, pins and constructor arguments. */
+  bundle: AccountBundle;
+  /**
+   * The values of the bundle's declared constructor arguments as the
+   * canonical strings the creation descriptor carries, in declaration
+   * order, which the pending deployment records.
+   */
+  constructorArgs: readonly string[];
+  /** The same arguments decoded as the constructor takes them, in the same order. */
+  constructorValues: readonly unknown[];
   /** The initial device; its public key seeds the boot commitment. */
   authoriser: PassportAuthoriser;
   /** Raw 32-byte X25519 public key the constructor stores as `enc_key`. */
@@ -233,7 +274,10 @@ export type DeployAccountProps = {
 };
 
 export type ResumeAccountDeploymentProps = {
+  /** Built for `bundle`, so its verifier keys download against that bundle's pins. */
   providers: AccProviders;
+  /** The build the resume is asked under; it must be the one the deployment was started from. */
+  bundle: AccountBundle;
   /** The initial device; its public key is what the activation presents. */
   authoriser: PassportAuthoriser;
   /** Hex address of the contract the interrupted deployment created. */
@@ -297,16 +341,43 @@ const importChainModules = async () =>
   ]);
 
 /**
- * Names the verifier keys this build installs: the lowercase hex sha256
+ * The exports of a bundle's module a deployment uses, in the shapes the
+ * generated account module gives them, which every build of the account
+ * contract shares: the contract constructor, the pure circuit that
+ * derives the boot commitment and the ledger decoder the boot flag is
+ * read with.
+ */
+type DeployableModule = {
+  Contract: typeof AccModule.Contract;
+  ledger: typeof AccModule.ledger;
+  pureCircuits: Pick<
+    AccModule.PureCircuits,
+    'derive_boot_commitment_with_jubjub'
+  >;
+};
+
+const loadDeployableModule = async (
+  bundle: AccountBundle,
+): Promise<DeployableModule> =>
+  (await bundle.module()) as unknown as DeployableModule;
+
+/**
+ * Names the verifier keys a bundle installs: the lowercase hex sha256
  * over each roster operation's name and the sha256 pin of its verifier
  * key, in installation order. A deployment records it once the deploy
  * lands, and a resume compares it before any wave, so an account never
  * holds verifier keys of two builds.
  */
-const deployedVerifierKeysDigest = async (): Promise<string> => {
-  const pins = DEPLOYED_OPERATIONS.map(operation => {
-    const pin = expectedVk[operation];
-    if (!pin) throw new Error(`No verifier key pin for '${operation}'`);
+const deployedVerifierKeysDigest = async (
+  bundle: AccountBundle,
+): Promise<string> => {
+  const pins = bundle.operations.map(operation => {
+    const pin = bundle.verifierKeys[operation];
+    if (!pin) {
+      throw new Error(
+        `Account bundle '${bundle.id}' pins no verifier key for '${operation}'`,
+      );
+    }
     return `${operation}:${pin}`;
   });
   const digest = await crypto.subtle.digest(
@@ -592,7 +663,7 @@ type ActivationProps = {
   findContract: FindDeployedAccountContract;
   compiledContract: unknown;
   address: string;
-  publicKey: JubjubPoint;
+  publicKey: AccModule.JubjubPoint;
   salt: Uint8Array;
   privateStateId: string;
   isActivated: boolean;
@@ -633,10 +704,13 @@ const toDeployedAccount = async ({
   };
 };
 
+/** The bundle's contract compiled over the account witnesses, tagged by the bundle. */
 const compileAccountContract = (
   CompiledContract: Awaited<ReturnType<typeof importChainModules>>[3],
+  bundle: AccountBundle,
+  module: DeployableModule,
 ): unknown =>
-  CompiledContract.make('account', Contract).pipe(
+  CompiledContract.make(bundle.id, module.Contract).pipe(
     CompiledContract.withWitnesses(accountWitnesses),
   );
 
@@ -679,16 +753,21 @@ const toDeployedState = ({
 };
 
 /**
- * Deploys a fresh Account Custody Contract carrying the deposits, the
- * jubjub device arm and the grant circuits, including the secp256k1
- * grantee withdrawals, and returns its address, the boot salt, and the
+ * Deploys a fresh Account Custody Contract of the build `bundle` names,
+ * its compiled contract carrying the roster the bundle installs, the
+ * deposits, the jubjub device arm and the grant circuits of the default
+ * build among them, and returns its address, the boot salt, and the
  * activation call.
  *
  * The constructor cannot insert the initial device entry (the contract
  * address does not exist yet inside it), so it stores a salted boot
  * commitment over the authoriser's public key with no device entry yet;
  * `activate` presents the same key and salt to install the real entry
- * once every wave is in.
+ * once every wave is in. After the standard arguments the constructor
+ * takes the ones the bundle declares, `constructorValues`, decoded by
+ * the caller from the strings `constructorArgs` the pending deployment
+ * records beside the bundle's id, so a resume finishes the build it
+ * began.
  *
  * The constructor also publishes the account's recovery material: a
  * recovery public key, the wrap its secret is sealed under, and the veto
@@ -730,6 +809,9 @@ const toDeployedState = ({
  */
 export const deployAccount = async ({
   providers,
+  bundle,
+  constructorArgs,
+  constructorValues,
   authoriser,
   encPublicKey,
   lockAccount,
@@ -739,19 +821,23 @@ export const deployAccount = async ({
   sleep = defaultSleep,
   sponsorReady = noSponsorSetup,
 }: DeployAccountProps): Promise<DeployedAccount> => {
-  const [contracts, ledger, networkId, CompiledContract] =
-    await importChainModules();
+  const [[contracts, ledger, networkId, CompiledContract], module] =
+    await Promise.all([importChainModules(), loadDeployableModule(bundle)]);
 
   const publicKey = await authoriser.devicePublicKey();
   const salt = randomBytes(SALT_LENGTH);
-  const bootCommitment = pureCircuits.derive_boot_commitment_with_jubjub(
+  const bootCommitment = module.pureCircuits.derive_boot_commitment_with_jubjub(
     salt,
     publicKey,
   );
   const recoveryPublicKey = JubjubDevice.generate().pk;
   const recoveryWrap = new Uint8Array(RECOVERY_WRAP_LENGTH);
   const privateStateId = privateStateIdFrom(randomBytes);
-  const compiledContract = compileAccountContract(CompiledContract);
+  const compiledContract = compileAccountContract(
+    CompiledContract,
+    bundle,
+    module,
+  );
 
   const createDeployTransaction =
     contracts.createUnprovenDeployTx as unknown as CreateUnprovenAccountDeployTx;
@@ -764,6 +850,7 @@ export const deployAccount = async ({
       recoveryPublicKey,
       recoveryWrap,
       VETO_WINDOW_SECONDS,
+      ...constructorValues,
     ],
   });
   const fullState = ledger.ContractState.deserialize(
@@ -772,11 +859,11 @@ export const deployAccount = async ({
 
   const { keys: verifierKeys, sizes } = await loadVerifierKeys(
     providers,
-    DEPLOYED_OPERATIONS,
+    bundle.operations,
   );
-  const verifierKeysDigest = await deployedVerifierKeysDigest();
+  const verifierKeysDigest = await deployedVerifierKeysDigest(bundle);
   const [deployWave, ...maintenanceWaves] = planDeployWaves(
-    DEPLOYED_OPERATIONS,
+    bundle.operations,
     sizes,
   );
 
@@ -802,12 +889,14 @@ export const deployAccount = async ({
 
   const authorityKey = deployData.private.signingKey;
   await onDeployed(address, {
-    operations: [...DEPLOYED_OPERATIONS],
+    operations: [...bundle.operations],
     lockAccount,
     verifierKeysDigest,
     saltHex: HexBytes.fromByteArray(salt),
     authorityKey,
     handoverAuthority,
+    bundleId: bundle.id,
+    constructorArgs: [...constructorArgs],
   });
   await awaitContractIndexed({ providers, ledger, address }, sleep);
   await installWaves({
@@ -883,13 +972,17 @@ const isDeployAuthorityReplaced = ({
  * deployment whose deploy-time key is still live is refused under either
  * choice: the flow replaces the authority before it activates, so the
  * waves ran outside it and the verifier keys they installed are not
- * known to be this build's. A deployment recorded under other verifier
- * key pins than this build installs, or without a handover authority, is
- * refused before the chain is read.
+ * known to be this build's. A deployment recorded under another bundle
+ * than the resume is asked under, a record written before builds were
+ * registered naming the default, or under other verifier key pins than
+ * that bundle installs, or without a handover authority, is refused
+ * before the chain is read. The constructor arguments the record keeps
+ * are the deployed contract's; a resume takes no others.
  *
- * @throws {@link CreationArtefactMismatchError} when the recorded
- * verifier key digest is missing or is not this build's, or when the
- * record names no handover authority.
+ * @throws {@link CreationArtefactMismatchError} when the record names
+ * another bundle than `bundle`, when the recorded verifier key digest is
+ * missing or is not that bundle's, or when the record names no handover
+ * authority.
  * @throws {@link MaintenanceAuthorityMismatchError} when the chain's
  * authority is neither the deploy-time key nor the recorded successor.
  * @throws {@link AuthorityNotRetiredError} when the chain shows the
@@ -902,6 +995,7 @@ const isDeployAuthorityReplaced = ({
  */
 export const resumeAccountDeployment = async ({
   providers,
+  bundle,
   authoriser,
   address,
   pending,
@@ -909,9 +1003,17 @@ export const resumeAccountDeployment = async ({
   sleep = defaultSleep,
   sponsorReady = noSponsorSetup,
 }: ResumeAccountDeploymentProps): Promise<DeployedAccount> => {
-  if (pending.verifierKeysDigest !== (await deployedVerifierKeysDigest())) {
+  const recordedBundleId = pending.bundleId ?? ACCOUNT_BUNDLE_ID;
+  if (recordedBundleId !== bundle.id) {
     throw new CreationArtefactMismatchError(
-      `The unfinished creation of the account at ${address} was started under other verifier key pins than this build installs, so it cannot be resumed.`,
+      `The unfinished creation of the account at ${address} was started from account bundle '${recordedBundleId}', so it cannot be resumed from '${bundle.id}'.`,
+    );
+  }
+  if (
+    pending.verifierKeysDigest !== (await deployedVerifierKeysDigest(bundle))
+  ) {
+    throw new CreationArtefactMismatchError(
+      `The unfinished creation of the account at ${address} was started under other verifier key pins than this build of account bundle '${bundle.id}' installs, so it cannot be resumed.`,
     );
   }
   if (!pending.handoverAuthority) {
@@ -919,13 +1021,13 @@ export const resumeAccountDeployment = async ({
       `The unfinished creation of the account at ${address} names no maintenance authority to hand over to, so it cannot be resumed.`,
     );
   }
-  const [contracts, ledger, networkId, CompiledContract] =
-    await importChainModules();
+  const [[contracts, ledger, networkId, CompiledContract], module] =
+    await Promise.all([importChainModules(), loadDeployableModule(bundle)]);
 
   const publicKey = await authoriser.devicePublicKey();
   const chain = { providers, ledger, address };
   const provided = await readProvidedState(chain);
-  const isActivated = decodeLedger(provided.data).booted;
+  const isActivated = module.ledger(provided.data).booted;
   const onChain = ledger.ContractState.deserialize(provided.serialize());
   const isAuthorityReplaced = isDeployAuthorityReplaced({
     ledger,
@@ -967,7 +1069,7 @@ export const resumeAccountDeployment = async ({
     providers,
     findContract:
       contracts.findDeployedContract as unknown as FindDeployedAccountContract,
-    compiledContract: compileAccountContract(CompiledContract),
+    compiledContract: compileAccountContract(CompiledContract, bundle, module),
     address,
     publicKey,
     salt: ByteArray.fromHex(HexBytes(pending.saltHex)),

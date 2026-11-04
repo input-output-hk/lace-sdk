@@ -1,4 +1,4 @@
-import { strictEquals } from '@lace-lib/util/common';
+import { strictEquals } from '@lace-lib/cardano-util';
 import { retryBackoff } from 'backoff-rxjs';
 import {
   NEVER,

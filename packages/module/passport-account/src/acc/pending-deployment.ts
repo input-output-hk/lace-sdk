@@ -1,4 +1,9 @@
-import { CreationLockMismatchError } from '@lace-contract/passport';
+import {
+  CreationArtefactMismatchError,
+  CreationLockMismatchError,
+} from '@lace-contract/passport';
+
+import { ACCOUNT_BUNDLE_ID } from './manifest';
 
 import type {
   MaintenanceSignatureKind,
@@ -27,11 +32,17 @@ export type AuthorityKey = { tag: AuthorityKeyKind; value: string };
  * account installs so its devices hold maintenance from then on, and
  * `keyEntries`, the creating device's envelope and registration as
  * 192-byte hex inbox entries, which deliver the account keys once the
- * device is active. The authority key is the only secret the account
- * record ever carries, and only until activation rewrites the record
- * without it; the flow holds the same key in memory for as long as the
- * waves run. The key entries are ciphertexts, sealed to the device's
- * reader key and to the roster key.
+ * device is active. `bundleId` names the account bundle the deployment
+ * was started from, absent in a record written before builds were
+ * registered, which names the default, and `constructorArgs` the values
+ * of that bundle's declared constructor arguments as the canonical
+ * strings the creation descriptor carried, absent when it declares none;
+ * a resume finishes under them, never under what a later request names.
+ * The authority key is the only secret the account record ever carries,
+ * and only until activation rewrites the record without it; the flow
+ * holds the same key in memory for as long as the waves run. The key
+ * entries are ciphertexts, sealed to the device's reader key and to the
+ * roster key.
  */
 export type PendingDeployment = {
   operations: string[];
@@ -41,6 +52,8 @@ export type PendingDeployment = {
   authorityKey: AuthorityKey;
   handoverAuthority: MaintenanceVerifyingKey;
   keyEntries: string[];
+  bundleId?: string;
+  constructorArgs?: string[];
 };
 
 /**
@@ -68,4 +81,35 @@ export const lockChoiceMismatch = (
 ): CreationLockMismatchError =>
   new CreationLockMismatchError(
     `The unfinished Passport account creation was started with lockAccount ${recorded}; resume it with the same lock choice.`,
+  );
+
+/** What a creation was started from, as a deployment or a descriptor names it: its bundle and constructor arguments. */
+type CreationBuild = Pick<PendingDeployment, 'bundleId' | 'constructorArgs'>;
+
+/** The bundle a creation names, the default when it names none. */
+const creationBundleId = ({ bundleId }: CreationBuild): string =>
+  bundleId ?? ACCOUNT_BUNDLE_ID;
+
+/** Whether two creations name the same bundle and the same constructor arguments, value for value. */
+export const isSameCreationBuild = (
+  left: CreationBuild,
+  right: CreationBuild,
+): boolean =>
+  creationBundleId(left) === creationBundleId(right) &&
+  (left.constructorArgs ?? []).join(',') ===
+    (right.constructorArgs ?? []).join(',');
+
+/**
+ * The refusal of a creation that resumes an unfinished one from another
+ * bundle, or with other constructor arguments, than `recorded`, the ones
+ * it was started with; the message names the bundle so a retry can
+ * repeat it.
+ */
+export const creationBuildMismatch = (
+  recorded: CreationBuild,
+): CreationArtefactMismatchError =>
+  new CreationArtefactMismatchError(
+    `The unfinished Passport account creation was started from account bundle '${creationBundleId(
+      recorded,
+    )}' with its recorded constructor arguments; resume it from the same bundle with the same arguments.`,
   );

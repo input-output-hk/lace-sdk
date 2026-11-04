@@ -1,5 +1,5 @@
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { computeScriptDataHash } from '../src';
 import {

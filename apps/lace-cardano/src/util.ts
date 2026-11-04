@@ -1,1 +1,1 @@
-export * from '@lace-lib/util/common';
+export * from '@lace-lib/cardano-util';

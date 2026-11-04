@@ -28,6 +28,7 @@ import { jubjub } from '@noble/curves/misc.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { accountBundle, createBundleRegistry } from '../../src/acc/bundle';
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import {
   prepareAppendInbox,
@@ -62,6 +63,7 @@ import { issuedGrant } from './issued-grant';
 
 import type * as AccModule from '../../src/acc/acc-module';
 import type * as GatedCall from '../../src/acc/gated-call';
+import type { AcceptedGatedCall } from '../../src/acc/gated-call';
 import type * as ReadGrants from '../../src/acc/read-grants';
 import type { IssueGrantInput, RevokeGrantInput } from '../../src/flows/grants';
 import type {
@@ -115,6 +117,12 @@ const remoteCommitment = '22'.repeat(32);
 const rpId = 'lace.io';
 const deviceEpoch = 4n;
 
+/** What the gated call reports once the contract accepted it, leaving the device at `advancedCounter`. */
+const acceptedCall = (advancedCounter: bigint): AcceptedGatedCall => ({
+  advancedCounter: UseCounter(advancedCounter),
+  result: undefined,
+});
+
 /** The seed of the dev encryption key the contract-sim flows seal under. */
 const simEncryptionSeed = new Uint8Array(64).fill(0x41);
 
@@ -128,6 +136,7 @@ const network = {
 const account: PassportAccountInfo = {
   address: accountAddress,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -349,6 +358,7 @@ const createContext = ({
       stages.push(stage);
     },
     rpId: withRpId ? rpId : undefined,
+    bundles: createBundleRegistry(),
   };
   return {
     authoriser,
@@ -373,7 +383,7 @@ const chainRoster = (before: GrantRecord[], after: GrantRecord[]) => {
   mocks.readGrants.mockImplementation(() => current);
   mocks.executeGatedCall.mockImplementation(async () => {
     current = after;
-    return UseCounter(3n);
+    return acceptedCall(3n);
   });
 };
 
@@ -385,7 +395,7 @@ beforeEach(() => {
   mocks.readGrants.mockReturnValue([]);
   mocks.createMidnightProviders.mockResolvedValue(providers);
   mocks.connectAccountHandle.mockResolvedValue(handle);
-  mocks.executeGatedCall.mockResolvedValue(UseCounter(3n));
+  mocks.executeGatedCall.mockResolvedValue(acceptedCall(3n));
 });
 
 describe('issueGrant', () => {
@@ -414,11 +424,15 @@ describe('issueGrant', () => {
       network,
       prover,
       sponsor,
+      bundle: accountBundle,
+      bundles: [accountBundle],
+      calledContracts: [],
       onStage: expect.any(Function) as unknown,
     });
     expect(mocks.connectAccountHandle).toHaveBeenCalledExactlyOnceWith(
       providers,
       accountAddress,
+      { bundle: accountBundle },
     );
     expect(mocks.executeGatedCall).toHaveBeenCalledExactlyOnceWith({
       handle,
@@ -450,7 +464,7 @@ describe('issueGrant', () => {
     mocks.executeGatedCall.mockImplementation(async () => {
       order.push('call');
       roster.push(grantRecord(grantId));
-      return UseCounter(3n);
+      return acceptedCall(3n);
     });
     const { context, accountRecords } = createContext();
     vi.mocked(accountRecords.write).mockImplementation(async () => {
@@ -860,7 +874,7 @@ describe('issueGrant', () => {
     mocks.executeGatedCall.mockImplementation(async () => {
       inSession.push(isSessionOpen);
       mocks.readGrants.mockReturnValue([grantRecord(grantId)]);
-      return UseCounter(3n);
+      return acceptedCall(3n);
     });
     vi.mocked(accountRecords.write).mockImplementation(async () => {
       inSession.push(isSessionOpen);

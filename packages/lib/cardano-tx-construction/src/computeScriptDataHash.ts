@@ -2,7 +2,7 @@ import { Serialization } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
 
 import type { Cardano } from '@lace-lib/cardano-core';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const CBOR_EMPTY_MAP = new Uint8Array([0xa0]);
 

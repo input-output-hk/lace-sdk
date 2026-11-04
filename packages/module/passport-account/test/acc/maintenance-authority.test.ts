@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import {
   AccAddress,
+  AccBindingVersion,
   MaintenanceAuthorityMismatchError,
   MaintenanceUpdateRefusedError,
 } from '@lace-contract/passport';
@@ -11,14 +12,20 @@ import { HexBytes } from '@lace-lib/util';
 import * as ledger from '@midnightntwrk/ledger-v9';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createBundleRegistry } from '../../src/acc/bundle';
+import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
 import {
   authorityOf,
   signableChanges,
   signMaintenanceUpdate,
 } from '../../src/acc/maintenance-authority';
+import { accManifest } from '../../src/acc/manifest';
 import { verifierKeyInsert } from '../../src/acc/verifier-key-insert';
 
-import type { MaintenanceVerifyingKey } from '@lace-contract/passport';
+import type {
+  AccountBundle,
+  MaintenanceVerifyingKey,
+} from '@lace-contract/passport';
 
 type MaintenanceLedger = Parameters<typeof authorityOf>[0];
 
@@ -29,26 +36,67 @@ vi.mock('../../src/acc/acc-module', () => pins);
 const ACCOUNT = AccAddress('ac'.repeat(32));
 const PINNED_OPERATION = 'issue_grant_with_jubjub';
 const HEADERLESS_OPERATION = 'revoke_grant_with_jubjub';
-const UNPINNED_OPERATION = 'remove_device_with_jubjub';
 const RECOVERY_OPERATION = 'recover_submit';
 const K256_ARM_OPERATION = 'add_device_with_k256';
+const COUNTER_OPERATION = 'counter_bump_with_jubjub';
+const COUNTER_BUNDLE_ID = 'account-counter';
 
 /**
  * A verifier key the pinned compiler line emits, for a one-circuit
- * counter contract. It stands in for a pinned Account Custody Contract
- * key: the test pins its digest for {@link PINNED_OPERATION}.
+ * counter contract. It stands in for every pinned Account Custody
+ * Contract key: the test pins its digest for the whole deployed roster.
  */
 const verifierKey = new Uint8Array(
   await readFile(path.join(__dirname, 'fixtures', 'counter-bump.verifier')),
 );
 const headerless = verifierKey.slice(8);
+/** Another key under the same header: what the counter build pins for its own operation. */
+const counterKey = verifierKey.slice();
+counterKey[counterKey.length - 1] ^= 1;
 
-pins.expectedVk[PINNED_OPERATION] = HexBytes.fromByteArray(sha256(verifierKey));
-pins.expectedVk[RECOVERY_OPERATION] = pins.expectedVk[PINNED_OPERATION];
-pins.expectedVk[K256_ARM_OPERATION] = pins.expectedVk[PINNED_OPERATION];
+for (const operation of [
+  ...DEPLOYED_OPERATIONS,
+  RECOVERY_OPERATION,
+  K256_ARM_OPERATION,
+]) {
+  pins.expectedVk[operation] = HexBytes.fromByteArray(sha256(verifierKey));
+}
 pins.expectedVk[HEADERLESS_OPERATION] = HexBytes.fromByteArray(
   sha256(headerless),
 );
+
+/** A build of the account with one more operation, pinning its own verifier key for it. */
+const counterBundle: AccountBundle = {
+  id: COUNTER_BUNDLE_ID,
+  bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  module: async () => ({
+    Contract: class {},
+    ledger: () => ({}),
+    pureCircuits: {},
+    expectedVk: {},
+    circuitSignatures: {},
+    declaredInterfaces: {},
+  }),
+  manifest: {
+    ...accManifest,
+    bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  },
+  operations: [...DEPLOYED_OPERATIONS, COUNTER_OPERATION],
+  verifierKeys: {
+    ...pins.expectedVk,
+    [COUNTER_OPERATION]: HexBytes.fromByteArray(sha256(counterKey)),
+  },
+  constructorArgs: [],
+  circuits: {},
+};
+
+/** The registry of the default bundle and the counter build, as a key loads it. */
+const bundles = async () => createBundleRegistry([counterBundle]);
+
+/** A registry loader no replace may reach. */
+const noBundles = async () => {
+  throw new Error('A replace loads no bundle.');
+};
 
 const rosterKey = (fill: number): Uint8Array => new Uint8Array(32).fill(fill);
 
@@ -154,18 +202,32 @@ describe('authorityOf', () => {
 });
 
 describe('signableChanges', () => {
-  it('passes a replace and an install of pinned verifier keys', async () => {
+  it('passes a replace, without loading a bundle, and an install of verifier keys the named bundle pins', async () => {
     const replace = {
       kind: 'replace-authority',
       authority: await authorityOf(ledger, rosterKey(1)),
     } as const;
     const install = {
       kind: 'insert-verifier-keys',
+      bundleId: 'account',
       inserts: [{ operation: PINNED_OPERATION, verifierKey }],
     } as const;
 
-    await expect(signableChanges(replace)).resolves.toEqual(replace);
-    await expect(signableChanges(install)).resolves.toEqual(install);
+    await expect(signableChanges(replace, noBundles)).resolves.toEqual(replace);
+    await expect(signableChanges(install, bundles)).resolves.toEqual(install);
+  });
+
+  it('passes, under the counter build, the operation it adds with its own key beside the shared roster', async () => {
+    const install = {
+      kind: 'insert-verifier-keys',
+      bundleId: COUNTER_BUNDLE_ID,
+      inserts: [
+        { operation: COUNTER_OPERATION, verifierKey: counterKey },
+        { operation: PINNED_OPERATION, verifierKey },
+      ],
+    } as const;
+
+    await expect(signableChanges(install, bundles)).resolves.toEqual(install);
   });
 
   it('answers a copy the caller no longer owns', async () => {
@@ -173,15 +235,20 @@ describe('signableChanges', () => {
     const authority = await authorityOf(ledger, rosterKey(1));
     const replace = { kind: 'replace-authority', authority } as const;
 
-    const install = await signableChanges({
-      kind: 'insert-verifier-keys',
-      inserts: [{ operation: PINNED_OPERATION, verifierKey: owned }],
-    });
-    const replaced = await signableChanges(replace);
+    const install = await signableChanges(
+      {
+        kind: 'insert-verifier-keys',
+        bundleId: 'account',
+        inserts: [{ operation: PINNED_OPERATION, verifierKey: owned }],
+      },
+      bundles,
+    );
+    const replaced = await signableChanges(replace, noBundles);
     owned.fill(0);
 
     expect(install).toEqual({
       kind: 'insert-verifier-keys',
+      bundleId: 'account',
       inserts: [{ operation: PINNED_OPERATION, verifierKey }],
     });
     expect(replaced).toEqual(replace);
@@ -192,37 +259,74 @@ describe('signableChanges', () => {
   });
 
   it.each([
-    ['no verifier key at all', [], 'at least one verifier key'],
+    [
+      'no verifier key at all',
+      { bundleId: 'account', inserts: [] },
+      'at least one verifier key',
+    ],
     [
       'a recovery circuit, though its key is the pinned one',
-      [{ operation: RECOVERY_OPERATION, verifierKey }],
-      `'${RECOVERY_OPERATION}' is not an operation this module deploys.`,
+      {
+        bundleId: 'account',
+        inserts: [{ operation: RECOVERY_OPERATION, verifierKey }],
+      },
+      `'${RECOVERY_OPERATION}' is not an operation of the account bundle 'account'.`,
     ],
     [
       'a k256 device arm circuit, though its key is the pinned one',
-      [{ operation: K256_ARM_OPERATION, verifierKey }],
-      `'${K256_ARM_OPERATION}' is not an operation this module deploys.`,
+      {
+        bundleId: 'account',
+        inserts: [{ operation: K256_ARM_OPERATION, verifierKey }],
+      },
+      `'${K256_ARM_OPERATION}' is not an operation of the account bundle 'account'.`,
     ],
     [
-      'an operation without a pin',
-      [{ operation: UNPINNED_OPERATION, verifierKey }],
-      `No verifier key is pinned for '${UNPINNED_OPERATION}'.`,
+      'an operation only another registered bundle adds',
+      {
+        bundleId: 'account',
+        inserts: [{ operation: COUNTER_OPERATION, verifierKey: counterKey }],
+      },
+      `'${COUNTER_OPERATION}' is not an operation of the account bundle 'account'.`,
     ],
     [
       'a key that is not the pinned one',
-      [{ operation: PINNED_OPERATION, verifierKey: verifierKey.slice(1) }],
-      `The verifier key of '${PINNED_OPERATION}' is not the pinned one.`,
+      {
+        bundleId: 'account',
+        inserts: [
+          { operation: PINNED_OPERATION, verifierKey: verifierKey.slice(1) },
+        ],
+      },
+      `The verifier key of '${PINNED_OPERATION}' is not the one the account bundle 'account' pins.`,
+    ],
+    [
+      "the default bundle's key for the operation the counter build pins its own key for",
+      {
+        bundleId: COUNTER_BUNDLE_ID,
+        inserts: [{ operation: COUNTER_OPERATION, verifierKey }],
+      },
+      `The verifier key of '${COUNTER_OPERATION}' is not the one the account bundle '${COUNTER_BUNDLE_ID}' pins.`,
     ],
     [
       'a pinned key under another header',
-      [{ operation: HEADERLESS_OPERATION, verifierKey: headerless }],
+      {
+        bundleId: 'account',
+        inserts: [{ operation: HEADERLESS_OPERATION, verifierKey: headerless }],
+      },
       `The verifier key of '${HEADERLESS_OPERATION}' is not a midnight:verifier-key[v7]: key`,
     ],
-  ])('refuses an install of %s', async (_case, inserts, message) => {
-    const refusal = signableChanges({
-      kind: 'insert-verifier-keys',
-      inserts,
-    });
+    [
+      'a bundle the registry does not hold',
+      {
+        bundleId: 'account-tally',
+        inserts: [{ operation: PINNED_OPERATION, verifierKey }],
+      },
+      "No account bundle 'account-tally' is registered with this encryption key",
+    ],
+  ])('refuses an install of %s', async (_case, changes, message) => {
+    const refusal = signableChanges(
+      { kind: 'insert-verifier-keys', ...changes },
+      bundles,
+    );
 
     await expect(refusal).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
     await expect(refusal).rejects.toThrow(message);
@@ -271,6 +375,7 @@ describe('signMaintenanceUpdate', () => {
       counter: 2n,
       changes: {
         kind: 'insert-verifier-keys',
+        bundleId: 'account',
         inserts: [{ operation: PINNED_OPERATION, verifierKey }],
       },
     });
@@ -295,6 +400,7 @@ describe('signMaintenanceUpdate', () => {
         counter: 0n,
         changes: {
           kind: 'insert-verifier-keys',
+          bundleId: 'account',
           inserts: [{ operation: PINNED_OPERATION, verifierKey }],
         },
       }),

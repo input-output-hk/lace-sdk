@@ -11,11 +11,12 @@ import {
   UnresolvedContractCircuitError,
 } from '../../src/infra/http-prover';
 
-import type { AccManifest } from '../../src/acc/manifest';
+import type { AccCircuitManifestEntry } from '../../src/acc/manifest';
 import type {
   KeyMaterialResolver,
   ProverFetch,
 } from '../../src/infra/http-prover';
+import type { AccountBundle, CalledContract } from '@lace-contract/passport';
 
 const framing = vi.hoisted(() => {
   type KeyMaterial = {
@@ -258,120 +259,269 @@ describe('createHttpProver', () => {
   });
 });
 
-describe('createManifestKeyMaterialResolver', () => {
-  const artefactUrl = 'https://artefacts.example/acc';
-  const circuit = 'add_device_with_jubjub';
+const sha256Hex = (bytes: Uint8Array): string =>
+  createHash('sha256').update(bytes).digest('hex');
 
-  const sha256Hex = (bytes: Uint8Array): string =>
-    createHash('sha256').update(bytes).digest('hex');
-
-  const fixtures: Record<string, Uint8Array> = {
-    [`${artefactUrl}/zkir/${circuit}.bzkir`]: new Uint8Array([1, 2, 3]),
-    [`${artefactUrl}/keys/${circuit}.prover`]: new Uint8Array([4, 5, 6, 7]),
-    [`${artefactUrl}/keys/${circuit}.verifier`]: new Uint8Array([8, 9]),
+/** One circuit's assets as served from `artefactUrl`, with the pin that matches them. */
+const circuitFixture = (artefactUrl: string, name: string, seed: number) => {
+  const zkir = new Uint8Array([seed, 1]);
+  const proverKey = new Uint8Array([seed, 2, 3]);
+  const verifierKey = new Uint8Array([seed, 4]);
+  const entry: AccCircuitManifestEntry = {
+    name,
+    keyLocation: `keys/${name}`,
+    zkirSha256: sha256Hex(zkir),
+    proverKeySha256: sha256Hex(proverKey),
+    verifierKeySha256: sha256Hex(verifierKey),
   };
-
-  const manifestForFixtures = (): AccManifest => ({
-    ...accManifest,
-    circuits: {
-      ...accManifest.circuits,
-      [circuit]: {
-        ...accManifest.circuits[circuit],
-        zkirSha256: sha256Hex(fixtures[`${artefactUrl}/zkir/${circuit}.bzkir`]),
-        proverKeySha256: sha256Hex(
-          fixtures[`${artefactUrl}/keys/${circuit}.prover`],
-        ),
-        verifierKeySha256: sha256Hex(
-          fixtures[`${artefactUrl}/keys/${circuit}.verifier`],
-        ),
-      },
+  return {
+    entry,
+    bytes: {
+      [`${artefactUrl}/zkir/${name}.bzkir`]: zkir,
+      [`${artefactUrl}/keys/${name}.prover`]: proverKey,
+      [`${artefactUrl}/keys/${name}.verifier`]: verifierKey,
     },
+    material: { proverKey, verifierKey, ir: zkir },
+  };
+};
+
+const networkUrl = 'https://artefacts.example/acc';
+const tallyAccountUrl = 'https://artefacts.example/acc-tally';
+const tallyUrl = 'https://artefacts.example/tally';
+const circuit = 'add_device_with_jubjub';
+const TALLY_CIRCUIT = 'tally_set_with_jubjub';
+const ACCOUNT_ADDRESS = 'ab'.repeat(32);
+const TALLY_ADDRESS = 'cd'.repeat(32);
+
+const accountAddDevice = circuitFixture(networkUrl, circuit, 1);
+const tallyAddDevice = circuitFixture(tallyAccountUrl, circuit, 2);
+const tallySet = circuitFixture(tallyAccountUrl, TALLY_CIRCUIT, 3);
+const calleeSet = circuitFixture(tallyUrl, 'set', 4);
+
+const fixtures: Record<string, Uint8Array> = {
+  ...accountAddDevice.bytes,
+  ...tallyAddDevice.bytes,
+  ...tallySet.bytes,
+  ...calleeSet.bytes,
+};
+
+const bundleOf = (
+  id: string,
+  circuits: Record<string, AccCircuitManifestEntry>,
+  artefactUrl?: string,
+): AccountBundle => ({
+  id,
+  bindingVersion: accManifest.bindingVersion,
+  module: async () => ({
+    Contract: class {},
+    ledger: () => ({}),
+    pureCircuits: {},
+    expectedVk: {},
+    circuitSignatures: {},
+    declaredInterfaces: {},
+  }),
+  manifest: { ...accManifest, circuits },
+  operations: Object.keys(circuits),
+  verifierKeys: {},
+  constructorArgs: [],
+  circuits: {},
+  ...(artefactUrl === undefined ? {} : { artefactUrl }),
+});
+
+/** The default bundle, whose artefacts the network serves. */
+const accountFixture = bundleOf('account', {
+  [circuit]: accountAddDevice.entry,
+});
+
+/** A build extending the account, with its own artefacts and its own key for a shared circuit name. */
+const tallyBundle = bundleOf(
+  'account-tally',
+  { [circuit]: tallyAddDevice.entry, [TALLY_CIRCUIT]: tallySet.entry },
+  tallyAccountUrl,
+);
+
+const tally: CalledContract = {
+  label: 'Tally',
+  address: TALLY_ADDRESS,
+  interface: 'Tally',
+  module: async () => ({
+    Contract: class {},
+    pureCircuits: {},
+    expectedVk: {},
+    circuitSignatures: {},
+    declaredInterfaces: {},
+  }),
+  artefactUrl: tallyUrl,
+  pins: { set: calleeSet.entry },
+};
+
+const fetchFixtures = () =>
+  vi.fn(async (url: string) => {
+    const bytes = fixtures[url];
+    if (!bytes) throw new Error(`No fixture for ${url}`);
+    return bytes;
   });
 
-  const fetchFixtures = () =>
-    vi.fn(async (url: string) => {
-      const bytes = fixtures[url];
-      if (!bytes) throw new Error(`No fixture for ${url}`);
-      return bytes;
+const canonical = (address: string, name: string, vk?: string): string =>
+  `contract:${address}/${name}${vk === undefined ? '' : `?vk=${vk}`}`;
+
+describe('createManifestKeyMaterialResolver', () => {
+  const resolverOver = (
+    fetchBytes = fetchFixtures(),
+    bundles: readonly AccountBundle[] = [accountFixture, tallyBundle],
+    calledContracts: readonly CalledContract[] = [tally],
+  ) =>
+    createManifestKeyMaterialResolver({
+      artefactUrl: networkUrl,
+      fetchBytes,
+      bundles,
+      calledContracts,
     });
 
-  it('maps a manifest key location to the verified prover key, verifier key, and IR', async () => {
-    const resolver = createManifestKeyMaterialResolver({
-      artefactUrl,
-      fetchBytes: fetchFixtures(),
-      manifest: manifestForFixtures(),
-    });
-
-    await expect(resolver(`keys/${circuit}`)).resolves.toEqual({
-      proverKey: new Uint8Array([4, 5, 6, 7]),
-      verifierKey: new Uint8Array([8, 9]),
-      ir: new Uint8Array([1, 2, 3]),
-    });
+  it('maps a manifest key location to the verified prover key, verifier key, and IR of the default bundle', async () => {
+    await expect(resolverOver()(`keys/${circuit}`)).resolves.toEqual(
+      accountAddDevice.material,
+    );
   });
 
   it('accepts the bare circuit name as the key location', async () => {
-    const resolver = createManifestKeyMaterialResolver({
-      artefactUrl,
-      fetchBytes: fetchFixtures(),
-      manifest: manifestForFixtures(),
-    });
-
-    await expect(resolver(circuit)).resolves.toMatchObject({
-      ir: new Uint8Array([1, 2, 3]),
-    });
+    await expect(resolverOver()(circuit)).resolves.toEqual(
+      accountAddDevice.material,
+    );
   });
 
-  it('resolves a canonical contract location whose vk pin matches the manifest', async () => {
-    const manifest = manifestForFixtures();
-    const resolver = createManifestKeyMaterialResolver({
-      artefactUrl,
-      fetchBytes: fetchFixtures(),
-      manifest,
-    });
-    const vkPin = manifest.circuits[circuit].verifierKeySha256;
+  it('resolves a canonical account location to the bundle pinning its verifier key hash, from that bundle artefact URL', async () => {
+    const fetchBytes = fetchFixtures();
+    const resolver = resolverOver(fetchBytes);
 
     await expect(
-      resolver(`contract:${'ab'.repeat(32)}/${circuit}?vk=${vkPin}`),
-    ).resolves.toEqual({
-      proverKey: new Uint8Array([4, 5, 6, 7]),
-      verifierKey: new Uint8Array([8, 9]),
-      ir: new Uint8Array([1, 2, 3]),
-    });
+      resolver(
+        canonical(
+          ACCOUNT_ADDRESS,
+          circuit,
+          accountAddDevice.entry.verifierKeySha256,
+        ),
+      ),
+    ).resolves.toEqual(accountAddDevice.material);
+    await expect(
+      resolver(
+        canonical(
+          ACCOUNT_ADDRESS,
+          circuit,
+          tallyAddDevice.entry.verifierKeySha256,
+        ),
+      ),
+    ).resolves.toEqual(tallyAddDevice.material);
+
+    const urls = fetchBytes.mock.calls.map(([url]) => url);
+    expect(urls.filter(url => url.startsWith(`${networkUrl}/`))).toHaveLength(
+      3,
+    );
+    expect(
+      urls.filter(url => url.startsWith(`${tallyAccountUrl}/`)),
+    ).toHaveLength(3);
   });
 
-  it('throws ArtefactIntegrityError when the canonical vk pin mismatches the manifest', async () => {
-    const manifest = manifestForFixtures();
+  it('picks the first registered bundle when two pin the same verifier key hash under one circuit name', async () => {
     const fetchBytes = fetchFixtures();
-    const resolver = createManifestKeyMaterialResolver({
-      artefactUrl,
-      fetchBytes,
-      manifest,
-    });
+    const extended = bundleOf(
+      'account-extended',
+      { [circuit]: accountAddDevice.entry },
+      'https://artefacts.example/acc-extended',
+    );
+    const resolver = resolverOver(fetchBytes, [accountFixture, extended]);
+
+    await expect(
+      resolver(
+        canonical(
+          ACCOUNT_ADDRESS,
+          circuit,
+          accountAddDevice.entry.verifierKeySha256,
+        ),
+      ),
+    ).resolves.toEqual(accountAddDevice.material);
+    expect(
+      fetchBytes.mock.calls.every(([url]) => url.startsWith(`${networkUrl}/`)),
+    ).toBe(true);
+  });
+
+  it('resolves a canonical location without a vk pin by name in the first bundle listing the circuit', async () => {
+    const resolver = resolverOver();
+
+    await expect(
+      resolver(canonical(ACCOUNT_ADDRESS, circuit)),
+    ).resolves.toEqual(accountAddDevice.material);
+    await expect(
+      resolver(canonical(ACCOUNT_ADDRESS, TALLY_CIRCUIT)),
+    ).resolves.toEqual(tallySet.material);
+  });
+
+  it('throws ArtefactIntegrityError when no bundle listing the circuit pins the verifier key the chain expects', async () => {
+    const fetchBytes = fetchFixtures();
     const driftedPin = 'f'.repeat(64);
 
-    const failure = resolver(
-      `contract:${'ab'.repeat(32)}/${circuit}?vk=${driftedPin}`,
+    const failure = resolverOver(fetchBytes)(
+      canonical(ACCOUNT_ADDRESS, circuit, driftedPin),
     );
 
     await expect(failure).rejects.toThrow(ArtefactIntegrityError);
     await expect(failure).rejects.toMatchObject({
       code: 'artefact-integrity',
-      message: `verifier key pin mismatch for ${circuit}: the chain expects ${driftedPin}, the manifest pins ${manifest.circuits[circuit].verifierKeySha256}`,
+      message: `verifier key pin mismatch for ${circuit}: the chain expects ${driftedPin}, the registered account bundles pin ${accountAddDevice.entry.verifierKeySha256} ('account'), ${tallyAddDevice.entry.verifierKeySha256} ('account-tally')`,
     });
     expect(fetchBytes).not.toHaveBeenCalled();
   });
 
-  it('throws a named error for a contract location whose circuit is outside the manifest', async () => {
+  it('resolves a called contract circuit through its pins from its own artefact URL', async () => {
     const fetchBytes = fetchFixtures();
-    const resolver = createManifestKeyMaterialResolver({
-      artefactUrl,
-      fetchBytes,
-      manifest: manifestForFixtures(),
+
+    await expect(
+      resolverOver(fetchBytes)(
+        canonical(TALLY_ADDRESS, 'set', calleeSet.entry.verifierKeySha256),
+      ),
+    ).resolves.toEqual(calleeSet.material);
+    expect(
+      fetchBytes.mock.calls.every(([url]) => url.startsWith(`${tallyUrl}/`)),
+    ).toBe(true);
+  });
+
+  it('refuses a called contract vk pin that differs from the registered pin', async () => {
+    const fetchBytes = fetchFixtures();
+    const driftedPin = 'e'.repeat(64);
+
+    const failure = resolverOver(fetchBytes)(
+      canonical(TALLY_ADDRESS, 'set', driftedPin),
+    );
+
+    await expect(failure).rejects.toThrow(ArtefactIntegrityError);
+    await expect(failure).rejects.toThrow(
+      `verifier key pin mismatch for set: the chain expects ${driftedPin}, called contract 'Tally' pins ${calleeSet.entry.verifierKeySha256}`,
+    );
+    expect(fetchBytes).not.toHaveBeenCalled();
+  });
+
+  it('throws a named error for a circuit of a called contract outside its pins', async () => {
+    const vk = '2'.repeat(64);
+
+    const failure = resolverOver()(canonical(TALLY_ADDRESS, 'reset', vk));
+
+    await expect(failure).rejects.toThrow(UnresolvedContractCircuitError);
+    await expect(failure).rejects.toMatchObject({
+      code: 'unresolved-contract-circuit',
+      contractAddress: TALLY_ADDRESS,
+      circuit: 'reset',
+      verifierKeyHash: vk,
     });
-    const address = 'cd'.repeat(32);
+  });
+
+  it('throws a named error naming the registrations for a contract location whose circuit nothing pins', async () => {
+    const fetchBytes = fetchFixtures();
+    const address = 'ef'.repeat(32);
     const vk = '1'.repeat(64);
 
-    const failure = resolver(`contract:${address}/bridge_deposit?vk=${vk}`);
+    const failure = resolverOver(fetchBytes)(
+      canonical(address, 'bridge_deposit', vk),
+    );
 
     await expect(failure).rejects.toThrow(UnresolvedContractCircuitError);
     await expect(failure).rejects.toMatchObject({
@@ -381,20 +531,70 @@ describe('createManifestKeyMaterialResolver', () => {
       verifierKeyHash: vk,
     });
     await expect(failure).rejects.toThrow(
-      `circuit "bridge_deposit" of contract ${address} (vk=${vk})`,
+      `No key material for circuit "bridge_deposit" of contract ${address} (vk=${vk}): the prover resolves the circuits of the account bundles 'account', 'account-tally' and of the called contracts 'Tally' (${TALLY_ADDRESS}).`,
     );
     expect(fetchBytes).not.toHaveBeenCalled();
   });
 
+  it('says no called contract is registered when none is', async () => {
+    const failure = resolverOver(
+      fetchFixtures(),
+      [accountFixture],
+      [],
+    )(canonical(ACCOUNT_ADDRESS, 'bridge_deposit'));
+
+    await expect(failure).rejects.toThrow(
+      `the prover resolves the circuits of the account bundles 'account' and of no called contract.`,
+    );
+  });
+
   it('resolves an unknown location to undefined without downloading anything', async () => {
     const fetchBytes = fetchFixtures();
-    const resolver = createManifestKeyMaterialResolver({
-      artefactUrl,
+
+    await expect(
+      resolverOver(fetchBytes)('midnight/zswap/spend'),
+    ).resolves.toBeUndefined();
+    expect(fetchBytes).not.toHaveBeenCalled();
+  });
+});
+
+describe('createHttpProver key material registries', () => {
+  it('builds the default resolver over the vendored bundle from artefactUrl alone, downloading from it against the vendored pins', async () => {
+    const fetchBytes = fetchFixtures();
+    const prover = createHttpProver(baseUrl, {
+      artefactUrl: networkUrl,
       fetchBytes,
-      manifest: manifestForFixtures(),
+      fetchHttp: vi.fn(async () => okResponse(proofBytes)) as ProverFetch,
     });
 
-    await expect(resolver('midnight/zswap/spend')).resolves.toBeUndefined();
-    expect(fetchBytes).not.toHaveBeenCalled();
+    await expect(prover.prove(preimage, `keys/${circuit}`)).rejects.toThrow(
+      ArtefactIntegrityError,
+    );
+    expect(fetchBytes.mock.calls.map(([url]) => url).sort()).toEqual([
+      `${networkUrl}/keys/${circuit}.prover`,
+      `${networkUrl}/keys/${circuit}.verifier`,
+      `${networkUrl}/zkir/${circuit}.bzkir`,
+    ]);
+  });
+
+  it('proves a call into a registered called contract with the material its pins name', async () => {
+    const fetchHttp = vi.fn(async () => okResponse(proofBytes));
+    const prover = createHttpProver(baseUrl, {
+      artefactUrl: networkUrl,
+      registry: { bundles: [tallyBundle], calledContracts: [tally] },
+      fetchBytes: fetchFixtures(),
+      fetchHttp: fetchHttp as ProverFetch,
+    });
+
+    await prover.prove(
+      preimage,
+      canonical(TALLY_ADDRESS, 'set', calleeSet.entry.verifierKeySha256),
+    );
+
+    expect(framing.createProvingPayload).toHaveBeenCalledWith(
+      preimage,
+      undefined,
+      calleeSet.material,
+    );
   });
 });

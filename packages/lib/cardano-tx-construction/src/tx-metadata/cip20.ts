@@ -1,4 +1,4 @@
-import { StringUtils } from '@lace-lib/util/common';
+import { StringUtils } from '@lace-lib/cardano-util';
 import { CustomError } from 'ts-custom-error';
 
 import type { Cardano } from '@lace-lib/cardano-core';

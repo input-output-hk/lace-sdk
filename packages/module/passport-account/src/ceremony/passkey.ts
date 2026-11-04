@@ -8,6 +8,7 @@ import type {
   JubjubAuthoriser,
   JubjubDeviceRunner,
 } from '../acc/jubjub-authoriser';
+import type { PassportRegistry } from '../acc/registry';
 import type {
   CreatePasskeyKeySourceProps,
   PasskeySessionKeySource,
@@ -29,11 +30,16 @@ export type PasskeyAuthoriser = JubjubAuthoriser & {
 /**
  * Either a key source to build on, so one passkey can serve the
  * authoriser and other consumers of the same root, or the WebAuthn
- * options from which the authoriser creates its own.
+ * options from which the authoriser creates its own. `registry` is what
+ * the host registers, the same value it gives the module, so the device
+ * signs the circuits its builds describe.
  */
-export type CreatePasskeyAuthoriserProps =
+export type CreatePasskeyAuthoriserProps = {
+  registry?: PassportRegistry;
+} & (
   | { keySource: PasskeySessionKeySource }
-  | (CreatePasskeyKeySourceProps & { keySource?: undefined });
+  | (CreatePasskeyKeySourceProps & { keySource?: undefined })
+);
 
 const toKeySource = (
   props: CreatePasskeyAuthoriserProps,
@@ -81,7 +87,8 @@ export const createPasskeyAuthoriser = (
   let jubjubAuthoriser: Promise<JubjubAuthoriser> | undefined;
   const authoriser = async (): Promise<JubjubAuthoriser> => {
     jubjubAuthoriser ??= loadJubjubSigning().then(
-      ({ createJubjubAuthoriser }) => createJubjubAuthoriser(runWithDevice),
+      ({ createJubjubAuthoriser }) =>
+        createJubjubAuthoriser(runWithDevice, props.registry),
     );
     jubjubAuthoriser.catch(() => {
       jubjubAuthoriser = undefined;

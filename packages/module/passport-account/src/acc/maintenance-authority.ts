@@ -5,15 +5,16 @@ import {
 import { sha256 } from '@lace-lib/crypto';
 import { HexBytes } from '@lace-lib/util';
 
-import { DEPLOYED_OPERATIONS } from './deployed-operations';
 import {
   assertVerifierKeyHeader,
   verifierKeyInsert,
 } from './verifier-key-insert';
 
+import type { BundleRegistry } from './bundle';
 import type { VerifierKeyInsertLedger } from './verifier-key-insert';
 import type {
   AccAddress,
+  AccountBundle,
   MaintenanceChanges,
   MaintenanceSignature,
   MaintenanceVerifierKey,
@@ -134,35 +135,32 @@ export const isSameAuthority = (
 ): boolean => left.tag === right.tag && left.value === right.value;
 
 /**
- * Holds one verifier key to the one the module pins for its operation:
- * the operation must be in the deployed roster, the key's sha256 must be
- * its pin and the key must carry the pinned compiler's header. The pins
- * cover every compiled circuit, recovery and other device arms included,
- * so the roster is what keeps an install to the operations this module
- * deploys.
+ * Holds one verifier key to the one `bundle` pins for its operation: the
+ * operation must be in the bundle's roster, the key's sha256 must be its
+ * pin and the key must carry the pinned compiler's header. A bundle's
+ * fingerprints cover every compiled circuit, recovery and other device
+ * arms included, so the roster is what keeps an install to the operations
+ * the build deploys.
  *
  * @throws {@link MaintenanceUpdateRefusedError} for an operation outside
- * the roster or without a pin, a key whose digest is not the pin, or a key
- * under another header.
+ * the roster, a key whose digest is not the pin, or a key under another
+ * header.
  */
 const assertPinnedVerifierKey = (
-  pins: Record<string, string>,
+  bundle: AccountBundle,
   { operation, verifierKey }: MaintenanceVerifierKey,
 ): void => {
-  if (!DEPLOYED_OPERATIONS.includes(operation)) {
+  if (!bundle.operations.includes(operation)) {
     throw new MaintenanceUpdateRefusedError(
-      `'${operation}' is not an operation this module deploys.`,
+      `'${operation}' is not an operation of the account bundle '${bundle.id}'.`,
     );
   }
-  const pin = pins[operation];
-  if (!pin) {
+  if (
+    HexBytes.fromByteArray(sha256(verifierKey)) !==
+    bundle.verifierKeys[operation]
+  ) {
     throw new MaintenanceUpdateRefusedError(
-      `No verifier key is pinned for '${operation}'.`,
-    );
-  }
-  if (HexBytes.fromByteArray(sha256(verifierKey)) !== pin) {
-    throw new MaintenanceUpdateRefusedError(
-      `The verifier key of '${operation}' is not the pinned one.`,
+      `The verifier key of '${operation}' is not the one the account bundle '${bundle.id}' pins.`,
     );
   }
   try {
@@ -170,6 +168,23 @@ const assertPinnedVerifierKey = (
   } catch (error) {
     throw new MaintenanceUpdateRefusedError((error as Error).message);
   }
+};
+
+/**
+ * The registered bundle an install names, whose roster and pins its
+ * inserts are held to.
+ *
+ * @throws {@link MaintenanceUpdateRefusedError} when no bundle of the
+ * registry has the id.
+ */
+const installBundle = (bundles: BundleRegistry, id: string): AccountBundle => {
+  const bundle = bundles.bundles.find(candidate => candidate.id === id);
+  if (!bundle) {
+    throw new MaintenanceUpdateRefusedError(
+      `No account bundle '${id}' is registered with this encryption key, so no verifier key of it can be installed.`,
+    );
+  }
+  return bundle;
 };
 
 /**
@@ -187,6 +202,7 @@ const copyOfChanges = (changes: MaintenanceChanges): MaintenanceChanges =>
       }
     : {
         kind: 'insert-verifier-keys',
+        bundleId: changes.bundleId,
         inserts: changes.inserts.map(({ operation, verifierKey }) => ({
           operation,
           verifierKey: verifierKey.slice(),
@@ -196,15 +212,18 @@ const copyOfChanges = (changes: MaintenanceChanges): MaintenanceChanges =>
 /**
  * Copies the changes of a maintenance update and holds the copy to what
  * the encryption key signs before any key is opened: a verifier key
- * install names at least one key and every key is the pinned one for an
- * operation of the deployed roster. A replace is held to the live roster
- * key once the keyring is open. The copy is what must be signed.
+ * install names a registered bundle and at least one key, and every key
+ * is the one that bundle pins for an operation of its roster. A replace
+ * is held to the live roster key once the keyring is open. The copy is
+ * what must be signed. The registry is loaded through `loadBundles` only
+ * for an install, so a replace never evaluates the bundles.
  *
  * @throws {@link MaintenanceUpdateRefusedError} when the changes are not
  * signable.
  */
 export const signableChanges = async (
   changes: MaintenanceChanges,
+  loadBundles: () => Promise<BundleRegistry>,
 ): Promise<MaintenanceChanges> => {
   const copy = copyOfChanges(changes);
   if (copy.kind === 'replace-authority') return copy;
@@ -213,9 +232,9 @@ export const signableChanges = async (
       'A maintenance update must install at least one verifier key.',
     );
   }
-  const { expectedVk } = await import('./acc-module');
+  const bundle = installBundle(await loadBundles(), copy.bundleId);
   for (const insert of copy.inserts) {
-    assertPinnedVerifierKey(expectedVk, insert);
+    assertPinnedVerifierKey(bundle, insert);
   }
   return copy;
 };

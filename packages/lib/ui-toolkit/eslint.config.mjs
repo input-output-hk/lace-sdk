@@ -1,7 +1,7 @@
 import { defineConfig } from 'eslint/config';
 import reactNativePlugin from 'eslint-plugin-react-native';
 
-import rootConfig from '../../../eslint.config.mjs  ';
+import rootConfig from '../../../eslint.config.mjs';
 
 export default defineConfig(rootConfig, {
   files: ['**/*.{js,jsx,ts,tsx,mts,cts,mjs,cjs}'],

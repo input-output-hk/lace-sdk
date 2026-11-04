@@ -1,4 +1,4 @@
-import { BigIntMath } from '@lace-lib/util/common';
+import { BigIntMath } from '@lace-lib/cardano-util';
 
 import { coalesceTokenMaps, subtractTokenMaps } from '../Asset/util';
 import { AssetId } from '../Cardano';

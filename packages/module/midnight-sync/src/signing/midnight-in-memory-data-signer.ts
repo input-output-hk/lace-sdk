@@ -2,7 +2,7 @@ import { HexBytes } from '@lace-lib/util';
 import { map, switchMap, take } from 'rxjs';
 
 import type {
-  MidnightWalletsByAccountId,
+  MidnightEnginesByAccountId,
   MidnightDataSigner,
   MidnightSignDataRequest,
   MidnightSignDataResult,
@@ -15,11 +15,11 @@ import type { Observable } from 'rxjs';
 export class MidnightInMemoryDataSigner implements MidnightDataSigner {
   readonly #accountId: AccountId;
 
-  readonly #wallets$: Observable<MidnightWalletsByAccountId>;
+  readonly #wallets$: Observable<MidnightEnginesByAccountId>;
 
   public constructor(
     accountId: AccountId,
-    wallets$: Observable<MidnightWalletsByAccountId>,
+    wallets$: Observable<MidnightEnginesByAccountId>,
   ) {
     this.#accountId = accountId;
     this.#wallets$ = wallets$;

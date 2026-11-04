@@ -1,4 +1,4 @@
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { hexToBytes } from '../util/misc';
 
@@ -9,7 +9,7 @@ import { TransactionWitnessSet } from './TransactionWitnessSet';
 
 import type { DeserializationOptions } from './Common';
 import type * as Cardano from '../Cardano';
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 const ALONZO_ERA_TX_FRAME_SIZE = 4;
 

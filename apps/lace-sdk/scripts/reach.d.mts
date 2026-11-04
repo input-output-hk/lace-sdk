@@ -6,6 +6,7 @@ export const compilerOptions: (
   channel?: 'canary' | 'stable',
 ) => ts.CompilerOptions;
 export const channelEntries: (channel: 'canary' | 'stable') => string[];
+export const channelBuildRoots: (channel: 'canary' | 'stable') => string[];
 export const reachedWorkspaceFiles: (
   roots: string[],
   options?: ts.CompilerOptions,

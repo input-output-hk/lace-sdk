@@ -4,6 +4,7 @@ import {
   type LaceModuleStoreInit,
   type PersistedStateProperty,
 } from '@lace-contract/module';
+import { readMisroutedPreviewAccountIds } from '@lace-contract/wallet-repo';
 import { createMigrate, createTransform } from 'redux-persist';
 
 import {
@@ -15,6 +16,7 @@ import {
   cardanoProtocolParameters$,
   cardanoRewardAccountDetails$,
 } from '../cardano-observables';
+import { extensionPersistConfig } from '../extensions';
 
 import {
   deleteProtocolParameters,
@@ -22,6 +24,7 @@ import {
   deleteStakePoolsSystem,
   stubAccountUtxoCacheKeys,
 } from './migrations';
+import { clearPreviewAccountCache } from './migrations/6-clear-preview-account-cache';
 import { createCardanoProviderSideEffects } from './side-effects';
 import { cardanoContextReducers, initialState } from './slice';
 
@@ -33,6 +36,7 @@ import type {
   CardanoPaymentAddress,
 } from '../types';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Storage } from 'redux-persist';
 
 export const MAX_TRANSACTIONS_PER_ACCOUNT = 20;
 
@@ -78,43 +82,56 @@ export const accountTransactionHistoryTransform = createTransform<
   return inboundState;
 });
 
-const store: LaceInit<LaceModuleStoreInit> = ({ runtime: { config } }) => ({
-  sideEffects: createCardanoProviderSideEffects(config),
-  reducers: cardanoContextReducers,
-  preloadedState: {
-    cardanoContext: initialState,
-  },
-  sideEffectDependencies: {
-    txExecutorCardano: {
-      cardanoProtocolParameters$,
-      cardanoNetworkMagic$,
-      cardanoAccountUtxos$,
-      cardanoAccountUnspendableUtxos$,
-      cardanoAddresses$,
-      cardanoChainId$,
-      cardanoRewardAccountDetails$,
+const store: LaceInit<LaceModuleStoreInit> = async (
+  { runtime: { config } },
+  dependencies,
+) => {
+  const { reduxPersistStorage } = dependencies as typeof dependencies & {
+    reduxPersistStorage: Storage;
+  };
+  const misroutedAccountIds = await readMisroutedPreviewAccountIds(
+    reduxPersistStorage,
+  );
+  return {
+    sideEffects: createCardanoProviderSideEffects(config),
+    reducers: cardanoContextReducers,
+    preloadedState: {
+      cardanoContext: initialState,
     },
-  },
-  persistConfig: {
-    cardanoContext: {
-      version: 5,
-      whitelist: [
-        'accountTransactionHistory',
-        'accountRewardsHistory',
-        'networkInfo',
-        'accountUtxos',
-        'securityScanByAccount',
-        'securityRescanDismissedByAccount',
-      ],
-      migrate: createMigrate({
-        2: deleteStakePoolsData,
-        3: deleteProtocolParameters,
-        4: deleteStakePoolsSystem,
-        5: stubAccountUtxoCacheKeys,
-      }),
-      transforms: [accountTransactionHistoryTransform],
+    sideEffectDependencies: {
+      txExecutorCardano: {
+        cardanoProtocolParameters$,
+        cardanoNetworkMagic$,
+        cardanoAccountUtxos$,
+        cardanoAccountUnspendableUtxos$,
+        cardanoAddresses$,
+        cardanoChainId$,
+        cardanoRewardAccountDetails$,
+      },
     },
-  },
-});
+    persistConfig: {
+      cardanoContext: {
+        version: 6,
+        whitelist: [
+          'accountTransactionHistory',
+          'accountRewardsHistory',
+          'networkInfo',
+          'accountUtxos',
+          'securityScanByAccount',
+          'securityRescanDismissedByAccount',
+        ],
+        migrate: createMigrate({
+          2: deleteStakePoolsData,
+          3: deleteProtocolParameters,
+          4: deleteStakePoolsSystem,
+          5: stubAccountUtxoCacheKeys,
+          6: state => clearPreviewAccountCache(state, misroutedAccountIds),
+        }),
+        transforms: [accountTransactionHistoryTransform],
+      },
+      ...extensionPersistConfig,
+    },
+  };
+};
 
 export default store;

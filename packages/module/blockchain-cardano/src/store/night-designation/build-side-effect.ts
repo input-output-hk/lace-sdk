@@ -23,12 +23,12 @@ import { firstStateOfStatus } from '@lace-lib/util-store';
 import { firstValueFrom, from, map, of, switchMap, take, timeout } from 'rxjs';
 
 import { refuseExtensionAccount } from '../account-guards';
+import { unwrapProviderResult } from '../helpers/unwrap-provider-result';
 
 import { hexToBytes, resolveAccountKeyHashes } from './account-key-hashes';
 import { buildNightDesignationTx } from './build-night-designation-tx';
 import { createProviderExUnitsEvaluator } from './provider-ex-units-evaluator';
 import { findRegistrationUtxo } from './registration-utxo';
-import { unwrapProviderResult } from './unwrap-provider-result';
 
 import type { SideEffect } from '../../contracts';
 import type {

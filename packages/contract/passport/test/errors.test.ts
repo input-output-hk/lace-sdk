@@ -2,6 +2,8 @@ import { CustomError } from 'ts-custom-error';
 import { describe, expect, it } from 'vitest';
 
 import {
+  AccountBundleInvalidError,
+  AccountBundleUnknownError,
   AccountContractMissingError,
   AccountCreationPendingError,
   AccountExistsError,
@@ -9,7 +11,10 @@ import {
   ArtefactIntegrityError,
   AuthorityNotRetiredError,
   AuthorityRetiredError,
+  CallArgumentInvalidError,
+  CalledContractNotRegisteredError,
   CeremonyCancelledError,
+  CircuitNotRegisteredError,
   CreationArtefactMismatchError,
   CreationLockMismatchError,
   DeviceEntryNotFoundError,
@@ -149,6 +154,31 @@ describe('passport errors', () => {
       'OperationNotInstallableError',
       OperationNotInstallableError,
       'operation-not-installable',
+    ],
+    [
+      'AccountBundleUnknownError',
+      AccountBundleUnknownError,
+      'account-bundle-unknown',
+    ],
+    [
+      'AccountBundleInvalidError',
+      AccountBundleInvalidError,
+      'account-bundle-invalid',
+    ],
+    [
+      'CallArgumentInvalidError',
+      CallArgumentInvalidError,
+      'call-argument-invalid',
+    ],
+    [
+      'CalledContractNotRegisteredError',
+      CalledContractNotRegisteredError,
+      'called-contract-not-registered',
+    ],
+    [
+      'CircuitNotRegisteredError',
+      CircuitNotRegisteredError,
+      'circuit-not-registered',
     ],
   ] as const)(
     '%s has code %s and is a CustomError',

@@ -8,6 +8,7 @@ import { assertSubmitted, submitWithDustRetry } from './submit';
 
 import type { DevSponsorConfig, DevTokenKind } from './dev-sponsor';
 import type { GatedContractHandle } from '../acc/gated-call';
+import type { PassportRegistry } from '../acc/registry';
 import type {
   PassportNetworkConfig,
   PassportProver,
@@ -60,6 +61,13 @@ export type DevDepositConfig = {
   proofServerUrl: string;
   /** Wallet factory; injected for tests. */
   createWalletContext?: DevSponsorConfig['createWalletContext'];
+  /**
+   * What the host registers, the same value it gives the module: the
+   * build of the account deposited into is recognised among its bundles
+   * and the default, so its ledger state is read through that build's
+   * module.
+   */
+  registry?: PassportRegistry;
 };
 
 /** One deposit into a Passport account. */
@@ -140,6 +148,7 @@ export const createDevDeposit = ({
   prover,
   proofServerUrl,
   createWalletContext,
+  registry,
 }: DevDepositConfig): DevDeposit => {
   if (network.networkId !== LOCALNET_NETWORK_ID) {
     throw new DevDepositNetworkError(network.networkId);
@@ -188,8 +197,13 @@ export const createDevDeposit = ({
         color: parseColor(color),
         value: amount,
       };
-      const { readAccountLedger } = await import('../flows/account-call');
-      const { ledgerState } = await readAccountLedger(address, network);
+      const { createBundleRegistry } = await import('../acc/bundle');
+      const { readAccountByBuild } = await import('../flows/account-call');
+      const { ledgerState } = await readAccountByBuild(
+        address,
+        network,
+        createBundleRegistry(registry?.bundles, registry?.calledContracts),
+      );
       const entry = await sealInboxEntry(ledgerState.enc_key, coin);
       return submitDeposit({
         address,

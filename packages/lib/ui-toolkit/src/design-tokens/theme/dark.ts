@@ -49,6 +49,12 @@ export const darkTheme: Theme = {
   },
   extra: {
     chathamsBlue: '#1D428C',
+    tagHydraBackground: 'rgba(147, 101, 235, 0.16)',
+    tagHydraText: '#A98BF0',
+    tagHydraRecoverBackground: 'rgba(20, 184, 169, 0.14)',
+    tagHydraRecoverText: '#14B8A9',
+    tagWarningBackground: 'rgba(154, 91, 15, 0.16)',
+    tagWarningText: '#D99A4E',
     fancyBorder: 'rgba(51, 51, 51, 0.20)',
     shadowDrop: `rgba(153, 153, 153, 0.08)`,
     shadowInner: 'rgba(255, 255, 255, 0.20)',

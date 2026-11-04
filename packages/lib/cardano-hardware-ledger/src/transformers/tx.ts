@@ -1,4 +1,4 @@
-import { transformObj } from '@lace-lib/util/common';
+import { transformObj } from '@lace-lib/cardano-util';
 
 import { mapTokenMap } from './assets';
 import { mapAuxiliaryData } from './auxiliaryData';
@@ -15,7 +15,7 @@ import { mapWithdrawals } from './withdrawals';
 import type { LedgerTxTransformerContext } from '../types';
 import type * as Ledger from '@cardano-foundation/ledgerjs-hw-app-cardano';
 import type { Cardano } from '@lace-lib/cardano-core';
-import type { Transformer } from '@lace-lib/util/common';
+import type { Transformer } from '@lace-lib/cardano-util';
 
 export const LedgerTxTransformer: Transformer<
   Cardano.TxBody,

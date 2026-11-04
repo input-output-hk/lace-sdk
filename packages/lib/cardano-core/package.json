@@ -10,7 +10,7 @@
     "@biglup/is-cid": "1.0.3",
     "@foxglove/crc": "0.0.3",
     "@lace-lib/cardano-crypto": "*",
-    "@lace-lib/util": "*",
+    "@lace-lib/cardano-util": "*",
     "@scure/base": "1.2.6",
     "fraction.js": "4.0.1",
     "ip-address": "10.7.4",

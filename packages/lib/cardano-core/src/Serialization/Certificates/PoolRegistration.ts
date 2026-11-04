@@ -1,4 +1,4 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { CertificateType } from '../../Cardano/types/Certificate';
 import { CborReader, CborWriter } from '../CBOR';
@@ -7,7 +7,7 @@ import { CertificateKind } from './CertificateKind';
 import { PoolParams } from './PoolParams';
 
 import type * as Cardano from '../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 // The group flattens the PoolParams along with one field for the certificate type
 const EMBEDDED_GROUP_SIZE = PoolParams.subgroupCount + 1;

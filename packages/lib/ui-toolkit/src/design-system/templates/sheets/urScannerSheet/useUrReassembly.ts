@@ -15,9 +15,7 @@ export interface UrReassemblyDecoder {
   receivePart(part: string): UrReceiveResult;
   /**
    * Whether this decoder could still accept `part`. Optional: a decoder that
-   * cannot answer keeps the stalled-frame budget below as its only recovery,
-   * which is what the legacy default does — `@lace-lib/core` is vendored into
-   * the extension shell under ADR-37, so it is gated separately from here.
+   * cannot answer keeps the stalled-frame budget below as its only recovery.
    */
   canAccept?(part: string): boolean;
   progress(): number;
@@ -88,6 +86,13 @@ const STALLED_FRAME_LIMIT = 3;
  */
 const CAPPED_STALLED_FRAME_LIMIT = 24;
 
+/**
+ * The most distinct frames one decoder may accept: the default decoder's
+ * largest retained-part budget (4 × 1024 parts + 32). The dedup set below
+ * holds only accepted frames, so this bounds it whatever decoder is injected.
+ */
+const MAX_ACCEPTED_FRAMES = 4 * 1024 + 32;
+
 export const useUrReassembly = ({
   onComplete,
   onError,
@@ -98,12 +103,13 @@ export const useUrReassembly = ({
   const lastProgressRef = useRef(0);
   const stalledFramesRef = useRef<string[]>([]);
   /**
-   * Frames already fed to the CURRENT decoder. The camera re-reads each
-   * displayed frame many times, and bc-ur counts accepted duplicates toward
-   * its progress estimate — without this dedup a duplicate-heavy stream pins
-   * the 0.99 cap after a fraction of the DISTINCT parts, and the cap budget
-   * then destroys a healthy decoder mid-reassembly. Scoped per decoder
-   * lifetime so a replacement's replay is not filtered out.
+   * Frames the CURRENT decoder accepted. The camera re-reads each displayed
+   * frame many times, and bc-ur counts accepted duplicates toward its progress
+   * estimate — without this dedup a duplicate-heavy stream pins the 0.99 cap
+   * after a fraction of the DISTINCT parts, and the cap budget then destroys a
+   * healthy decoder mid-reassembly. Scoped per decoder lifetime so a
+   * replacement's replay is not filtered out. A refused frame is never kept:
+   * a stream of distinct invalid frames would grow this for the whole scan.
    */
   const seenFramesRef = useRef(new Set<string>());
   const [progress, setProgress] = useState(0);
@@ -143,7 +149,13 @@ export const useUrReassembly = ({
         if (seenFramesRef.current.has(part)) {
           return;
         }
-        seenFramesRef.current.add(part);
+        if (seenFramesRef.current.size >= MAX_ACCEPTED_FRAMES) {
+          hasCompletedRef.current = true;
+          onError?.(
+            `UR stream exceeded its budget of ${MAX_ACCEPTED_FRAMES} distinct frames`,
+          );
+          return;
+        }
 
         let received: UrReceiveResult;
         try {
@@ -159,6 +171,7 @@ export const useUrReassembly = ({
           }
           return;
         }
+        seenFramesRef.current.add(part);
 
         const failureMessage = decoderRef.current.failureMessage();
         if (failureMessage !== undefined) {

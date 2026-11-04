@@ -5,6 +5,7 @@ import { addressBookAddressValidatorAddonContract } from '@lace-contract/address
 import { addressesStoreContract } from '@lace-contract/addresses';
 import {
   accountUICustomisationAddonContract,
+  portfolioBannerUICustomisationAddonContract,
   sendFlowSheetUICustomisationAddonContract,
 } from '@lace-contract/app';
 import {
@@ -64,6 +65,8 @@ const addons = {
     import('./exposed-modules/earn-rewards-tx-builder'),
   loadAccountUICustomisations: async () =>
     import('./exposed-modules/account-ui-customisation'),
+  loadPortfolioBannerUICustomisations: async () =>
+    import('./exposed-modules/portfolio-banner-customisation'),
   loadSendFlowSheetUICustomisations: async () =>
     import('./exposed-modules/send-flow-sheet-ui-customization'),
   loadSignerFactory: async () => import('./exposed-modules/signer-factory'),
@@ -96,6 +99,7 @@ const extensionModule = inferModuleContext({
 const guestImplementsContracts = combineContracts([
   inMemoryIntegrationAddonContract,
   accountUICustomisationAddonContract,
+  portfolioBannerUICustomisationAddonContract,
   sendFlowSheetUICustomisationAddonContract,
   tokensStoreContract,
   addressesStoreContract,

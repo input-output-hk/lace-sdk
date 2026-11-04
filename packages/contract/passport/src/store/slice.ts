@@ -17,13 +17,16 @@ export type PassportAccountStatus = 'ready';
 
 /**
  * The account a wallet holds: the address of its Account Custody
- * Contract, the binding version it was deployed with, its status, and the
+ * Contract, the binding version it was deployed with, the id of the
+ * account bundle its verifier keys on chain resolve to, which is the
+ * build every call to it is proved and described by, its status, and the
  * Midnight network id it lives on, since an account exists on one network
  * only.
  */
 export type PassportAccountInfo = {
   address: string;
   bindingVersion: string;
+  bundleId: string;
   status: PassportAccountStatus;
   networkId: string;
 };
@@ -74,6 +77,19 @@ export type ShieldedHolding = {
   index: number;
 };
 
+/**
+ * What the last contract call through `callContract` left behind: the
+ * circuit it ran, the id of the transaction that carried it, and the
+ * circuit's return value rendered as a string (a decimal for an integer,
+ * hex for bytes, JSON for a structure), absent for a circuit that returns
+ * nothing.
+ */
+export type PassportContractCall = {
+  circuit: string;
+  txId: string;
+  result?: string;
+};
+
 export type PassportSliceState = {
   account?: PassportAccountInfo;
   flow: PassportFlow;
@@ -83,6 +99,8 @@ export type PassportSliceState = {
   grants: GrantRecord[];
   lastIssuedGrantId?: GrantId;
   shieldedHoldings: ShieldedHolding[];
+  /** The last contract call that landed; each accepted call replaces it. */
+  lastContractCall?: PassportContractCall;
   /**
    * The account encryption public key the ledger held as `enc_key` when a
    * flow last read or rotated it, as 32-byte lowercase hex, which tells a
@@ -133,8 +151,17 @@ const initialState: PassportSliceState = {
   droppedDevices: [],
 };
 
-/** What `passportActions.createAccount` carries: whether to lock the account. */
-export type CreateAccountPayload = { lockAccount: boolean };
+/**
+ * What `passportActions.createAccount` carries: whether to lock the
+ * account, the registered bundle to create it from, the default when
+ * left out, and the values of that bundle's declared constructor
+ * arguments as strings, in declaration order, none when left out.
+ */
+export type CreateAccountPayload = {
+  lockAccount: boolean;
+  bundleId?: string;
+  constructorArgs?: readonly string[];
+};
 /** The device a device action acts on, by its commitment. */
 export type DevicePayload = { commitmentHex: string };
 /** What `passportActions.addDevice` carries: the device and its optional reader. */
@@ -144,6 +171,36 @@ export type RevokeGrantPayload = { grantId: GrantId };
 /** What `passportActions.installOperations` carries: the operations to install. */
 export type InstallOperationsPayload = { operations: string[] };
 
+/**
+ * A shielded coin the account holds, as a call that spends one is given
+ * it: the Zswap nonce and token colour as 32-byte hex, the value and the
+ * position of its commitment in the commitment tree as decimal strings,
+ * which are the fields a holding reports.
+ */
+export type HeldCoinWitness = {
+  nonceHex: string;
+  colorHex: string;
+  value: string;
+  mtIndex: string;
+};
+
+/**
+ * The witness values a contract call reads from the caller's private
+ * state, by witness: `heldCoin` for a circuit that spends a shielded coin.
+ */
+export type CallContractWitnesses = { heldCoin?: HeldCoinWitness };
+
+/**
+ * What `passportActions.callContract` carries: the circuit of the
+ * account's bundle to call, the values of its declared arguments as
+ * strings in declaration order, and the witnesses its descriptor lists.
+ */
+export type CallContractPayload = {
+  circuit: string;
+  args: string[];
+  witnesses?: CallContractWitnesses;
+};
+
 const slice = createSlice({
   name: 'passport',
   initialState,
@@ -152,8 +209,9 @@ const slice = createSlice({
      * Requests deployment of a new Account Custody Contract and the
      * activation of its first device. `lockAccount` decides whether the
      * contract's maintenance authority is retired once activation
-     * completes; the side effect that drives the ceremony reads it from
-     * the action rather than from state.
+     * completes, and `bundleId` with `constructorArgs` which registered
+     * build is deployed and with what; the side effect that drives the
+     * ceremony reads them from the action rather than from state.
      *
      * A pure trigger: passport flows are mutually exclusive and only the
      * side effect knows whether a request is accepted or dropped, so it
@@ -226,6 +284,15 @@ const slice = createSlice({
       _action: PayloadAction<InstallOperationsPayload>,
     ) => {},
 
+    /**
+     * Requests a call to a circuit the account's bundle describes, with
+     * the arguments and witnesses the circuit's descriptor names. A pure
+     * trigger, for the same reason as {@link createAccount}: the call
+     * reaches state only via setLastContractCall once the chain accepted
+     * it, with the roster and counter it advanced.
+     */
+    callContract: (_state, _action: PayloadAction<CallContractPayload>) => {},
+
     setFlow: (state, { payload }: PayloadAction<PassportFlow>) => {
       state.flow = payload;
       if (payload !== 'error') state.flowError = undefined;
@@ -290,6 +357,13 @@ const slice = createSlice({
       state.droppedDevices = payload;
     },
 
+    setLastContractCall: (
+      state,
+      { payload }: PayloadAction<PassportContractCall>,
+    ) => {
+      state.lastContractCall = payload;
+    },
+
     reset: () => initialState,
   },
   selectors: {
@@ -308,6 +382,7 @@ const slice = createSlice({
     selectRevocationPendingGrantIds: ({ revocationPendingGrantIds }) =>
       revocationPendingGrantIds,
     selectDroppedDevices: ({ droppedDevices }) => droppedDevices,
+    selectLastContractCall: ({ lastContractCall }) => lastContractCall,
   },
 });
 

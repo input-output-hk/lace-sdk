@@ -1,13 +1,4 @@
-import { defaultTxTtlLength } from '@lace-contract/midnight-context';
-import { normalizeMidnightTransfers } from '@lace-module/midnight-sync/sdk';
-import {
-  MidnightBech32m,
-  ShieldedAddress,
-  UnshieldedAddress,
-} from '@midnightntwrk/wallet-sdk-address-format';
-import { defer, switchMap } from 'rxjs';
-
-import { balanceMidnightRecipe } from './balance-midnight-recipe';
+import { midnightOperationsOf } from './midnight-engine-operations';
 import { withMidnightWallet } from './midnight-wallet';
 
 import type { MidnightTxRecipe } from './build-midnight-transfer';
@@ -42,48 +33,8 @@ export const buildMidnightTransfers = async (
   { kind, outputs, ttl, ...account }: MidnightTransferBatch,
 ): Promise<Result<MidnightTxRecipe, Error>> =>
   withMidnightWallet(wallet, account, engine =>
-    defer(() => {
-      const transfers = normalizeMidnightTransfers(
-        engine.networkId,
-        kind,
-        outputs,
-      );
-      const desiredOutputs =
-        kind === 'shielded'
-          ? {
-              type: 'shielded' as const,
-              outputs: transfers.map(({ address, tokenId, amount }) => ({
-                type: tokenId,
-                amount,
-                receiverAddress: ShieldedAddress.codec.decode(
-                  engine.networkId,
-                  MidnightBech32m.parse(address),
-                ),
-              })),
-            }
-          : {
-              type: 'unshielded' as const,
-              outputs: transfers.map(({ address, tokenId, amount }) => ({
-                type: tokenId,
-                amount,
-                receiverAddress: UnshieldedAddress.codec.decode(
-                  engine.networkId,
-                  MidnightBech32m.parse(address),
-                ),
-              })),
-            };
-      const resolvedTtl = ttl ?? new Date(Date.now() + defaultTxTtlLength);
-      // Built without its fee, then balanced, so that a release that fails
-      // beside a fee failure is reported (`AggregateError`), not dropped.
-      return engine
-        .transferTransaction([desiredOutputs], {
-          ttl: resolvedTtl,
-          payFees: false,
-        })
-        .pipe(
-          switchMap(recipe =>
-            balanceMidnightRecipe(engine, recipe, resolvedTtl),
-          ),
-        );
+    midnightOperationsOf(engine).build({
+      kind: 'transfer',
+      transfer: { kind, outputs, ttl },
     }),
   );

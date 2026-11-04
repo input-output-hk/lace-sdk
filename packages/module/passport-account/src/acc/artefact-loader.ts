@@ -1,9 +1,9 @@
 import { ArtefactIntegrityError } from '@lace-contract/passport';
-import { HexBytes } from '@lace-lib/util';
 
 import { accManifest } from './manifest';
+import { sha256Hex } from './sha256';
 
-import type { AccManifest, AccProvingCircuitName } from './manifest';
+import type { AccCircuitManifestEntry } from './manifest';
 
 /**
  * Fetches the raw bytes at a URL. Injected so the platform decides the
@@ -24,15 +24,18 @@ export class UnknownCircuitError extends Error {
   }
 }
 
+/** Integrity pins keyed by circuit name: a bundle's manifest circuits or a called contract's pins. */
+type CircuitPins = Readonly<Record<string, AccCircuitManifestEntry>>;
+
 export type LoadCircuitAssetsProps = {
   /** Root URL of the hosted artefact bundle (holds zkir/ and keys/). */
   artefactUrl: string;
-  /** Proving circuit whose assets to download. */
-  circuit: AccProvingCircuitName;
+  /** Proving circuit whose assets to download, which the pins must list. */
+  circuit: string;
   /** Transport used to download each asset. */
   fetchBytes: FetchBytes;
-  /** Integrity pins to verify against; defaults to the bundled manifest. */
-  manifest?: AccManifest;
+  /** Integrity pins to verify against; defaults to the vendored manifest's. */
+  pins?: CircuitPins;
 };
 
 /** The downloadable ZK assets of one proving circuit, integrity-verified. */
@@ -40,11 +43,6 @@ export type AccCircuitAssets = {
   zkir: Uint8Array;
   proverKey: Uint8Array;
   verifierKey: Uint8Array;
-};
-
-const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
-  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
-  return HexBytes.fromByteArray(new Uint8Array(digest));
 };
 
 const fetchVerified = async (
@@ -99,18 +97,20 @@ export const loadVerifierKey = async ({
 
 /**
  * Downloads the circuit IR and the prover and verifier keys of one
- * Account Custody Contract proving circuit from the hosted artefact
- * bundle, verifying every byte stream against the manifest's sha256 pins.
- * Throws {@link ArtefactIntegrityError} on any digest mismatch and
- * {@link UnknownCircuitError} for a circuit the manifest does not list.
+ * proving circuit from the hosted artefact bundle at `artefactUrl`,
+ * verifying every byte stream against the sha256 pins of its entry: an
+ * account bundle's artefacts against its manifest, a called contract's
+ * against its own pins. Throws {@link ArtefactIntegrityError} on any
+ * digest mismatch and {@link UnknownCircuitError} for a circuit the pins
+ * do not list.
  */
 export const loadCircuitAssets = async ({
   artefactUrl,
   circuit,
   fetchBytes,
-  manifest = accManifest,
+  pins = accManifest.circuits,
 }: LoadCircuitAssetsProps): Promise<AccCircuitAssets> => {
-  const entry = manifest.circuits[circuit];
+  const entry = pins[circuit];
   if (!entry) throw new UnknownCircuitError(circuit);
 
   const base = artefactUrl.endsWith('/')

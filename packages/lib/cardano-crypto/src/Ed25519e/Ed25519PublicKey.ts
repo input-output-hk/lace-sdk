@@ -1,4 +1,4 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 import sodium from 'libsodium-wrappers-sumo';
 
 import { ED25519_PUBLIC_KEY_LENGTH, Ed25519PublicKeyHex } from '../hexTypes';
@@ -9,7 +9,7 @@ import {
 } from './Ed25519KeyHash';
 
 import type { Ed25519Signature } from './Ed25519Signature';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * Ed25519 raw public key. This key can be used for cryptographically verifying messages

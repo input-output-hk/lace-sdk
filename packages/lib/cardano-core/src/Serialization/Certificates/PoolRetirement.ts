@@ -1,5 +1,5 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { HexBlob, InvalidArgumentError } from '@lace-lib/util/common';
+import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { EpochNo } from '../../Cardano/types/Block';
 import { CertificateType } from '../../Cardano/types/Certificate';

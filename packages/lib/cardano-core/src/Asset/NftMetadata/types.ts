@@ -1,8 +1,8 @@
 import * as CidValidator from '@biglup/is-cid';
-import { InvalidStringError } from '@lace-lib/util/common';
+import { InvalidStringError } from '@lace-lib/cardano-util';
 
 import type { Metadatum } from '../../Cardano';
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 const looksLikeIpfsUrlWithoutProtocol = (uri: string) => {
   const [cid] = uri.split('/');

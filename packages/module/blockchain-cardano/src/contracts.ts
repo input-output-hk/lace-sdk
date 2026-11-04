@@ -10,6 +10,7 @@ import { addressBookAddressValidatorAddonContract } from '@lace-contract/address
 import { addressesStoreContract } from '@lace-contract/addresses';
 import {
   accountUICustomisationAddonContract,
+  portfolioBannerUICustomisationAddonContract,
   sendFlowSheetUICustomisationAddonContract,
 } from '@lace-contract/app';
 import {
@@ -53,6 +54,7 @@ import type {
 export const implementsContracts = combineContracts([
   inMemoryIntegrationAddonContract,
   accountUICustomisationAddonContract,
+  portfolioBannerUICustomisationAddonContract,
   sendFlowSheetUICustomisationAddonContract,
   tokensStoreContract,
   addressesStoreContract,

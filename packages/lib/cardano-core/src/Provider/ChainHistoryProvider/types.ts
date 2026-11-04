@@ -1,5 +1,5 @@
 import type { Cardano, Paginated, PaginationArgs, Provider } from '../..';
-import type { Range } from '@lace-lib/util/common';
+import type { Range } from '@lace-lib/cardano-util';
 
 export type PaginationArgsWithOrder = PaginationArgs & {
   order?: 'asc' | 'desc';

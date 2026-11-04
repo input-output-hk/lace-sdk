@@ -4,11 +4,11 @@ import { CardanoKeyConst, util } from '@lace-lib/cardano-key-management';
 import {
   InvalidArgumentError,
   areNumbersEqualInConstantTime,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import type { LedgerTxTransformerContext } from '../types';
 import type { GroupedAddress } from '@lace-lib/cardano-key-management';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 
 const resolveKeyPath = (
   rewardAddress: Cardano.RewardAddress,

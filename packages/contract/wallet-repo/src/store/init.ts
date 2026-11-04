@@ -18,7 +18,7 @@ const storeExports: LaceInit<LaceModuleStoreInit> = async () => {
     reducers: walletsReducers,
     persistConfig: {
       wallets: {
-        version: 5,
+        version: 6,
         migrate: createMigrate(walletsMigrations),
       },
     },

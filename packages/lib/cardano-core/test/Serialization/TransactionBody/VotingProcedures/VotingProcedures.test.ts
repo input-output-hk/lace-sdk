@@ -1,5 +1,5 @@
 import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { CredentialType, VoterType } from '../../../../src/Cardano';
 import {

@@ -1,4 +1,4 @@
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 import uniqWith from 'lodash/uniqWith.js';
 
 import { PlutusLanguageVersion, ScriptType } from '../../Cardano/types/Script';

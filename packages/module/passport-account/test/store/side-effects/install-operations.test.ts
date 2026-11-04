@@ -27,6 +27,7 @@ const actions = { ...passportActions };
 const account: PassportAccountInfo = {
   address: 'ac'.repeat(32),
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -86,6 +87,7 @@ const runFlowTest = ({
           }),
           issueGrant$: NEVER,
           readShieldedHoldings$: NEVER,
+          callContract$: NEVER,
           removeDevice$: NEVER,
           revokeAllGrants$: NEVER,
           revokeGrant$: NEVER,

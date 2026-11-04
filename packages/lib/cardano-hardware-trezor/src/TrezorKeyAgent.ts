@@ -10,7 +10,7 @@ import {
   errors,
   util,
 } from '@lace-lib/cardano-key-management';
-import { areStringsEqualInConstantTime } from '@lace-lib/util/common';
+import { areStringsEqualInConstantTime } from '@lace-lib/cardano-util';
 import * as Trezor from '@trezor/connect';
 import _TrezorConnectWeb from '@trezor/connect-web';
 
@@ -27,7 +27,7 @@ import type {
   SignTransactionContext,
   TrezorConfig,
 } from '@lace-lib/cardano-key-management';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const TrezorConnectNode = Trezor.default;
 const TrezorConnectWeb = (_TrezorConnectWeb as any).default
@@ -357,6 +357,7 @@ export class TrezorKeyAgent extends KeyAgentBase {
         collateralReturnFormat,
         knownAddresses,
         outputsFormat,
+        scripts,
         tagCborSets: txBody.hasTaggedSets(),
         txInKeyPathMap,
       });

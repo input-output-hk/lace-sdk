@@ -58,10 +58,13 @@
     "packages/lib/cardano-key-management",
     "packages/lib/cardano-provider-core",
     "packages/lib/cardano-tx-construction",
+    "packages/lib/cardano-util",
     "packages/lib/cardano-util-rxjs",
     "packages/lib/cnight-dust-designation",
     "packages/lib/core",
     "packages/lib/crypto",
+    "packages/lib/extension-messaging",
+    "packages/lib/hydra-head",
     "packages/lib/image-url",
     "packages/lib/midnight-prover",
     "packages/lib/observability",
@@ -112,7 +115,6 @@
     "@types/eslint": "9.6.1",
     "@types/react": "~19.2.0",
     "@types/react-test-renderer": "19.1.0",
-    "@types/uuid": "^9.0.8",
     "d3": "7.9.0",
     "date-fns": "2.30.0",
     "dayjs": "1.11.19",
@@ -133,15 +135,13 @@
     "react-redux": "^9.1.0",
     "react-test-renderer": "19.2.3",
     "reassure": "^1.5.1",
-    "typescript-eslint": "^8.46.2",
-    "uuid": "^11.1.1"
+    "typescript-eslint": "^8.46.2"
   },
   "devDependencies": {
     "prettier": "^2.8.8",
     "semver": "6.3.1",
     "tsdown": "^0.21.3",
-    "typescript": "~5.9.2",
-    "yaml": "2.9.0"
+    "typescript": "~5.9.2"
   },
   "overrides": {
     "websocket-driver": "0.7.5",

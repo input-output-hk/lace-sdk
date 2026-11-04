@@ -9,6 +9,11 @@ export const CANARY_ONLY_ENTRIES: readonly {
   source?: string;
   importsMidnight?: boolean;
 }[];
+export const MIDNIGHT_WORKER: {
+  readonly name: string;
+  readonly source: string;
+};
+export const channelBuildInputSources: (channel: Channel) => string[];
 export const channelEntryNames: (channel: Channel) => string[];
 export const entrySource: (entry: string, channel: Channel) => string;
 export const entryFiles: (entry: string) => string[];

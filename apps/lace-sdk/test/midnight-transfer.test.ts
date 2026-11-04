@@ -23,7 +23,9 @@ import {
   firstValueFrom,
   of,
   Subject,
+  take,
   throwError,
+  toArray,
 } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -41,10 +43,15 @@ import { registerMidnightDust } from '../src/register-midnight-dust';
 import { signMidnightTx } from '../src/sign-midnight-tx';
 import { submitMidnightTx } from '../src/submit-midnight-tx';
 
-import type { MidnightTxRecipe } from '../src/build-midnight-transfer';
+import { pageModeEngineAccess } from './midnight-engine-access-fake';
+import { decodeLedgerFakes, ledgerFake } from './midnight-ledger-fakes';
+import {
+  toMidnightFinalizedTx,
+  toMidnightTxRecipe,
+} from './midnight-opaque-fixtures';
+
 import type { MidnightTransferBatch } from '../src/build-midnight-transfers';
 import type { WalletWithMidnight } from '../src/midnight-wallet';
-import type { MidnightFinalizedTx } from '../src/prove-midnight-tx';
 import type {
   MidnightAccountProps,
   MidnightWallet,
@@ -55,7 +62,11 @@ import type {
   AnyWallet,
   InMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
-import type { FacadeState } from '@midnightntwrk/wallet-sdk/facade';
+import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
+import type {
+  BalancingRecipe,
+  FacadeState,
+} from '@midnightntwrk/wallet-sdk/facade';
 
 const networkId = MidnightSDKNetworkIds.Preview;
 const { walletId } = stubData;
@@ -96,18 +107,29 @@ const nightCoin = (value: bigint, registeredForDustGeneration = false) => ({
 const otherCoin = { utxo: { type: 'ff'.repeat(32), value: 7n }, meta: {} };
 const dustCoin = (generatedNow: bigint) => ({ generatedNow });
 
+const syncState = (complete: boolean) => ({
+  progress: { isStrictlyComplete: () => complete },
+});
+
 const facadeState = ({
   available = [nightCoin(5_000_000n)],
   pending = [] as ReturnType<typeof nightCoin>[],
   dustTotal = [dustCoin(30n)],
   dustAvailable = [dustCoin(10n)],
+  synced = { unshielded: true, shielded: true, dust: true },
 } = {}) =>
   ({
     unshielded: {
       availableCoins: [...available, otherCoin],
       pendingCoins: pending,
+      state: syncState(synced.unshielded),
     },
-    dust: { totalCoins: dustTotal, availableCoins: dustAvailable },
+    shielded: { state: syncState(synced.shielded) },
+    dust: {
+      totalCoins: dustTotal,
+      availableCoins: dustAvailable,
+      state: syncState(synced.dust),
+    },
   } as unknown as FacadeState);
 
 const syncProgress = (complete: boolean) => ({
@@ -121,36 +143,48 @@ const syncProgress = (complete: boolean) => ({
   },
 });
 
-const registrationTx = { id: 'registration-transaction' };
+const registrationTx = ledgerFake({ id: 'registration-transaction' });
 const recipe = {
   type: 'UNPROVEN_TRANSACTION',
   transaction: registrationTx,
-} as unknown as MidnightTxRecipe;
-const signed = { type: 'SIGNED' } as unknown as MidnightTxRecipe;
-const finalized = {
-  serialize: () => new Uint8Array(),
-} as unknown as MidnightFinalizedTx;
+} as unknown as BalancingRecipe;
+const signed = {
+  type: 'UNPROVEN_TRANSACTION',
+  transaction: ledgerFake({ id: 'signed-transaction' }),
+} as unknown as BalancingRecipe;
+const finalized = ledgerFake({
+  id: 'finalized-transaction',
+}) as unknown as FinalizedTransaction;
 
 const wallets$ = new BehaviorSubject<MidnightWalletsByAccountId>({});
 
+const createEngine = (state$ = of(facadeState())) => ({
+  accountId,
+  networkId,
+  address$: of(address),
+  state: () => state$,
+  syncProgress$: of(syncProgress(true)),
+  transferTransaction: vi.fn(() => of(recipe)),
+  registerNightUtxosForDustGeneration: vi.fn(() => of(recipe)),
+  balanceUnprovenTransaction: vi.fn(() => of(recipe)),
+  signRecipe: vi.fn(() => of(signed)),
+  finalizeRecipe: vi.fn(() => of(finalized)),
+  submitTransaction: vi.fn(() => of('tx-id')),
+  revert: vi.fn((_recipe: BalancingRecipe) => of(undefined)),
+});
+type FakeEngine = ReturnType<typeof createEngine>;
+
 const fakeEngine = (state$ = of(facadeState())) => {
-  const engine = {
-    accountId,
-    networkId,
-    address$: of(address),
-    state: () => state$,
-    syncProgress$: of(syncProgress(true)),
-    transferTransaction: vi.fn(() => of(recipe)),
-    registerNightUtxosForDustGeneration: vi.fn(() => of(recipe)),
-    balanceUnprovenTransaction: vi.fn(() => of(recipe)),
-    signRecipe: vi.fn(() => of(signed)),
-    finalizeRecipe: vi.fn(() => of(finalized)),
-    submitTransaction: vi.fn(() => of('tx-id')),
-    revert: vi.fn((_recipe: MidnightTxRecipe) => of(undefined)),
-  };
+  const engine = createEngine(state$);
   wallets$.next({ [accountId]: engine as unknown as MidnightWallet });
   return engine;
 };
+
+// The opaque values the helpers return for what the engine built.
+const recipeOf = (engine: FakeEngine, built: BalancingRecipe = recipe) =>
+  toMidnightTxRecipe(engine as unknown as MidnightWallet, built);
+const transactionOf = (engine: FakeEngine) =>
+  toMidnightFinalizedTx(engine as unknown as MidnightWallet, finalized);
 
 const walletWith = (
   accounts: InMemoryWalletAccount<MidnightAccountProps>[] = [account],
@@ -162,12 +196,13 @@ const walletWith = (
     },
   } as unknown as WalletWithMidnight['stateObservables'],
   _loadModules: (async () => [
-    wallets$,
+    pageModeEngineAccess(wallets$),
   ]) as unknown as WalletWithMidnight['_loadModules'],
 });
 
 describe('Midnight helpers', () => {
   beforeEach(() => {
+    decodeLedgerFakes();
     wallets$.next({});
   });
   afterEach(() => {
@@ -178,9 +213,12 @@ describe('Midnight helpers', () => {
     it.each([Infinity, 2 ** 31, 0, -1])(
       'refuses startTimeout %s with a RangeError',
       async startTimeout => {
-        fakeEngine();
+        const engine = fakeEngine();
         const error = (
-          await signMidnightTx(walletWith(), { recipe, startTimeout })
+          await signMidnightTx(walletWith(), {
+            recipe: recipeOf(engine),
+            startTimeout,
+          })
         ).unwrapErr();
         expect(error).toBeInstanceOf(RangeError);
         expect(error.message).toContain('startTimeout');
@@ -188,7 +226,9 @@ describe('Midnight helpers', () => {
     );
 
     it('fails when the active network has no Midnight account', async () => {
-      const result = await signMidnightTx(walletWith([]), { recipe });
+      const result = await signMidnightTx(walletWith([]), {
+        recipe: recipeOf(createEngine()),
+      });
       expect(result.isErr() && result.error).toBeInstanceOf(
         MidnightAccountNotFoundError,
       );
@@ -198,7 +238,7 @@ describe('Midnight helpers', () => {
       const result = await signMidnightTx(
         walletWith([account, secondAccount]),
         {
-          recipe,
+          recipe: recipeOf(createEngine()),
         },
       );
       expect(result.isErr() && result.error.message).toContain('Multiple');
@@ -206,7 +246,7 @@ describe('Midnight helpers', () => {
 
     it('fails when the requested account is not on the active network', async () => {
       const result = await signMidnightTx(walletWith(), {
-        recipe,
+        recipe: recipeOf(createEngine()),
         accountId: AccountId('elsewhere'),
       });
       expect(result.isErr() && result.error).toBeInstanceOf(
@@ -219,17 +259,17 @@ describe('Midnight helpers', () => {
       const result = await signMidnightTx(
         walletWith([secondAccount, account]),
         {
-          recipe,
+          recipe: recipeOf(engine),
           accountId,
         },
       );
-      expect(result.isOk() && result.value).toBe(signed);
+      expect(result.unwrap()).toEqual(recipeOf(engine, signed));
       expect(engine.signRecipe).toHaveBeenCalledWith(recipe);
     });
 
     it('fails when the engine does not start the wallet in time', async () => {
       const result = await signMidnightTx(walletWith(), {
-        recipe,
+        recipe: recipeOf(createEngine()),
         startTimeout: 20,
       });
       expect(result.isErr() && result.error).toBeInstanceOf(
@@ -238,9 +278,12 @@ describe('Midnight helpers', () => {
     });
 
     it('waits for the engine to start the wallet', async () => {
-      const pending = signMidnightTx(walletWith(), { recipe });
+      const engine = createEngine();
+      const pending = signMidnightTx(walletWith(), {
+        recipe: recipeOf(engine),
+      });
       await new Promise(resolve => setTimeout(resolve, 10));
-      fakeEngine();
+      wallets$.next({ [accountId]: engine as unknown as MidnightWallet });
       expect((await pending).isOk()).toBe(true);
     });
   });
@@ -255,7 +298,7 @@ describe('Midnight helpers', () => {
       });
       vi.useRealTimers();
 
-      expect(result.isOk() && result.value).toBe(recipe);
+      expect(result.unwrap()).toEqual(recipeOf(engine));
       expect(engine.transferTransaction).toHaveBeenCalledWith(
         [
           {
@@ -421,7 +464,7 @@ describe('Midnight helpers', () => {
       const engine = fakeEngine(of(facadeState({ available: coins })));
       const result = await registerMidnightDust(walletWith());
 
-      expect(result.isOk() && result.value).toBe(recipe);
+      expect(result.unwrap()).toEqual(recipeOf(engine));
       expect(engine.registerNightUtxosForDustGeneration).toHaveBeenCalledWith(
         coins,
         DustAddress.codec.decode(
@@ -544,7 +587,7 @@ describe('Midnight helpers', () => {
 
       const result = await registerMidnightDust(walletWith());
 
-      expect(result.isOk() && result.value).toBe(signed);
+      expect(result.unwrap()).toEqual(recipeOf(engine, signed));
       expect(engine.registerNightUtxosForDustGeneration).toHaveBeenCalledWith(
         coins,
         DustAddress.codec.decode(
@@ -587,7 +630,7 @@ describe('Midnight helpers', () => {
       const result = await registerMidnightDust(walletWith());
       const after = Date.now();
 
-      expect(result.isOk() && result.value).toBe(signed);
+      expect(result.unwrap()).toEqual(recipeOf(engine, signed));
       expect(engine.registerNightUtxosForDustGeneration).toHaveBeenCalledWith(
         coins,
         DustAddress.codec.decode(
@@ -666,7 +709,10 @@ describe('Midnight helpers', () => {
 
   describe('midnight-build-no-lock', () => {
     type Coin = ReturnType<typeof nightCoin>;
-    type ReservingRecipe = MidnightTxRecipe & { inputs: Coin[] };
+    type ReservingRecipe = BalancingRecipe & {
+      type: 'UNPROVEN_TRANSACTION';
+      transaction: { inputs: Coin[] };
+    };
 
     // Mirrors the wallet library: building moves the selected NIGHT from
     // available to pending, and only `revert` moves it back.
@@ -688,17 +734,23 @@ describe('Midnight helpers', () => {
             return throwError(() => new Error('Insufficient funds'));
           coins.pending.push(...inputs);
           publish();
-          lastBuilt = { ...recipe, inputs } as ReservingRecipe;
-          return of(lastBuilt);
+          // The inputs ride on the transaction, which an opaque value
+          // decodes back to, as the wallet library reads them from it.
+          const built = {
+            type: 'UNPROVEN_TRANSACTION',
+            transaction: ledgerFake({ inputs }),
+          } as unknown as ReservingRecipe;
+          lastBuilt = built;
+          return of<BalancingRecipe>(built);
         }),
       );
       // Balancing returns the built recipe; the inputs stay booked.
       engine.balanceUnprovenTransaction.mockImplementation(() =>
-        defer(() => of(lastBuilt as MidnightTxRecipe)),
+        defer(() => of(lastBuilt as BalancingRecipe)),
       );
       engine.revert.mockImplementation(built =>
         defer(() => {
-          const { inputs } = built as ReservingRecipe;
+          const { inputs } = (built as ReservingRecipe).transaction;
           coins.pending = coins.pending.filter(coin => !inputs.includes(coin));
           coins.available.push(...inputs);
           publish();
@@ -707,7 +759,7 @@ describe('Midnight helpers', () => {
       );
       const available = () =>
         state$.value.unshielded.availableCoins.map(({ utxo }) => utxo);
-      return { engine, available };
+      return { engine, available, lastBuilt: () => lastBuilt };
     };
 
     const builders = {
@@ -729,7 +781,7 @@ describe('Midnight helpers', () => {
     it.each(Object.entries(builders))(
       '%s: build, decline and discard restores the available coins and a later build succeeds',
       async (_, build) => {
-        const { engine, available } = reservingEngine();
+        const { engine, available, lastBuilt } = reservingEngine();
         const before = available();
 
         const declined = await build(walletWith());
@@ -737,12 +789,13 @@ describe('Midnight helpers', () => {
         expect(available()).not.toEqual(before);
 
         const declinedRecipe = declined.unwrap();
+        const built = lastBuilt();
         expect(
           (
             await discardMidnightTx(walletWith(), { recipe: declinedRecipe })
           ).isOk(),
         ).toBe(true);
-        expect(engine.revert).toHaveBeenCalledWith(declinedRecipe);
+        expect(engine.revert).toHaveBeenCalledExactlyOnceWith(built);
         expect(available()).toEqual(before);
 
         expect((await build(walletWith())).isOk()).toBe(true);
@@ -806,13 +859,17 @@ describe('Midnight helpers', () => {
       engine.revert.mockReturnValue(
         throwError(() => new Error('revert failed')) as never,
       );
-      const result = await discardMidnightTx(walletWith(), { recipe });
+      const result = await discardMidnightTx(walletWith(), {
+        recipe: recipeOf(engine),
+      });
       expect(result.isErr() && result.error.message).toBe('revert failed');
     });
 
     it('fails without releasing when the account is not on the active network', async () => {
       const engine = fakeEngine();
-      const result = await discardMidnightTx(walletWith([]), { recipe });
+      const result = await discardMidnightTx(walletWith([]), {
+        recipe: recipeOf(engine),
+      });
       expect(result.isErr() && result.error).toBeInstanceOf(
         MidnightAccountNotFoundError,
       );
@@ -823,8 +880,10 @@ describe('Midnight helpers', () => {
   describe('prove and submit', () => {
     it('proves through the engine within the timeout', async () => {
       const engine = fakeEngine();
-      const result = await proveMidnightTx(walletWith(), { recipe: signed });
-      expect(result.isOk() && result.value).toBe(finalized);
+      const result = await proveMidnightTx(walletWith(), {
+        recipe: recipeOf(engine, signed),
+      });
+      expect(result.unwrap()).toEqual(transactionOf(engine));
       expect(engine.finalizeRecipe).toHaveBeenCalledWith(signed);
     });
 
@@ -832,7 +891,7 @@ describe('Midnight helpers', () => {
       const engine = fakeEngine();
       engine.finalizeRecipe.mockReturnValue(new Subject() as never);
       const result = await proveMidnightTx(walletWith(), {
-        recipe: signed,
+        recipe: recipeOf(engine, signed),
         proveTimeout: 20,
       });
       expect(result.isErr() && result.error.name).toBe('TimeoutError');
@@ -841,7 +900,7 @@ describe('Midnight helpers', () => {
     it('submits and returns the transaction id', async () => {
       const engine = fakeEngine();
       const result = await submitMidnightTx(walletWith(), {
-        transaction: finalized,
+        transaction: transactionOf(engine),
       });
       expect(result.isOk() && result.value).toEqual({ txId: 'tx-id' });
       expect(engine.submitTransaction).toHaveBeenCalledWith(finalized);
@@ -853,7 +912,7 @@ describe('Midnight helpers', () => {
         throwError(() => new Error('rejected')) as never,
       );
       const result = await submitMidnightTx(walletWith(), {
-        transaction: finalized,
+        transaction: transactionOf(engine),
         submitTimeout: 20,
       });
       expect(result.isErr() && result.error.message).toBe('rejected');
@@ -881,6 +940,29 @@ describe('Midnight helpers', () => {
         dust: { balance: 21n, available: 1n },
         synced: { unshielded: true, shielded: true, dust: true },
       });
+    });
+
+    it('reports sync from the engine state its balances come from, not from the engine sync progress', async () => {
+      const notSynced = { unshielded: false, shielded: false, dust: false };
+      const state$ = new BehaviorSubject(
+        facadeState({ available: [nightCoin(3n)], synced: notSynced }),
+      );
+      fakeEngine(state$);
+      const balances = firstValueFrom(
+        observeMidnightBalances(walletWith()).pipe(take(2), toArray()),
+      );
+      await vi.waitFor(() => {
+        expect(state$.observed).toBe(true);
+      });
+
+      state$.next(facadeState({ available: [nightCoin(8n)] }));
+
+      expect(
+        (await balances).map(({ night, synced }) => [night.available, synced]),
+      ).toEqual([
+        [3n, notSynced],
+        [8n, { unshielded: true, shielded: true, dust: true }],
+      ]);
     });
 
     it('errors when no Midnight account is present', async () => {

@@ -1,4 +1,4 @@
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import * as Cardano from '../../../../src/Cardano';
 import { ProposalProcedure } from '../../../../src/Serialization';

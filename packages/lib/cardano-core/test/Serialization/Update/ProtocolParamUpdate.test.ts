@@ -1,4 +1,4 @@
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { EpochNo, PlutusLanguageVersion } from '../../../src/Cardano';
 import { ProtocolParamUpdate } from '../../../src/Serialization/Update/ProtocolParamUpdate';

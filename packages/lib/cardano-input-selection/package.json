@@ -9,7 +9,7 @@
   "dependencies": {
     "@lace-lib/cardano-core": "*",
     "@lace-lib/cardano-key-management": "*",
-    "@lace-lib/util": "*",
+    "@lace-lib/cardano-util": "*",
     "bignumber.js": "^9.1.1",
     "lodash": "^4.17.21",
     "ts-custom-error": "^3.3.1"

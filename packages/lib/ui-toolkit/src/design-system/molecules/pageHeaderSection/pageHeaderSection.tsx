@@ -6,6 +6,8 @@ import Animated, {
   Extrapolation,
   interpolate,
   useAnimatedStyle,
+  useDerivedValue,
+  useReducedMotion,
   type SharedValue,
 } from 'react-native-reanimated';
 
@@ -16,6 +18,7 @@ import {
   PageHeader,
   type PageHeaderProps,
 } from '../pageHeader/pageHeader';
+import { SearchBar } from '../searchBar/searchBar';
 
 type PageHeaderSectionProps = Omit<PageHeaderProps, 'stickyInScrollParent'> & {
   children?: React.ReactNode;
@@ -31,10 +34,33 @@ export const PageHeaderSection = ({
   pageHeaderTestID,
   collapseScrollY,
   stickyInScrollParent = false,
+  collapseTitleOnScroll: shouldCollapseTitleOnScroll = false,
   testID = 'page-header-section',
   ...pageHeaderProps
 }: PageHeaderSectionProps) => {
   const hasCollapsibleContent = !!children;
+  const hasSearchAccessory =
+    React.isValidElement(children) && children.type === SearchBar;
+  const gapReduction = hasSearchAccessory ? spacing.XS : 0;
+  const isMotionReduced = useReducedMotion();
+  const progress = useDerivedValue(() =>
+    isMotionReduced
+      ? 0
+      : interpolate(
+          collapseScrollY?.value ?? 0,
+          [0, PAGE_HEADER_COLLAPSE_SCROLL_RANGE],
+          [0, 1],
+          Extrapolation.CLAMP,
+        ),
+  );
+  const accessoryGapStyle = useAnimatedStyle(() => ({
+    gap: spacing.S - progress.value * gapReduction,
+  }));
+  const isTitleCollapseEnabled =
+    shouldCollapseTitleOnScroll &&
+    !children &&
+    !pageHeaderProps.showSearch &&
+    !pageHeaderProps.compact;
   const hasSubtitleSpace =
     Boolean(pageHeaderProps.subtitle) ||
     Boolean(pageHeaderProps.reserveSubtitleSpace);
@@ -64,18 +90,14 @@ export const PageHeaderSection = ({
         {
           translateY:
             stickyInScrollParent && hasCollapsibleContent && collapseScrollY
-              ? interpolate(
-                  collapseScrollY.value,
-                  [0, PAGE_HEADER_COLLAPSE_SCROLL_RANGE],
-                  [0, -childPullUpDistance],
-                  Extrapolation.CLAMP,
-                )
+              ? -progress.value * childPullUpDistance
               : 0,
         },
       ],
     }),
     [
       childPullUpDistance,
+      progress,
       collapseScrollY,
       hasCollapsibleContent,
       stickyInScrollParent,
@@ -90,11 +112,11 @@ export const PageHeaderSection = ({
         collapseScrollY &&
         stickyMeasuredHeight !== null
           ? interpolate(
-              collapseScrollY.value,
-              [0, PAGE_HEADER_COLLAPSE_SCROLL_RANGE],
+              progress.value,
+              [0, 1],
               [
                 stickyMeasuredHeight,
-                stickyMeasuredHeight - childPullUpDistance,
+                stickyMeasuredHeight - childPullUpDistance - gapReduction,
               ],
               Extrapolation.CLAMP,
             )
@@ -102,6 +124,8 @@ export const PageHeaderSection = ({
     }),
     [
       childPullUpDistance,
+      progress,
+      gapReduction,
       collapseScrollY,
       hasCollapsibleContent,
       stickyInScrollParent,
@@ -110,11 +134,12 @@ export const PageHeaderSection = ({
   );
 
   const content = (
-    <View style={styles.content}>
+    <Animated.View style={[styles.content, accessoryGapStyle]}>
       <PageHeader
         {...pageHeaderProps}
         collapseScrollYProp={collapseScrollY}
         stableCollapseLayout={stickyInScrollParent}
+        collapseTitleOnScroll={isTitleCollapseEnabled}
         testID={pageHeaderTestID ?? `${testID}-page-header`}
       />
       {children && (
@@ -123,12 +148,12 @@ export const PageHeaderSection = ({
           {children}
         </Animated.View>
       )}
-    </View>
+    </Animated.View>
   );
 
   return (
     <View testID={testID}>
-      {stickyInScrollParent ? (
+      {stickyInScrollParent && !isTitleCollapseEnabled ? (
         stickyMeasuredHeight === null ? (
           <View onLayout={handleStickyLayout}>{content}</View>
         ) : (

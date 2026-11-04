@@ -1,6 +1,5 @@
 import {
   AccAddress,
-  AccountContractMissingError,
   AccountCreationPendingError,
   AccountNotFoundError,
   EncryptionKeyMismatchError,
@@ -8,12 +7,12 @@ import {
 } from '@lace-contract/passport';
 import { HexBytes } from '@lace-lib/util';
 
-import { ledger } from '../acc/acc-module';
 import { isLaceRecord } from '../acc/envelopes';
 import { readGrants } from '../acc/read-grants';
 import { resolveUseCounter } from '../acc/use-counter';
 import { createIndexerClient } from '../infra/indexer';
 
+import { queryAccountLedger, queryAccountVerifierKeys } from './account-call';
 import { inKeySession } from './key-session';
 import { readAccountInbox, readLocalDevice } from './rotation';
 import {
@@ -128,6 +127,14 @@ const grantPartsOf = (
  * inside one key session, so it costs a single ceremony rather than one
  * per authoriser call.
  *
+ * The build of the account is recognised from the chain, never from the
+ * record: the sha256 of each operation's verifier key is resolved against
+ * the registered bundles, and the id of the bundle it resolves to is
+ * published with the account, so every later flow proves and describes
+ * its calls by that build. An account whose verifier keys no registered
+ * bundle covers raises AccountBundleUnknownError before the keys are
+ * opened.
+ *
  * The healed counter is written back to the persisted record before this
  * resolves, so the next sign-in rescans from a fresh anchor instead of the
  * creation-time one. That write also completes a record a creation left
@@ -150,6 +157,7 @@ export const signIn = async ({
   seams,
   accountRecords,
   rpId,
+  bundles,
 }: FlowContext): Promise<RecognisedAccount> => {
   const { passportAuthoriser, passportEncryptionKey, passportNetwork } = seams;
 
@@ -165,13 +173,14 @@ export const signIn = async ({
       indexerUrl: passportNetwork.indexerUrl,
       indexerWsUrl: passportNetwork.indexerWsUrl,
     });
-    const state = await indexer.queryContractState(record.address);
-    if (!state) {
-      throw new AccountContractMissingError(
-        `No live Account Custody Contract found at ${record.address}.`,
-      );
-    }
-    const ledgerState = ledger(state.data);
+    const bundle = bundles.resolve(
+      await queryAccountVerifierKeys(indexer, record.address),
+    );
+    const ledgerState = await queryAccountLedger(
+      indexer,
+      record.address,
+      bundle,
+    );
     const { entries, keyring } = readAccountInbox(
       record.address,
       ledgerState,
@@ -223,6 +232,7 @@ export const signIn = async ({
       account: {
         address: record.address,
         bindingVersion: record.bindingVersion,
+        bundleId: bundle.id,
         status: 'ready',
         networkId: passportNetwork.networkId,
       },

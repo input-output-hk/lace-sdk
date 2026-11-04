@@ -11,7 +11,7 @@ import type { PartialBlockHeader } from './Block';
 import type { ProposalProcedure, VotingProcedures } from './Governance';
 import type { PlutusData } from './PlutusData';
 import type { Script } from './Script';
-import type { Base64Blob, HexBlob, OpaqueString } from '@lace-lib/util/common';
+import type { Base64Blob, HexBlob, OpaqueString } from '@lace-lib/cardano-util';
 
 /** transaction hash as hex string */
 export type TransactionId = Crypto.Hash32ByteBase16 &

@@ -1,9 +1,9 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { CborReader, CborReaderState, CborWriter } from '../../../CBOR';
 
 import type * as Cardano from '../../../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const EMBEDDED_GROUP_SIZE = 3;
 const SINGLE_HOST_NAME_RELAY_ID = 1;

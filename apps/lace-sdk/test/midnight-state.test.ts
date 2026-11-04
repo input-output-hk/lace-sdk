@@ -95,6 +95,9 @@ const progress = (value: number, complete: boolean) => ({
     dust: complete,
   },
 });
+const syncState = (complete: boolean) => ({
+  progress: { isStrictlyComplete: () => complete },
+});
 const makeEngine = (id = accountId, night = 1n) => {
   const syncProgress$ = new BehaviorSubject(progress(0, false));
   const coinsByTokenType$ = new BehaviorSubject({
@@ -115,27 +118,34 @@ const makeEngine = (id = accountId, night = 1n) => {
     },
   });
   const transactionHistory$ = new BehaviorSubject<WalletEntry[]>([]);
-  const state = {
-    shielded: { coinPublicKey: coin, encryptionPublicKey: encryption },
-    unshielded: {
-      availableCoins: [{ utxo: { type: NIGHT_TOKEN_ID, value: night } }],
-      pendingCoins: [],
-    },
-    dust: {
-      totalCoins: [
-        {
-          generatedNow: 100n,
-          maxCap: 1000n,
-          rate: 4n,
-          dtime: new Date(10000),
-          maxCapReachedAt: new Date(5000),
-        },
-      ],
-      availableCoins: [{ generatedNow: 25n }],
-    },
-  } as unknown as FacadeState;
+  const stateOf = (synced: boolean) =>
+    ({
+      shielded: {
+        coinPublicKey: coin,
+        encryptionPublicKey: encryption,
+        state: syncState(synced),
+      },
+      unshielded: {
+        availableCoins: [{ utxo: { type: NIGHT_TOKEN_ID, value: night } }],
+        pendingCoins: [],
+        state: syncState(synced),
+      },
+      dust: {
+        totalCoins: [
+          {
+            generatedNow: 100n,
+            maxCap: 1000n,
+            rate: 4n,
+            dtime: new Date(10000),
+            maxCapReachedAt: new Date(5000),
+          },
+        ],
+        availableCoins: [{ generatedNow: 25n }],
+        state: syncState(synced),
+      },
+    } as unknown as FacadeState);
   // Like the engine's, the state stream does not complete; a stopped wallet's goes silent.
-  const state$ = new BehaviorSubject(state);
+  const state$ = new BehaviorSubject(stateOf(false));
   const engine = {
     accountId: id,
     walletId: fixture.walletId,
@@ -153,7 +163,14 @@ const makeEngine = (id = accountId, night = 1n) => {
     getTransactionHistoryEntryByHash: (hash: string) =>
       of(transactionHistory$.value.find(entry => entry.hash === hash)),
   } as unknown as MidnightWallet;
-  return { engine, syncProgress$, coinsByTokenType$, transactionHistory$ };
+  return {
+    engine,
+    state$,
+    stateOf,
+    syncProgress$,
+    coinsByTokenType$,
+    transactionHistory$,
+  };
 };
 const createWallet = async () => {
   const wallet = await createLaceWallet({
@@ -216,9 +233,9 @@ const setup = async () => {
       siblingId,
     ]);
     await vi.waitFor(async () => {
-      const [registry] = await wallet._loadModules('addons.loadMidnightEngine');
-      expect(registry).toBeDefined();
-      expect(await firstValueFrom(registry)).toEqual({});
+      const [access] = await wallet._loadModules('addons.loadMidnightEngine');
+      expect(access).toBeDefined();
+      expect(await firstValueFrom(access.engines$)).toEqual({});
     });
   });
   const emptyDust = await firstValueFrom(
@@ -490,8 +507,9 @@ describe('public Midnight state', () => {
       await firstValueFrom(storage.upsert(siblingDocument));
       const statuses = async () =>
         firstValueFrom(wallet.stateObservables.sync.selectSyncStatusByAccount$);
-      const [registry] = await wallet._loadModules('addons.loadMidnightEngine');
-      expect(registry).toBeDefined();
+      const [access] = await wallet._loadModules('addons.loadMidnightEngine');
+      expect(access).toBeDefined();
+      const registry = access.engines$;
 
       wallet.dispatch('midnightContext.resetSyncState', { accountId });
       await vi.waitFor(async () => {
@@ -698,6 +716,7 @@ describe('public Midnight state', () => {
   it('midnight-balances-follow-instance: marks the last balances unsynced while a reset leaves the account without a wallet, then fails as a new subscriber does', async () => {
     const { wallet, first } = await setup();
     first.syncProgress$.next(progress(1, true));
+    first.state$.next(first.stateOf(true));
     start.mockImplementation(() => new Subject<MidnightWallet>());
     const startTimeout = 300;
     const seen: MidnightBalances[] = [];

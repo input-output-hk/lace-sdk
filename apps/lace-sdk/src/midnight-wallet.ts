@@ -7,9 +7,11 @@ import {
   filter,
   firstValueFrom,
   map,
+  merge,
   of,
   skipWhile,
   switchMap,
+  take,
   throwError,
   timeout,
   timer,
@@ -18,13 +20,14 @@ import {
 import {
   MidnightAccountNotFoundError,
   MidnightWalletNotReadyError,
+  toMidnightSdkError,
 } from './midnight-errors';
 import { resolveTimeoutMs } from './midnight-timeouts';
 
 import type { Activity } from '@lace-contract/activities';
 import type {
   MidnightAccountId,
-  MidnightWallet,
+  MidnightEngine,
 } from '@lace-contract/midnight-context';
 import type {
   createModuleLoader,
@@ -74,7 +77,8 @@ export type MidnightAccountProps = {
   /**
    * How long, in milliseconds, to wait for the engine to start the account's wallets; 120 s by default. A
    * value that is not a finite positive number up to 2^31 - 1 (the longest delay a timer honours) is refused
-   * with a `RangeError`.
+   * with a `RangeError`. In Worker mode the worker stops an engine start at 120 s, which a longer value cannot
+   * extend: such a start fails with `MidnightWalletNotReadyError` naming 120 s.
    */
   startTimeout?: number;
 };
@@ -116,18 +120,24 @@ export const resolveMidnightAccountId = async (
 };
 
 /**
- * The engine's wallet for the account, emitted once the engine starts it and
- * again whenever the engine replaces it (a sync reset or a restart). Emits
+ * The engine of the account, emitted once the engine starts it and again
+ * whenever the engine replaces it (a sync reset or a restart). Emits
  * `undefined` while the engine has stopped the account's wallet and not yet
  * replaced it. Resolves the account on subscription and errors with
  * `MidnightAccountNotFoundError`, or with `MidnightWalletNotReadyError` when
  * no wallet arrives within `startTimeout`, at first or after a stop, so a
  * subscriber that was already watching fails the same way a new one would.
+ *
+ * In Worker mode it also errors, at once, with the failure the engine module
+ * recorded for the account: a start the worker refused or stopped at its
+ * bound, a worker that could not start, or the end of the worker. Each
+ * subscription first lets an engine held back by such a failure start again,
+ * once.
  */
-export const observeMidnightWallet = (
+export const observeMidnightEngine = (
   wallet: WalletWithMidnight,
   { accountId, startTimeout: requestedStartTimeout }: MidnightAccountProps,
-): Observable<MidnightWallet | undefined> =>
+): Observable<MidnightEngine | undefined> =>
   defer(async () => {
     const startTimeout = resolveTimeoutMs(
       'startTimeout',
@@ -135,18 +145,30 @@ export const observeMidnightWallet = (
       DEFAULT_START_TIMEOUT_MS,
     );
     const resolvedAccountId = await resolveMidnightAccountId(wallet, accountId);
-    const [registry$] = await wallet._loadModules('addons.loadMidnightEngine');
-    if (!registry$)
+    const [access] = await wallet._loadModules('addons.loadMidnightEngine');
+    if (!access)
       throw new MidnightWalletNotReadyError(resolvedAccountId, startTimeout);
-    return { resolvedAccountId, registry$, startTimeout };
+    return { resolvedAccountId, access, startTimeout };
   }).pipe(
-    switchMap(({ resolvedAccountId, registry$, startTimeout }) => {
+    switchMap(({ resolvedAccountId, access, startTimeout }) => {
+      // Before watching for failures, so that this call never sees the one it clears.
+      access.requestEngine(resolvedAccountId);
+      const failed$ = access.startFailures$.pipe(
+        map(failures => failures[resolvedAccountId]),
+        filter((failure): failure is Error => !!failure),
+        take(1),
+        switchMap(failure =>
+          throwError(() =>
+            toMidnightSdkError(failure, { accountId: resolvedAccountId }),
+          ),
+        ),
+      );
       const notReady = () =>
         throwError(
           () =>
             new MidnightWalletNotReadyError(resolvedAccountId, startTimeout),
         );
-      return registry$.pipe(
+      const engine$ = access.engines$.pipe(
         map(wallets => wallets[resolvedAccountId]),
         distinctUntilChanged(),
         skipWhile(candidate => !candidate),
@@ -160,33 +182,42 @@ export const observeMidnightWallet = (
               ),
         ),
       );
+      return merge(failed$, engine$);
     }),
   );
 
-/** The engine's wallet for the account, once the engine has started it. */
+/** The account's engine, once the engine module has started it: on this page, or in the worker. */
 export const midnightWalletFor = async (
   wallet: WalletWithMidnight,
   props: MidnightAccountProps,
-): Promise<MidnightWallet> =>
+): Promise<MidnightEngine> =>
   firstValueFrom(
-    observeMidnightWallet(wallet, props).pipe(
-      filter((candidate): candidate is MidnightWallet => !!candidate),
+    observeMidnightEngine(wallet, props).pipe(
+      filter((candidate): candidate is MidnightEngine => !!candidate),
     ),
   );
 
 const toError = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error));
 
-/** Runs one engine operation for the account and settles it as a `Result`. */
+/**
+ * Runs one engine operation for the account and settles it as a `Result`. The engine pipelines' refusals become the
+ * SDK's named errors (`toMidnightSdkError`).
+ */
 export const withMidnightWallet = async <T>(
   wallet: WalletWithMidnight,
   props: MidnightAccountProps,
-  operation: (midnightWallet: MidnightWallet) => Observable<T>,
+  operation: (engine: MidnightEngine) => Observable<T>,
 ): Promise<Result<T, Error>> => {
+  let engine: MidnightEngine;
   try {
-    const midnightWallet = await midnightWalletFor(wallet, props);
-    return Ok(await firstValueFrom(operation(midnightWallet)));
+    engine = await midnightWalletFor(wallet, props);
   } catch (error) {
     return Err(toError(error));
+  }
+  try {
+    return Ok(await firstValueFrom(operation(engine)));
+  } catch (error) {
+    return Err(toMidnightSdkError(error, { accountId: engine.accountId }));
   }
 };

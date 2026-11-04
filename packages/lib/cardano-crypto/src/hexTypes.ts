@@ -1,6 +1,6 @@
-import { HexBlob, castHexBlob, typedHex } from '@lace-lib/util/common';
+import { HexBlob, castHexBlob, typedHex } from '@lace-lib/cardano-util';
 
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 export const BIP32_PUBLIC_KEY_HASH_LENGTH = 28;
 export const ED25519_PUBLIC_KEY_LENGTH = 32;

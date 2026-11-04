@@ -15,6 +15,7 @@ import {
   decodeBigInt,
   decodeBigInts,
   decodeBoolean,
+  decodeBundleId,
   decodeBytes,
   decodeCommitments,
   decodeDeviceDelivery,
@@ -268,6 +269,18 @@ describe('codec', () => {
       ).toThrow(new MalformedPayloadError(`record.deployment.${field}`));
     }
     expect(() =>
+      decodeRecord(
+        { ...record, deployment: { keyEntries, bundleId: 'account' } },
+        'record',
+      ),
+    ).toThrow(new MalformedPayloadError('record.deployment.bundleId'));
+    expect(() =>
+      decodeRecord(
+        { ...record, deployment: { keyEntries, constructorArgs: [] } },
+        'record',
+      ),
+    ).toThrow(new MalformedPayloadError('record.deployment.constructorArgs'));
+    expect(() =>
       decodeRecord({ ...record, deployment: { keyEntries: ['d1'] } }, 'record'),
     ).toThrow(new MalformedPayloadError('record.deployment.keyEntries[0]'));
     expect(() =>
@@ -514,8 +527,36 @@ describe('codec', () => {
       keyEntries: ['d1'.repeat(192), 'd2'.repeat(192)],
     };
     const pending = { ...record, deployment };
+    const fromBundle = {
+      ...record,
+      deployment: {
+        ...deployment,
+        bundleId: 'account-tally',
+        constructorArgs: ['ab'.repeat(32)],
+      },
+    };
 
     expect(decodeRecord(pending, 'record')).toEqual(pending);
+    expect(decodeRecord(pending, 'record')).not.toHaveProperty(
+      'deployment.bundleId',
+    );
+    expect(decodeRecord(fromBundle, 'record')).toEqual(fromBundle);
+    for (const bundleId of [7, 'Account', 'account tally']) {
+      expect(() =>
+        decodeRecord(
+          { ...record, deployment: { ...deployment, bundleId } },
+          'record',
+        ),
+      ).toThrow(new MalformedPayloadError('record.deployment.bundleId'));
+    }
+    expect(() =>
+      decodeRecord(
+        { ...record, deployment: { ...deployment, constructorArgs: [7] } },
+        'record',
+      ),
+    ).toThrow(
+      new MalformedPayloadError('record.deployment.constructorArgs[0]'),
+    );
     expect(decodeRecord(record, 'record')).not.toHaveProperty('deployment');
     expect(() =>
       decodeRecord({ ...record, deployment: 'later' }, 'record'),
@@ -661,6 +702,27 @@ describe('codec', () => {
         new MalformedPayloadError('slot'),
       );
     }
+  });
+
+  describe('decodeBundleId', () => {
+    it('reads a bundle id of lowercase letters, digits and hyphens', () => {
+      expect(decodeBundleId('account-tally-2', 'bundleId')).toBe(
+        'account-tally-2',
+      );
+    });
+
+    it.each([
+      ['another case', 'Account'],
+      ['an empty string', ''],
+      ['a dot', 'account.1'],
+      ['a slash', 'account/tally'],
+      ['a number', 7],
+      ['nothing', undefined],
+    ])('refuses a bundle id with %s', (_case, malformed) => {
+      expect(() => decodeBundleId(malformed, 'bundleId')).toThrow(
+        new MalformedPayloadError('bundleId'),
+      );
+    });
   });
 
   describe('decodeSealedEntries', () => {
@@ -1362,6 +1424,7 @@ describe('maintenance codec', () => {
     const replace = { kind: 'replace-authority' as const, authority };
     const inserts = {
       kind: 'insert-verifier-keys' as const,
+      bundleId: 'account-tally',
       inserts: [
         { operation: 'withdraw_unshielded', verifierKey: Uint8Array.of(1, 2) },
       ],
@@ -1369,6 +1432,7 @@ describe('maintenance codec', () => {
 
     expect(encodeMaintenanceChanges(inserts)).toEqual({
       kind: 'insert-verifier-keys',
+      bundleId: 'account-tally',
       inserts: [{ operation: 'withdraw_unshielded', verifierKey: '0102' }],
     });
     expect(
@@ -1383,10 +1447,19 @@ describe('maintenance codec', () => {
     [undefined, 'changes'],
     [{ kind: 'remove-verifier-key', operation: 'x' }, 'changes'],
     [{ kind: 'insert-verifier-keys' }, 'changes'],
-    [{ kind: 'insert-verifier-keys', inserts: ['01'] }, 'changes.inserts[0]'],
+    [{ kind: 'insert-verifier-keys', inserts: [] }, 'changes.bundleId'],
+    [
+      { kind: 'insert-verifier-keys', bundleId: 'Account', inserts: [] },
+      'changes.bundleId',
+    ],
+    [
+      { kind: 'insert-verifier-keys', bundleId: 'account', inserts: ['01'] },
+      'changes.inserts[0]',
+    ],
     [
       {
         kind: 'insert-verifier-keys',
+        bundleId: 'account',
         inserts: [{ operation: 7, verifierKey: '01' }],
       },
       'changes.inserts[0].operation',
@@ -1394,6 +1467,7 @@ describe('maintenance codec', () => {
     [
       {
         kind: 'insert-verifier-keys',
+        bundleId: 'account',
         inserts: [{ operation: 'withdraw_unshielded', verifierKey: '' }],
       },
       'changes.inserts[0].verifierKey',
@@ -1401,6 +1475,7 @@ describe('maintenance codec', () => {
     [
       {
         kind: 'insert-verifier-keys',
+        bundleId: 'account',
         inserts: [{ operation: 'withdraw_unshielded', verifierKey: 'AB' }],
       },
       'changes.inserts[0].verifierKey',
@@ -1430,6 +1505,7 @@ describe('maintenance codec', () => {
     const insert = { operation: 'withdraw_unshielded', verifierKey: '01' };
     const changes = {
       kind: 'insert-verifier-keys',
+      bundleId: 'account',
       inserts: Array.from(
         { length: DEPLOYED_OPERATIONS.length + 1 },
         () => insert,

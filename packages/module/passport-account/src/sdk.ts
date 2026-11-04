@@ -35,6 +35,23 @@ export type {
 } from './remote/signer-handlers';
 export { decodeSignerFlow } from './remote/flow-descriptor';
 export type { DecodedSignerFlow } from './remote/flow-descriptor';
+export {
+  pinCallContractFlow,
+  pinCreateAccountFlow,
+  pinInstallOperationsFlow,
+} from './remote/pinned-descriptors';
+export type { DescriptorPins } from './remote/pinned-descriptors';
+export { createPassportRegistry } from './acc/registry';
+export type { PassportRegistry } from './acc/registry';
+export { pinnedAccountBundle } from './acc/pinned-bundle';
+export type { PinnedBundle } from './acc/pinned-bundle';
+export { accManifest } from './acc/manifest';
+export type {
+  AccDefaultManifest,
+  AccProvingCircuitName,
+  AccPureCircuitName,
+} from './acc/manifest';
+export { FlowScopeError } from './remote/errors';
 export { MalformedPayloadError } from './remote/codec';
 export {
   assertIssueRules,

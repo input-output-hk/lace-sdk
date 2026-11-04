@@ -1,5 +1,5 @@
 import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
-import { typedBech32 } from '@lace-lib/util/common';
+import { typedBech32 } from '@lace-lib/cardano-util';
 
 import { Address, CredentialType } from './Address';
 import { RewardAddress } from './RewardAddress';
@@ -7,7 +7,7 @@ import { RewardAddress } from './RewardAddress';
 import type { NetworkId } from '../ChainId';
 import type { Credential } from './Address';
 import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 /** mainnet or testnet stake address as bech32 string, consisting of network tag and stake credential */
 export type RewardAccount = OpaqueString<'RewardAccount'>;

@@ -1,4 +1,4 @@
-import { fromSerializableObject } from '@lace-lib/util/common';
+import { fromSerializableObject } from '@lace-lib/cardano-util';
 import merge from 'lodash/merge.js';
 
 import {

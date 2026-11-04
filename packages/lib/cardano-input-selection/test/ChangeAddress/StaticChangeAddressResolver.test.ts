@@ -1,6 +1,6 @@
 import { Cardano } from '@lace-lib/cardano-core';
 import { AddressType, KeyRole } from '@lace-lib/cardano-key-management';
-import { InvalidStateError } from '@lace-lib/util/common';
+import { InvalidStateError } from '@lace-lib/cardano-util';
 
 import { StaticChangeAddressResolver } from '../../src';
 

@@ -1,5 +1,15 @@
 import { AccBindingVersion } from '@lace-contract/passport';
 
+import type {
+  AccCircuitManifestEntry,
+  AccManifest,
+} from '@lace-contract/passport';
+
+export type {
+  AccCircuitManifestEntry,
+  AccManifest,
+} from '@lace-contract/passport';
+
 /**
  * Name of an Account Custody Contract circuit this module submits proofs
  * for. Each one has downloadable ZK assets (circuit IR plus prover and
@@ -35,29 +45,25 @@ export type AccPureCircuitName =
   | 'derive_grant_scope_digest';
 
 /**
- * Integrity record for one proving circuit's downloadable ZK assets.
- * `keyLocation` is the artefact-root-relative path prefix of the key
- * files (`<keyLocation>.prover` and `<keyLocation>.verifier`); the
- * circuit IR lives at `zkir/<name>.bzkir`. Each sha256 is the lowercase
- * hex digest of the exact bytes the compiler emitted, so any tampered or
- * mismatched download can be rejected before it reaches the prover.
+ * The id of the account bundle the vendored build is registered as, kept
+ * beside its manifest so the prover can name the default bundle without
+ * loading the generated module.
  */
-export type AccCircuitManifestEntry = {
-  name: AccProvingCircuitName;
-  keyLocation: string;
-  zkirSha256: string;
-  proverKeySha256: string;
-  verifierKeySha256: string;
-};
+export const ACCOUNT_BUNDLE_ID = 'account';
 
 /**
- * Compile-time description of the Account Custody Contract binding: which
- * compiled artefact this module was built against, the toolchain that
- * produced it, and the integrity pins for every circuit the module uses.
+ * A bundle id is a stable, URL-safe token: lowercase letters, digits and
+ * hyphens. The registry holds every bundle to it, and a creation
+ * descriptor naming anything else is refused as malformed.
  */
-export type AccManifest = {
-  bindingVersion: AccBindingVersion;
-  toolchain: Record<string, string>;
+export const BUNDLE_ID_PATTERN = /^[a-z0-9-]+$/;
+
+/**
+ * The manifest of the vendored build, whose circuits are exactly the
+ * proving circuits this module names and whose pure circuits are the ones
+ * it evaluates, so a circuit name is checked where the module uses one.
+ */
+export type AccDefaultManifest = AccManifest & {
   circuits: Record<AccProvingCircuitName, AccCircuitManifestEntry>;
   pureCircuits: readonly AccPureCircuitName[];
 };
@@ -68,7 +74,7 @@ export type AccManifest = {
  * produced `src/acc/generated`; the verifier key digests equal the
  * `expectedVk` table embedded in the generated module.
  */
-export const accManifest: AccManifest = {
+export const accManifest: AccDefaultManifest = {
   bindingVersion: AccBindingVersion('0.1.0-lace.2'),
   toolchain: {
     compactc: '0.35.0',

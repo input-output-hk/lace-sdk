@@ -2,7 +2,7 @@ import type { EpochNo } from '../Block';
 import type { Lovelace } from '../Value';
 import type { PoolParameters } from './PoolParameters';
 import type { PoolIdHex } from './primitives';
-import type { Percent } from '@lace-lib/util/common';
+import type { Percent } from '@lace-lib/cardano-util';
 
 /** Stake quantities for a Stake Pool. */
 export interface StakePoolMetricsStake {

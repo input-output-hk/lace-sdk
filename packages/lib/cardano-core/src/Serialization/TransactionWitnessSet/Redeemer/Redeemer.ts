@@ -3,7 +3,7 @@ import {
   HexBlob,
   InvalidArgumentError,
   InvalidStateError,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import { RedeemerPurpose } from '../../../Cardano/types/Transaction';
 import { hexToBytes } from '../../../util/misc';

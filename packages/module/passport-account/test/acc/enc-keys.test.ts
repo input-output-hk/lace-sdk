@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import {
   AccAddress,
+  AccBindingVersion,
   DeviceReaderInvalidError,
   DeviceRosterInvalidError,
   EncryptionKeyMismatchError,
@@ -18,6 +19,7 @@ import * as ledger from '@midnightntwrk/ledger-v9';
 import { x25519 } from '@noble/curves/ed25519.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
 import { encryptionKeyOver, liveEnvelopeOver } from '../../src/acc/enc-keys';
 import {
   deviceEnvelopes,
@@ -30,12 +32,15 @@ import {
 } from '../../src/acc/envelopes';
 import { openInboxEntry, sealInboxEntry } from '../../src/acc/inbox';
 import { authorityOf } from '../../src/acc/maintenance-authority';
+import { accManifest } from '../../src/acc/manifest';
+import { createPassportRegistry } from '../../src/acc/registry';
 import { verifierKeyInsert } from '../../src/acc/verifier-key-insert';
 
 import { isLiveSecret, openGrantViewSeal } from './view-seal-reference';
 
 import type { DeriveSecret } from '../../src/acc/enc-keys';
 import type {
+  AccountBundle,
   AccountKeyring,
   DeviceReader,
   GrantBookkeeping,
@@ -715,23 +720,57 @@ const PINNED_OPERATION = 'withdraw_unshielded_with_jubjub';
 const HEADERLESS_OPERATION = 'add_device_with_jubjub';
 const RECOVERY_OPERATION = 'recover_submit';
 const K256_ARM_OPERATION = 'add_device_with_k256';
+const COUNTER_OPERATION = 'counter_bump_with_jubjub';
+const COUNTER_BUNDLE_ID = 'account-counter';
 
 /**
  * A verifier key the pinned compiler line emits, for a one-circuit
- * counter contract. It stands in for a pinned Account Custody Contract
- * key: the test pins its digest for {@link PINNED_OPERATION}.
+ * counter contract. It stands in for every pinned Account Custody
+ * Contract key: the test pins its digest for the whole deployed roster.
  */
 const verifierKey = new Uint8Array(
   await readFile(path.join(__dirname, 'fixtures', 'counter-bump.verifier')),
 );
 const headerless = verifierKey.slice(8);
+/** Another key under the same header: what the counter build pins for its own operation. */
+const counterKey = verifierKey.slice();
+counterKey[counterKey.length - 1] ^= 1;
 
-pins.expectedVk[PINNED_OPERATION] = HexBytes.fromByteArray(sha256(verifierKey));
-pins.expectedVk[RECOVERY_OPERATION] = pins.expectedVk[PINNED_OPERATION];
-pins.expectedVk[K256_ARM_OPERATION] = pins.expectedVk[PINNED_OPERATION];
+for (const operation of [
+  ...DEPLOYED_OPERATIONS,
+  RECOVERY_OPERATION,
+  K256_ARM_OPERATION,
+]) {
+  pins.expectedVk[operation] = HexBytes.fromByteArray(sha256(verifierKey));
+}
 pins.expectedVk[HEADERLESS_OPERATION] = HexBytes.fromByteArray(
   sha256(headerless),
 );
+
+/** A build of the account with one more operation, pinning its own verifier key for it. */
+const counterBundle: AccountBundle = {
+  id: COUNTER_BUNDLE_ID,
+  bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  module: async () => ({
+    Contract: class {},
+    ledger: () => ({}),
+    pureCircuits: {},
+    expectedVk: {},
+    circuitSignatures: {},
+    declaredInterfaces: {},
+  }),
+  manifest: {
+    ...accManifest,
+    bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  },
+  operations: [...DEPLOYED_OPERATIONS, COUNTER_OPERATION],
+  verifierKeys: {
+    ...pins.expectedVk,
+    [COUNTER_OPERATION]: HexBytes.fromByteArray(sha256(counterKey)),
+  },
+  constructorArgs: [],
+  circuits: {},
+};
 
 /**
  * An account a device created and then rotated, keeping the roster key
@@ -938,6 +977,7 @@ describe('encryptionKeyOver maintenance authority', () => {
       counter: 5n,
       changes: {
         kind: 'insert-verifier-keys',
+        bundleId: 'account',
         inserts: [{ operation: PINNED_OPERATION, verifierKey }],
       },
     });
@@ -957,6 +997,56 @@ describe('encryptionKeyOver maintenance authority', () => {
     ).toBe(true);
   });
 
+  it('signs, over a registered bundle, the install of the operation it adds with the key it pins, and refuses that key under the default', async () => {
+    const { owner, rotated, keyring } = await rotatedAccount(true);
+    const registered = encryptionKeyOver(
+      owner.deriveSecret,
+      createPassportRegistry({ bundles: [counterBundle] }),
+    );
+    const insertUnder = (bundleId: string) => ({
+      keyring,
+      authority: rotated.authority,
+      counter: 6n,
+      changes: {
+        kind: 'insert-verifier-keys' as const,
+        bundleId,
+        inserts: [{ operation: COUNTER_OPERATION, verifierKey: counterKey }],
+      },
+    });
+
+    const signed = await registered.signMaintenanceUpdate(
+      NETWORK,
+      insertUnder(COUNTER_BUNDLE_ID),
+    );
+    const update = new ledger.MaintenanceUpdate(
+      ACCOUNT,
+      [verifierKeyInsert(ledger, COUNTER_OPERATION, counterKey)],
+      6n,
+    );
+
+    expect(
+      ledger.verifySignature(
+        rotated.authority,
+        update.dataToSign,
+        signed.signature,
+      ),
+    ).toBe(true);
+    await expect(
+      registered.signMaintenanceUpdate(NETWORK, insertUnder('account')),
+    ).rejects.toThrow(
+      new MaintenanceUpdateRefusedError(
+        `'${COUNTER_OPERATION}' is not an operation of the account bundle 'account'.`,
+      ),
+    );
+    await expect(
+      owner.key.signMaintenanceUpdate(NETWORK, insertUnder(COUNTER_BUNDLE_ID)),
+    ).rejects.toThrow(
+      new MaintenanceUpdateRefusedError(
+        `No account bundle '${COUNTER_BUNDLE_ID}' is registered with this encryption key, so no verifier key of it can be installed.`,
+      ),
+    );
+  });
+
   it('refuses an on-chain authority no roster key of the keyring derives', async () => {
     const { owner, keyring } = await rotatedAccount(true);
     const stranger = await rotatedAccount(false);
@@ -968,6 +1058,7 @@ describe('encryptionKeyOver maintenance authority', () => {
         counter: 0n,
         changes: {
           kind: 'insert-verifier-keys',
+          bundleId: 'account',
           inserts: [{ operation: PINNED_OPERATION, verifierKey }],
         },
       }),
@@ -998,8 +1089,8 @@ describe('encryptionKeyOver maintenance authority', () => {
       [{ operation: K256_ARM_OPERATION, verifierKey }],
     ],
     [
-      'an operation without a pin',
-      [{ operation: 'deposit_shielded', verifierKey }],
+      'an operation only another bundle adds',
+      [{ operation: COUNTER_OPERATION, verifierKey: counterKey }],
     ],
     [
       'a key that is not the pinned one',
@@ -1020,7 +1111,11 @@ describe('encryptionKeyOver maintenance authority', () => {
           keyring,
           authority: rotated.authority,
           counter: 0n,
-          changes: { kind: 'insert-verifier-keys', inserts },
+          changes: {
+            kind: 'insert-verifier-keys',
+            bundleId: 'account',
+            inserts,
+          },
         }),
       ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
       expect(owner.deriveSecret).not.toHaveBeenCalled();

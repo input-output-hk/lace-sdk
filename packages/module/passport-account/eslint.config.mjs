@@ -2,6 +2,7 @@ import { defineConfig } from 'eslint/config';
 
 import rootConfig, {
   hugeiconsBarrelBans,
+  moduleBoundaries,
   passportFlowBoundaryBans,
 } from '../../../eslint.config.mjs';
 
@@ -16,8 +17,10 @@ export default defineConfig(
       },
     },
     rules: {
-      // Extends the root allowList with 'Acc' (Account Custody Contract)
-      // and 'dev' (the development-only authoriser).
+      /**
+       * Extends the root allowList with 'Acc' (Account Custody Contract)
+       * and 'dev' (the development-only authoriser).
+       */
       'unicorn/prevent-abbreviations': [
         'error',
         {
@@ -47,26 +50,50 @@ export default defineConfig(
       ],
     },
   },
-  // The flow layer is platform neutral so it can move upstream to the
-  // Passport SDK unchanged: no rxjs, no redux, no module contract, and no
-  // import from the store layer, which consumes the flows and not the
-  // other way round.
+  /**
+   * The flow layer is platform neutral so it can move upstream to the
+   * Passport SDK unchanged: no rxjs, no redux, no module contract, and no
+   * import from the store layer, which consumes the flows and not the
+   * other way round.
+   */
   {
     files: ['src/flows/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
-          // Re-included: this entry replaces the workspace-wide one.
+          /** Re-included: this entry replaces the workspace-wide one. */
           paths: hugeiconsBarrelBans,
           patterns: passportFlowBoundaryBans,
         },
       ],
     },
   },
+  /**
+   * The account simulation runs the test build the fixture package vendors
+   * beside the vendored account; production code keeps the module's
+   * dependency constraint.
+   */
   {
-    // compact-generated Account Custody Contract module; vendored, never
-    // hand-edited, so it is not held to the workspace lint rules.
+    files: ['test/**/*.ts'],
+    rules: {
+      '@nx/enforce-module-boundaries': [
+        'error',
+        {
+          ...moduleBoundaries,
+          allow: [
+            ...moduleBoundaries.allow,
+            '@lace-fixture/passport-account-tally',
+          ],
+        },
+      ],
+    },
+  },
+  /**
+   * The compact-generated Account Custody Contract module is vendored and
+   * never hand-edited, so it is not held to the workspace lint rules.
+   */
+  {
     ignores: ['src/acc/generated/**'],
   },
 );

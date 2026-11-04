@@ -29,7 +29,7 @@ import type {
   WitnessedTx,
   Witnesser,
 } from '@lace-lib/cardano-key-management';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 import type { Logger } from 'ts-log';
 
 export type PartialTxOut = Partial<

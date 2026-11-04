@@ -9,7 +9,8 @@
     "./air-gapped/ur-transport": "./src/air-gapped/ur-transport/index.ts",
     "./air-gapped/keystone": "./src/air-gapped/keystone/index.ts",
     "./air-gapped/seed-signer": "./src/air-gapped/seed-signer/index.ts",
-    "./air-gapped/bitcoin": "./src/air-gapped/bitcoin/index.ts"
+    "./air-gapped/bitcoin": "./src/air-gapped/bitcoin/index.ts",
+    "./dapp-connector/signing": "./src/dapp-connector/signing/index.ts"
   },
   "main": "src/index.ts",
   "files": [

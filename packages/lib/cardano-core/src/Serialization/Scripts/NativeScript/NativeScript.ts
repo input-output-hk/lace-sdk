@@ -1,5 +1,5 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { InvalidStateError } from '@lace-lib/util/common';
+import { InvalidStateError } from '@lace-lib/cardano-util';
 
 import { NativeScriptKind } from '../../../Cardano/types/Script';
 import { CborReader } from '../../CBOR';
@@ -13,7 +13,7 @@ import { TimelockExpiry } from './TimelockExpiry';
 import { TimelockStart } from './TimelockStart';
 
 import type * as Cardano from '../../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const HASH_LENGTH_IN_BYTES = 28;
 

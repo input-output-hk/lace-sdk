@@ -8,6 +8,7 @@ const REMOTE_DIR = path.join(SRC_DIR, 'remote');
 const ACC_MODULE = path.join(SRC_DIR, 'acc', 'acc-module.ts');
 const SDK_ENTRY = path.join(SRC_DIR, 'sdk.ts');
 const GRANT_RULES = path.join(SRC_DIR, 'acc', 'grant-rules.ts');
+const REGISTRY = path.join(SRC_DIR, 'acc', 'registry.ts');
 
 /**
  * The dApp-side seams the SDK's Cardano entry bundles: these must reach no
@@ -107,6 +108,12 @@ describe('remote modules import closure', () => {
   it('keeps the grant rules free of Midnight code even through dynamic imports, so a scope can be refused without the runtime', async () => {
     await expect(
       importViolations([GRANT_RULES], { dynamic: true }),
+    ).resolves.toEqual([]);
+  });
+
+  it('keeps the registry free of Midnight code even through dynamic imports, so a host builds it without the runtime', async () => {
+    await expect(
+      importViolations([REGISTRY], { dynamic: true }),
     ).resolves.toEqual([]);
   });
 

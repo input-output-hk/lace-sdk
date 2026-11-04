@@ -112,3 +112,36 @@ slot, not the subtracted outpoint set. A spend that loads in a later emission is
 therefore deferred to the next tip rather than applied immediately. That is
 bounded (one block) and covered by a test; do not "fix" it by widening the
 comparator without measuring the extra fetches that would cause.
+
+## Upgrade and release verification
+
+The proofs prevent an unsettled key from advancing incorrectly. They do not
+repair a key that already equals the computed key: the natural trigger skips
+the fetch before either proof runs, including after a restart and on later
+tips. A successful prevention test must not be reported as evidence that an
+already-latched account recovers.
+
+The Cardano context's version-5 persistence migration wraps pre-v5 UTxOs with a
+stub cache key. An account already persisted at version 5 does not run that
+migration again on upgrade. Shipping the receive proof alone therefore does
+not invalidate a matching persisted key.
+
+For legacy mobile release coverage, check the app's actual module registration
+in `apps/lace-mobile/src/app/util/all-modules.ts`, then the `lace-mobile` entry
+of this module map. The RTK Query tests in `packages/next/ui` exercise a separate
+implementation and cannot establish legacy mobile delivery or recovery.
+
+The original receive fix (`8dc63f9d9`) is contained in the repository tags
+`lace-mobile@2.3.0` and `lace-mobile@2.4.0`, but not `lace-mobile@2.2.0`. This is
+source ancestry evidence, not proof that either store distributed those builds.
+Recheck it with:
+
+```sh
+git tag --contains 8dc63f9d9 --list 'lace-mobile@*'
+```
+
+Release acceptance still requires the Android/iOS build identifiers and their
+source commits, store rollout evidence, and an upgrade check from the affected
+version. Test an unsettled account and an already-latched account separately;
+record the latter's recovery limitation rather than closing it on the strength
+of a tag or a prevention test.

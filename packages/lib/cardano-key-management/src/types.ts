@@ -8,7 +8,7 @@ import type {
 } from '@lace-lib/cardano-core';
 import type * as Crypto from '@lace-lib/cardano-crypto';
 import type { Cip30DataSignature } from '@lace-lib/cardano-dapp-connector';
-import type { HexBlob, OpaqueString, Shutdown } from '@lace-lib/util/common';
+import type { HexBlob, OpaqueString, Shutdown } from '@lace-lib/cardano-util';
 import type { Logger } from 'ts-log';
 import type { Runtime } from 'webextension-polyfill';
 export type MessageSender = Runtime.MessageSender;

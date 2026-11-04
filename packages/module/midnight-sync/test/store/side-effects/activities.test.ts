@@ -120,7 +120,7 @@ describe('updateActivities', () => {
     testSideEffect(updateActivities, ({ cold, expectObservable }) => ({
       dependencies: {
         actions,
-        midnightWallets$: cold('a', {
+        midnightEngines$: cold('a', {
           a: toWalletMap({
             accountId,
             networkId: NetworkId.NetworkId.Preview,
@@ -175,7 +175,7 @@ describe('updateActivities', () => {
     testSideEffect(updateActivities, ({ cold, expectObservable, flush }) => ({
       dependencies: {
         actions,
-        midnightWallets$: cold('a', {
+        midnightEngines$: cold('a', {
           a: toWalletMap({
             accountId,
             networkId: NetworkId.NetworkId.Preview,
@@ -254,7 +254,7 @@ describe('updateActivities', () => {
     testSideEffect(updateActivities, ({ cold, expectObservable, flush }) => ({
       dependencies: {
         actions,
-        midnightWallets$: cold('a', {
+        midnightEngines$: cold('a', {
           a: toWalletMap({
             accountId,
             networkId: NetworkId.NetworkId.Preview,
@@ -310,7 +310,7 @@ describe('updateActivities', () => {
     testSideEffect(updateActivities, ({ cold, expectObservable }) => ({
       dependencies: {
         actions,
-        midnightWallets$: cold('a', {
+        midnightEngines$: cold('a', {
           a: toWalletMap({
             accountId,
             networkId: NetworkId.NetworkId.Preview,
@@ -357,7 +357,7 @@ describe('updateActivities', () => {
     testSideEffect(updateActivities, ({ cold, expectObservable }) => ({
       dependencies: {
         actions,
-        midnightWallets$: cold('a', {
+        midnightEngines$: cold('a', {
           a: toWalletMap({
             accountId,
             networkId: NetworkId.NetworkId.Preview,
@@ -412,7 +412,7 @@ describe('updateActivities', () => {
     testSideEffect(updateActivities, ({ cold, expectObservable }) => ({
       dependencies: {
         actions,
-        midnightWallets$: cold('a', {
+        midnightEngines$: cold('a', {
           a: toWalletMap({
             accountId,
             networkId: NetworkId.NetworkId.Preview,
@@ -464,9 +464,9 @@ describe('loadActivityDetails', () => {
     });
     mockGetAddressFromUtxos.mockReturnValue('');
     mockFormatFee.mockImplementation((f: unknown) => {
-      if (f === null || f === undefined) return '0';
+      if (f === null || f === undefined) return '';
       if (typeof f === 'bigint') return String(f);
-      return '0';
+      return '';
     });
   });
 

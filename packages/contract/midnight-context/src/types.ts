@@ -5,7 +5,11 @@ import type {
   MidnightSDKNetworkId,
   MidnightSDKTestNetworkId,
 } from './const';
-import type { MidnightWalletsByAccountId } from './midnight-wallet';
+import type {
+  MidnightEnginesByAccountId,
+  MidnightWalletsByAccountId,
+} from './midnight-wallet';
+import type { MidnightSignRequest, MidnightSignResult } from './signing';
 import type {
   MidnightAccountId,
   MidnightDustAddress,
@@ -281,6 +285,68 @@ export type MidnightWallet = ObservableWalletFacade & {
   walletId: WalletId;
 };
 
+/**
+ * What an account's engine offers wherever it runs, in this JavaScript context or in a worker: plain fields, streams
+ * of plain data, and the operations whose arguments and results are plain data.
+ */
+type MidnightEngineCommon = Pick<
+  MidnightWallet,
+  | 'accountId'
+  | 'address$'
+  | 'areKeysAvailable$'
+  | 'coinsByTokenType$'
+  | 'getTransactionHistoryEntryByHash'
+  | 'networkId'
+  | 'nightVerifyingKey'
+  | 'signData'
+  | 'stop'
+  | 'syncProgress$'
+  | 'transactionHistory$'
+  | 'walletId'
+>;
+
+/**
+ * An account's engine that runs in a worker, such as the SDK's Worker mode. It holds no ledger object: each
+ * operation runs in the worker and exchanges plain data. `stop` detaches this page from the engine, which the worker
+ * stops once no page uses it. The module that runs the worker may add operations of its own.
+ */
+export type MidnightRemoteEngine = MidnightEngineCommon & {
+  readonly remote: true;
+  /**
+   * The transaction signer's whole pipeline, run in the worker: build, sign where needed and prove. Proving
+   * progress reaches `onProgress`.
+   */
+  signTransaction: (
+    request: MidnightSignRequest,
+    onProgress?: (event: AttestationProgressEvent) => void,
+  ) => Observable<MidnightSignResult>;
+};
+
+/**
+ * An account's engine: a {@link MidnightWallet} in this JavaScript context, or a {@link MidnightRemoteEngine} in a
+ * worker. Consumers narrow it before using what only one of them has.
+ */
+export type MidnightEngine = MidnightRemoteEngine | MidnightWallet;
+
+/** Engine access for code outside the store, such as the SDK's Midnight helpers. */
+export type MidnightEngineAccess = {
+  /** The running engines of the app instance, keyed by account. */
+  readonly engines$: Observable<MidnightEnginesByAccountId>;
+  /**
+   * Why an account's engine does not run and will not start again by itself, keyed by account: a refused start, or
+   * the end of the worker that ran it. Always empty while engines run in this JavaScript context, which retry their
+   * own starts.
+   */
+  readonly startFailures$: Observable<
+    Readonly<Partial<Record<AccountId, Error>>>
+  >;
+  /**
+   * Clears the account's recorded failure, so that its engine may start again. Each public operation on the account
+   * calls it before it waits for the engine; a recorded failure otherwise holds every start back.
+   */
+  readonly requestEngine: (accountId: AccountId) => void;
+};
+
 export type SerializedMidnightWallet = AccountRef & {
   networkId: MidnightSDKNetworkId;
   serializedState: MidnightWalletSerialisedState;
@@ -387,15 +453,21 @@ export type StartMidnightAccountWalletParams = {
 };
 
 export type MidnightSideEffectsDependencies = {
+  /**
+   * The running engines that run in this JavaScript context, for consumers that need their ledger objects. Errors
+   * when an engine runs in a worker, which such consumers cannot use.
+   */
   midnightWallets$: Observable<MidnightWalletsByAccountId>;
+  /** Every running engine, wherever it runs. */
+  midnightEngines$: Observable<MidnightEnginesByAccountId>;
   getMidnightWalletByAccountId: (
     accountId: AccountId,
-  ) => Observable<MidnightWallet>;
+  ) => Observable<MidnightEngine>;
   stopAllMidnightWallets: () => Observable<void>;
   stopMidnightWallet: (accountId: AccountId) => Observable<void>;
   startMidnightAccountWallet: (
     params: StartMidnightAccountWalletParams,
-  ) => Observable<MidnightWallet>;
+  ) => Observable<MidnightEngine>;
   wasmProofActivities$: Observable<ProofActivity[]>;
   dismissWasmProofActivity: (id: string) => void;
   /**

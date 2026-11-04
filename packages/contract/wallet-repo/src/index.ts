@@ -3,6 +3,7 @@ import './augmentations';
 export * from './contract';
 export type * from './entities';
 export * from './errors';
+export { readMisroutedPreviewAccountIds } from './migrations/misrouted-preview-accounts';
 export * from './types';
 export type * from './wallet-kinds';
 export * from './utils';

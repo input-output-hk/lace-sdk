@@ -11,8 +11,8 @@ import {
   StaticChangeAddressResolver,
 } from '@lace-lib/cardano-input-selection';
 import { AddressType, util } from '@lace-lib/cardano-key-management';
+import { contextLogger, deepEquals } from '@lace-lib/cardano-util';
 import { poll } from '@lace-lib/cardano-util-rxjs';
-import { contextLogger, deepEquals } from '@lace-lib/util/common';
 import omit from 'lodash/omit.js';
 import uniq from 'lodash/uniq.js';
 import { lastValueFrom } from 'rxjs';

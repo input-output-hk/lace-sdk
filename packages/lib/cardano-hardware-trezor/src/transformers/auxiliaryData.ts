@@ -1,5 +1,5 @@
 import type * as Crypto from '@lace-lib/cardano-crypto';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 import type * as Trezor from '@trezor/connect';
 
 export const mapAuxiliaryData: Transform<

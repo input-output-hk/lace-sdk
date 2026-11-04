@@ -41,6 +41,36 @@ load them. Its CommonJS build requires `@midnight-ntwrk/ledger-v8`, whose `node`
 `require()` needs a Node.js release that loads ES modules through `require()` without a flag: 20.19 or later on
 the 20 line, 22.12 or later otherwise. Compile with `skipLibCheck: true`, as for the rest of the SDK.
 
+In [Worker mode](#worker-mode), the worker carries its own copies of the wallet SDK packages, Polkadot and
+`@laceio/cardano`, and loads only the ledger and `@subsquid/scale-codec` from your install. The peers you install
+still serve the page. The worker's copies are the versions that this SDK release bundles: a newer version that you
+install reaches the page only, and a fix in those packages reaches the worker with an SDK release.
+
+In a browser, the page needs Node.js polyfills in both modes: `@laceio/cardano` reads the `Buffer` global, and its
+dependencies read the `global` and `process` globals and import Node's `events` module when they load. With Vite,
+`vite-plugin-node-polyfills` provides them. Vite's development server must also leave the ledger out of its
+dependency pre-bundling: pre-bundled, the ledger's WebAssembly glue fails on the page with
+`Cannot access '__wbindgen_start' before initialization`.
+
+A Vite production build also needs `worker: { format: 'es' }` in both modes: the entry names the
+[Worker mode](#worker-mode) script, so Vite builds that worker even for an app that does not use Worker mode, and
+the worker loads the ledger's WebAssembly with top-level await, which Vite's default `iife` worker format does not
+support. Without the setting, `vite build` fails with
+`Top-level await is currently not supported with the 'iife' output format`.
+
+```js
+// vite.config.js
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
+
+export default {
+  plugins: [
+    nodePolyfills({ globals: { Buffer: true, global: true, process: true } }),
+  ],
+  optimizeDeps: { exclude: ['@midnight-ntwrk/ledger-v8'] },
+  worker: { format: 'es' },
+};
+```
+
 ## Configure
 
 ```typescript
@@ -91,7 +121,7 @@ wallet.dispatch('wallets.addWallet', entity);
 
 ### Module options
 
-`createMidnightModule({ password, proofServerUrl?, networks?, batchUpdates?, createAttestedProver? })`:
+`createMidnightModule({ password, proofServerUrl?, networks?, batchUpdates?, createAttestedProver?, worker? })`:
 
 - **`password`** seals the derived account keys inside the wallet entity and unlocks them for sync and signing.
   Pass the same bytes to the entity helpers. The module copies the password once and keeps its copy for the
@@ -106,6 +136,8 @@ wallet.dispatch('wallets.addWallet', entity);
 - **`batchUpdates`** sets how many synced events the engine applies per WASM chunk and the pause between chunks;
   `{ size: 12, spacing: 4 }` by default.
 - **`createAttestedProver`** is the trusted host adapter for a TEE prover; see [Attested proving](#attested-proving).
+- **`worker`** runs the engines in a SharedWorker the app's pages share instead of on this page; see
+  [Worker mode](#worker-mode).
 
 The module's store init applies these on startup: the networks the loadout can sync, each network's default proof
 server, then the endpoint overrides. A proof server the user selected afterwards takes precedence over the default.
@@ -115,7 +147,9 @@ server, then the endpoint overrides. A proof server the user selected afterwards
 - `FEATURE_FLAG_MIDNIGHT` loads the engine. `FEATURE_FLAG_MIDNIGHT_UNSHIELDED` publishes the unshielded address
   and balances to the `addresses` and `tokens` state. `FEATURE_FLAG_NETWORK_TYPE` selects testnet or mainnet.
 - The engine persists its synced state, several megabytes per account, through the storage module in `modules`:
-  `m.storageInMemory` keeps it for the process, `m.storageWebIndexeddb` keeps it across sessions in a browser.
+  `m.storageInMemory` keeps it for the process, `m.storageWebIndexeddb` keeps it across sessions in a browser. With
+  `m.storageWebIndexeddb`, run the engine in one tab per origin, or in [Worker mode](#worker-mode) (see
+  [Limits](#limits)).
 - Every SDK loadout, not only Midnight's, carries the analytics store: it mints a random user id and persists it
   under the `analytics` key of that storage. The SDK's analytics provider reports nothing.
 
@@ -212,6 +246,88 @@ The rules the engine enforces:
 - An attestation failure never falls back to HTTP.
 - Temenos supports `prove`; its attested channel does not support `check`, which rejects.
 - In-process and paired-device proving are not supported.
+
+### Worker mode
+
+`worker` moves the engines off the page. The SDK starts one SharedWorker that every page of the app's origin
+shares, and runs each account's engine there: sync, building, signing, proving and submitting. The page stays
+responsive while the engine works. The helpers take the same arguments and return the same results and errors in
+both modes, and transaction values are the same opaque values.
+
+```typescript
+import { createMidnightModule } from '@laceio/sdk/midnight';
+
+const workerModule = createMidnightModule({
+  password,
+  proofServerUrl: 'http://localhost:6300',
+  worker: { storage: 'indexeddb' },
+});
+```
+
+- **Storage.** `worker: true` keeps the engines' synced state in the worker's memory while the worker runs: the
+  browser ends the worker when the app's last page closes, and the next start syncs again.
+  `worker: { storage: 'indexeddb' }` keeps it in the origin's IndexedDB, in the same collection that page mode uses
+  with `m.storageWebIndexeddb`. The storage module in `modules` still holds the wallet's own state on each page. That
+  collection takes one writer per origin: Worker mode or one page-mode tab, never both at once (see [Limits](#limits)).
+- **One engine per account.** A page that runs an account whose engine already runs in the worker attaches to it.
+  The page's password must open the account's keys, or its calls return an `Error` naming the account. Its
+  endpoints, proof server and storage kind must match the running engine's, or its calls return
+  `MidnightWorkerSettingsConflictError`. With `worker: { adopt: true }` the page uses the running engine's settings
+  instead.
+- **Bundlers.** The SDK ships the worker as `midnight-worker.js`, next to its Midnight entry, and starts it with
+  `new SharedWorker(new URL('./midnight-worker.js', import.meta.url), { type: 'module' })`. Bundlers follow that
+  expression and ship the worker with the app. Apart from the ledger and `@subsquid/scale-codec`, the worker carries
+  its own copies of the packages it loads, with the Node globals they read, so it needs no polyfill settings of its
+  own. For the worker, a Vite production build needs only the ES worker format, which [Install](#install) sets in
+  both modes. Vite's development server also needs `@subsquid/scale-codec` pre-bundled: it serves the worker's
+  files without converting CommonJS, and that package, which the worker imports from your install, is CommonJS. With
+  the settings from [Install](#install):
+
+  ```js
+  // vite.config.js
+  import { nodePolyfills } from 'vite-plugin-node-polyfills';
+
+  export default {
+    plugins: [
+      nodePolyfills({ globals: { Buffer: true, global: true, process: true } }),
+    ],
+    optimizeDeps: {
+      exclude: ['@midnight-ntwrk/ledger-v8'],
+      include: ['@subsquid/scale-codec'],
+    },
+    worker: { format: 'es' },
+  };
+  ```
+
+- **Browsers.** Worker mode needs module SharedWorkers and the Web Locks API: Chrome 80, Firefox 114 and Safari 16
+  or later, and Chrome for Android 148 or later. It also needs a secure context: the app is served over HTTPS or from
+  localhost, not over plain HTTP. Elsewhere, Node.js and React Native included, every call that needs the engine
+  returns `MidnightWorkerUnsupportedError`, and `observeMidnightBalances` ends with it. There is no fallback to the
+  page: create the module without `worker` there.
+- **Proving.** The worker proves through a proof server given by URL. `createAttestedProver` cannot run in the
+  worker, so combining it with `worker` makes `createMidnightModule` throw
+  `MidnightAttestedProverUnsupportedError`. For `getMidnightProvingProvider`, the page looks up the circuit's key
+  material and the worker calls the proof server.
+- **Failures.** A worker whose script or WebAssembly fails to load, or that does not answer within 30 seconds,
+  returns `MidnightWorkerStartupError`, and the next call tries once more. A worker that cannot load the engine, or
+  has not loaded it 60 seconds after it started, reports it at once and closes, so that next call starts a new
+  worker. The error's `cause` chain then ends with the message of the worker's load error. If the worker ends while a
+  page uses it, the calls in flight return `MidnightWorkerStoppedError` and `observeMidnightBalances` ends with it.
+  `sync.selectSyncStatusByAccount$` shows a failed sync for each account the worker ran, until the next successful
+  sync clears it. Nothing is retried. The next call starts a new worker, and values built before then return
+  `MidnightStaleTxError`. A `midnightContext.resetSyncState` or `midnightSync.requestResync` dispatched after the end
+  of a worker runs in a new one and then starts the engines of its accounts again. A submission whose outcome the
+  worker took with it returns `MidnightSubmitInterruptedError`; see
+  [Submission and confirmation](#submission-and-confirmation).
+- **Resets.** A sync reset of an account in one page resets it for every page that runs it, and a bulk resync
+  resets every account the worker runs. A call that a reset cuts off returns `MidnightEngineResetError`. While an
+  account has a submission that has not settled, its reset waits for it and new submissions return the same error. A
+  bulk resync that cannot delete the stored state restarts the engines from what remains and shows each account's
+  resync Failed in the page that requested it.
+- **Engine failures.** When an account's engine fails, the worker replaces it for the pages that use it, and from the
+  failure until the replacement runs, every new submission on the account returns `MidnightStaleTxError`. While one
+  of its submissions has not settled, the replacement waits for it, as long as the engine waits for that submission's
+  finality; `submitTimeout` does not end that wait. The page shows no failure until the replacement runs.
 
 ## Wallets and accounts
 
@@ -401,7 +517,24 @@ const transaction = (
 ).unwrap();
 // Submission needs its own authorisation.
 const { txId } = (await submitMidnightTx(wallet, { transaction })).unwrap();
+// The transaction's activity is recorded under its activity hash.
+const activityId = transaction.activityHash;
 ```
+
+### Transaction values
+
+A recipe (`MidnightTxRecipe`) and a proved transaction (`MidnightFinalizedTx`) are opaque values: the serialized
+ledger transactions, the account that built them and the engine instance that built them. They have no ledger
+methods, so they survive `structuredClone` and `postMessage`. Pass each back to the SDK unchanged; the types do not
+let an application build one. A proved transaction's activity hash, the `activityId` of its activity, is its
+`activityHash` field.
+
+A value is accepted only under the account that built it, and only while that account's engine runs; signing,
+proving, discarding and submitting check both before the engine sees the value. Under another account they return an
+`Err` naming the account that built it: pass that `accountId`. Once a sync reset (`resetSyncState`) or a restart
+replaces the engine, they return `MidnightStaleTxError`: build the transaction again. The value's reservation may be
+gone (a sync reset clears it, a restart can lose it), so a later build can hold the same coins, and releasing the old
+value could free them. What a restart kept of the reservation stays until a sync reset, as after a page reload.
 
 ### Releasing a recipe
 
@@ -411,16 +544,18 @@ submitted they are missing from `night.available`, and later builds cannot selec
 
 Release a recipe with `discardMidnightTx(wallet, { accountId, recipe })`, under the account that built it, only if
 it never reached proving: the user withdrew consent, `signMidnightTx` failed, or `proveMidnightTx` returned
-`MidnightAccountNotFoundError`, `MidnightWalletNotReadyError` or a `RangeError` for its `proveTimeout`, all raised
-before proving starts. Do not discard after any other `proveMidnightTx` error, including a timeout: the engine
-releases a recipe whose proving fails, and a timed-out proof keeps running and ends either way. Do not discard a
-proved transaction you decide not to submit; the engine releases it once its validity window (`ttl`, one hour by
-default) has passed without it reaching the chain.
+`MidnightAccountNotFoundError`, `MidnightWalletNotReadyError`, a `RangeError` for its `proveTimeout`, or the `Err`
+for a recipe of another account, all raised before proving starts. Do not discard after any other `proveMidnightTx`
+error, including a timeout and the refusal of a recipe already being proved: the engine releases a recipe whose
+proving fails, and a proof under way, timed out or not, keeps running and ends either way. Do not discard a proved
+transaction you decide not to submit; the engine releases it once its validity window (`ttl`, one hour by default)
+has passed without it reaching the chain.
 
-The release works per coin, not per transaction. Discarding a recipe the engine has already released, or one built
-before a sync reset (`resetSyncState`) cleared its reservation, can free coins that a later build reserved for a
-transaction still in flight; for the same reason a recipe whose transaction was passed to `submitMidnightTx` must
-never be discarded, and under another account the release finds nothing and still reports `Ok`.
+The release works per coin, not per transaction. Discarding a recipe the engine has already released can free coins
+that a later build reserved for a transaction still in flight; for the same reason a recipe whose transaction was
+passed to `submitMidnightTx` must never be discarded. A recipe built before a sync reset or a restart is refused with
+`MidnightStaleTxError` rather than released (see [Transaction values](#transaction-values)), and one passed under
+another account than the one that built it is refused too.
 
 `registerMidnightDust` reserves the NIGHT it registers in the same way. If it cannot build the registration, it
 releases that NIGHT itself; if that release also fails, it returns an `AggregateError` holding both failures, and
@@ -525,7 +660,7 @@ circuit material to the configured prover before calling `check` or `prove`.
 
 `submitMidnightTx` resolves when the node reports the transaction final, because the engine submits at its
 `Finalized` stage: `Ok` means the transaction is on chain, and its `txId` is the engine's identifier, not the activity
-hash (`transaction.transactionHash()`). The SDK records a Pending activity under the activity hash as soon as it hands
+hash (`transaction.activityHash`). The SDK records a Pending activity under the activity hash as soon as it hands
 the transaction to the engine, before finality; the engine reports no earlier acceptance. The history sync replaces
 that row with the confirmed one. `submitTimeout` (5 minutes by default) bounds the wait for finality, not for
 broadcast, so an `Err` does not prove that nothing reached the chain. A `MidnightSubmitTimeoutError` (`code`
@@ -534,17 +669,30 @@ land. The SDK keeps listening to the engine's submission after the timeout, for 
 this process: a failure it reports later removes the row, and a confirmation reaches the history sync. A row whose
 outcome this process never learns (it ends first) stays until the history sync confirms it or you remove it. The
 account-resolution errors (`MidnightAccountNotFoundError`, `MidnightWalletNotReadyError`) precede the call, so nothing
-was broadcast and no row exists; any other error is the engine's: the engine releases the transaction's coins and the
+was broadcast and no row exists, and so do the refusals of a transaction of another account and of a stale one
+(`MidnightStaleTxError`); any other error is the engine's: the engine releases the transaction's coins and the
 SDK removes its Pending row, yet the error may also arrive after broadcast. Before retrying, look for the activity hash in the account's activities. Tracking is best effort and never
 turns a successful submission into a failure: the coin read behind the Pending row is bounded on its own and a wallet
 whose state does not settle in time is submitted without a row.
+
+In [Worker mode](#worker-mode) the worker submits. If it ends after the page handed it the transaction and before it
+reported the outcome, the result is `MidnightSubmitInterruptedError` (`code` `midnight-submit-interrupted`) with the
+`activityHash`: the transaction may still land, the Pending row stays, and the SDK never submits it again. If it ended
+before, the result is `MidnightWorkerStoppedError` and the row is removed. A `MidnightEngineResetError` means a reset
+of the account refused the submission before anything was broadcast, and so does a `MidnightStaleTxError` when no
+running engine took the transaction, because the account's engine was stopping, restarting or had failed; the row
+is removed in both cases. The worker derives the Pending row within the same bound as the page, and `submitTimeout`
+counts from the moment the page hands the transaction to the worker, as it counts from the engine call on the
+page.
 
 ### Proving progress and timeouts
 
 `proveMidnightTx(wallet, { recipe, accountId?, onProgress?, proveTimeout? })` passes the
 `AttestationProgressEvent` values of that proof's provider to `onProgress`. The events name phases and checks, not
 percentages, and an ordinary HTTP prover may emit none. Concurrent proofs have separate observers, and the
-callback is detached when the proof settles or times out.
+callback is detached when the proof settles or times out. An account runs one proof of a recipe at a time: while a
+proof of it runs, even after its call timed out, another `proveMidnightTx` of the same recipe, or of a copy of the
+value, returns an `Err` (`This transaction is already being finalized`) without proving.
 
 Every helper that proves takes `proveTimeout` in milliseconds, with one default shared by all of them:
 `proveMidnightTx`, `balanceMidnightSealedTransaction`, `balanceMidnightUnsealedTransaction`,
@@ -561,16 +709,31 @@ throw, entity creation can reject, `observeMidnightBalances` can error, and the 
 
 The SDK's own errors carry a `code` of type `MidnightErrorCode`:
 
-| Error                               | `code`                            | Cause                                                                 |
-| ----------------------------------- | --------------------------------- | --------------------------------------------------------------------- |
-| `MidnightNetworkNotConfiguredError` | `midnight-network-not-configured` | The network has no public endpoints and none in `networks`.           |
-| `MidnightAccountNotFoundError`      | `midnight-account-not-found`      | No single in-memory Midnight account on the active network matches.   |
-| `MidnightWalletNotReadyError`       | `midnight-wallet-not-ready`       | The engine did not start the account's wallets within `startTimeout`. |
-| `MidnightNothingToRegisterError`    | `midnight-nothing-to-register`    | The account has no available NIGHT to register for DUST generation.   |
-| `MidnightSubmitTimeoutError`        | `midnight-submit-timeout`         | The node did not report finality within `submitTimeout`; may land.    |
+| Error                               | `code`                            | Cause                                                                   |
+| ----------------------------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| `MidnightNetworkNotConfiguredError` | `midnight-network-not-configured` | The network has no public endpoints and none in `networks`.             |
+| `MidnightAccountNotFoundError`      | `midnight-account-not-found`      | No single in-memory Midnight account on the active network matches.     |
+| `MidnightWalletNotReadyError`       | `midnight-wallet-not-ready`       | The engine did not start the account's wallets within `startTimeout`.   |
+| `MidnightNothingToRegisterError`    | `midnight-nothing-to-register`    | The account has no available NIGHT to register for DUST generation.     |
+| `MidnightStaleTxError`              | `midnight-stale-tx`               | The value was built before its account's engine was reset or restarted. |
+| `MidnightSubmitTimeoutError`        | `midnight-submit-timeout`         | The node did not report finality within `submitTimeout`; may land.      |
+
+Worker mode adds these:
+
+| Error                                    | `code`                                 | Cause                                                                                  |
+| ---------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
+| `MidnightWorkerUnsupportedError`         | `midnight-worker-unsupported`          | No module SharedWorker, Web Locks API or secure context here; no fallback.             |
+| `MidnightAttestedProverUnsupportedError` | `midnight-attested-prover-unsupported` | `createAttestedProver` with `worker`; thrown by `createMidnightModule`.                |
+| `MidnightWorkerStartupError`             | `midnight-worker-startup-failed`       | The worker did not start; the next call tries once more.                               |
+| `MidnightWorkerStoppedError`             | `midnight-worker-stopped`              | The worker ended during the call; the next call starts a new one.                      |
+| `MidnightWorkerSettingsConflictError`    | `midnight-settings-conflict`           | The account's engine runs with other settings; pass `worker: { adopt: true }`.         |
+| `MidnightEngineResetError`               | `midnight-engine-reset`                | A reset cut the call off, or waits for the account's submissions to settle.            |
+| `MidnightSubmitInterruptedError`         | `midnight-submit-interrupted`          | The worker ended before reporting the submission's outcome; may land, not resubmitted. |
 
 The engine's own failures, such as insufficient tokens or DUST, decoding, validation, signing and proving errors,
-arrive as ordinary `Error` values with the engine's message.
+arrive as ordinary `Error` values with the engine's message. In Worker mode an engine error that has a `toJSON`
+method, as the wallet SDK's own errors do, also carries that serialized form as `cause`. That form is not part of this
+SDK's API and can change with a wallet SDK update.
 
 ## Limits
 
@@ -598,6 +761,33 @@ arrive as ordinary `Error` values with the engine's message.
   wallets take minutes to sync; keep both off any UI thread and show progress.
 - **Provers.** A delegated prover, attested or not, receives every transaction and circuit it proves. In-process and
   paired-device proving are not supported.
+- **Worker mode.**
+  - The page still loads the ledger's WebAssembly, because the `/midnight` entry imports the engine's modules, and
+    deriving a wallet entity still runs wherever the app calls it.
+  - A `proveTimeout` stops the wait but cannot cancel the proof in the worker, so proving the same recipe again
+    returns `This transaction is already being finalized` until the first proof settles.
+  - A submission counts as interrupted once the page has handed it to the worker, also when the worker ended before
+    the request reached it, so `MidnightSubmitInterruptedError` can come for a transaction that was never
+    broadcast. Look for its activity before submitting again.
+  - When the app's last page closes, the browser ends the worker with no final save. A submission still in flight
+    then has an unknown outcome, and with `storage: 'indexeddb'` a wallet deletion that waited for such a submission
+    leaves that account's synced state behind.
+  - With IndexedDB, one origin must have one writer of the engines' synced state: Worker mode with
+    `storage: 'indexeddb'`, or page mode with `m.storageWebIndexeddb` in one tab. Page mode with
+    `m.storageWebIndexeddb` in two tabs, or in one tab while Worker mode with `storage: 'indexeddb'` runs, are two
+    writers of the state's one index: one can drop the other's entries, so an account syncs again from the start, or
+    a deleted account's synced state stays on disk. The synced state holds no keys and no password. `worker: true`
+    and `m.storageInMemory` write no IndexedDB. Nothing enforces one writer yet.
+  - A wrong password returns a plain `Error`: the SDK has no named authentication error.
+  - A `startTimeout` above 120 seconds does not extend the worker's own bound on an engine start: such a start
+    returns `MidnightWalletNotReadyError` naming 120 seconds. The bound covers restoring the account up to the
+    engine's first state, not the sync to the chain tip. It assumes the restore takes well under 120 seconds; on a
+    device where it does not, the account gets no engine in Worker mode and shows a Failed sync, while page mode keeps
+    starting.
+  - The engine state behind `observeMidnightBalances` reaches the page at most about every 500 milliseconds while it
+    changes, as during a sync, and its latest value always follows, so a balance can lag by up to half a second. The
+    `synced` flags come from the same engine state and lag with the balances, so a flag never turns true with balances
+    older than the state that made it true.
 
 ## Functions
 

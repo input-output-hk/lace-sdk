@@ -1,12 +1,12 @@
 import * as Ledger from '@cardano-foundation/ledgerjs-hw-app-cardano';
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { util } from '@lace-lib/cardano-key-management';
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { mapTokenMap } from './assets';
 
 import type { LedgerTxTransformerContext } from '../types';
-import type { HexBlob, Transform } from '@lace-lib/util/common';
+import type { HexBlob, Transform } from '@lace-lib/cardano-util';
 
 const toInlineDatum: Transform<Cardano.PlutusData, Ledger.Datum> = datum => ({
   datumHex: Serialization.PlutusData.fromCore(datum).toCbor(),

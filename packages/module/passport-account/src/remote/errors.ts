@@ -10,10 +10,15 @@ export class KeySessionRequiredError extends Error {
   }
 }
 
-/** What a request fell outside of: the flow's kinds, circuits or arguments. */
+/**
+ * What a request fell outside of: the flow's kinds, circuits or
+ * arguments, or, for a flow refused before its session opened, the
+ * descriptor field naming something the signer does not pin.
+ */
 type FlowScopeSubject =
   | { argument: string }
   | { circuit: string }
+  | { descriptor: string }
   | { kind: string };
 
 const describeFlowScope = (
@@ -26,22 +31,30 @@ const describeFlowScope = (
   if ('circuit' in subject) {
     return `The circuit "${subject.circuit}" is not part of the "${flowKind}" flow.`;
   }
+  if ('descriptor' in subject) {
+    return `The descriptor field "${subject.descriptor}" of the "${flowKind}" flow is outside what this signer pins.`;
+  }
   return `The authorisation argument "${subject.argument}" is not what the "${flowKind}" flow was approved for.`;
 };
 
 /**
  * A request reached the signer inside a key session whose approved flow
  * never makes it: a kind the flow does not send, an authorisation for a
- * circuit the flow does not call, or an authorisation whose argument is
- * not the commitment, grant id, scope or account the user approved.
- * Raised on the signer before the key source is touched; it reaches the
- * dApp as its code.
+ * circuit the flow does not call, an authorisation whose argument is
+ * not the commitment, grant id, scope, account, bundle or call arguments
+ * the user approved, or a second revocation or call under an approval
+ * that covers one; or a descriptor named a build, circuit, argument,
+ * callee or operation the signer does not pin, or a circuit that reads a
+ * witness, refused before any session. Raised on the signer before the
+ * key source is touched; it reaches the dApp as its code.
  */
 export class FlowScopeError extends Error {
   public readonly code = 'flow-scope' as const;
+  public readonly subject: FlowScopeSubject;
   public constructor(flowKind: string, subject: FlowScopeSubject) {
     super(describeFlowScope(flowKind, subject));
     this.name = 'FlowScopeError';
+    this.subject = subject;
   }
 }
 

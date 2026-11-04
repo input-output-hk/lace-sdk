@@ -126,6 +126,26 @@ describe('createRemotePassportAuthoriser', () => {
     });
   });
 
+  it('names the bundle a descriptor circuit request carries, and no bundle otherwise', async () => {
+    const { client, authoriser } = setup(encodedAuthorisation);
+
+    await authoriser.authorise({
+      ...addDeviceRequest,
+      circuit: 'tally_set_with_jubjub',
+      bundleId: 'account-tally',
+    });
+
+    expect(client.request).toHaveBeenCalledExactlyOnceWith('authorise', {
+      account: ACCOUNT,
+      circuit: 'tally_set_with_jubjub',
+      args: [NEW_ENTRY],
+      witnessValues: [],
+      authNonce: '7',
+      useCounter: '3',
+      bundleId: 'account-tally',
+    });
+  });
+
   it('opens the flow before the operation and closes it after', async () => {
     const { client, authoriser } = setup();
     const operation = vi.fn(async () => {
@@ -370,6 +390,34 @@ describe('createRemotePassportAuthoriser', () => {
       expect(client.request).toHaveBeenCalledTimes(2);
       expect(client.request).toHaveBeenNthCalledWith(1, 'flow-open', {
         flow: { kind: 'create-account', lockAccount: false },
+      });
+    });
+
+    it('sends the bundle and constructor arguments a create-account descriptor names, and leaves them out when it names none', async () => {
+      const { client, authoriser } = setup();
+      const constructorArgs = ['ab'.repeat(32), '7'];
+
+      await authoriser.withKeySession!(async () => undefined, {
+        kind: 'create-account',
+        lockAccount: true,
+        bundleId: 'account-tally',
+        constructorArgs,
+      });
+      await authoriser.withKeySession!(async () => undefined, {
+        kind: 'create-account',
+        lockAccount: true,
+      });
+
+      expect(client.request).toHaveBeenNthCalledWith(1, 'flow-open', {
+        flow: {
+          kind: 'create-account',
+          lockAccount: true,
+          bundleId: 'account-tally',
+          constructorArgs,
+        },
+      });
+      expect(client.request).toHaveBeenNthCalledWith(3, 'flow-open', {
+        flow: { kind: 'create-account', lockAccount: true },
       });
     });
 

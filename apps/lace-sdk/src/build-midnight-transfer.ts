@@ -1,16 +1,9 @@
 import {
-  defaultTxTtlLength,
-  toUnshieldedTokenType,
   NIGHT_TOKEN_ID,
+  toUnshieldedTokenType,
 } from '@lace-contract/midnight-context';
-import { normalizeMidnightTransfers } from '@lace-module/midnight-sync/sdk';
-import {
-  MidnightBech32m,
-  UnshieldedAddress,
-} from '@midnightntwrk/wallet-sdk-address-format';
-import { defer, switchMap } from 'rxjs';
 
-import { balanceMidnightRecipe } from './balance-midnight-recipe';
+import { midnightOperationsOf } from './midnight-engine-operations';
 import { withMidnightWallet } from './midnight-wallet';
 
 import type {
@@ -18,17 +11,23 @@ import type {
   WalletWithMidnight,
 } from './midnight-wallet';
 import type { Result } from '@lace-lib/util';
-import type { BalancingRecipe } from '@midnightntwrk/wallet-sdk/facade';
+import type { OpaqueMidnightRecipe } from '@lace-module/midnight-sync/sdk';
 
 /**
  * A built transaction and what balances it: signed by `signMidnightTx`, proved
- * by `proveMidnightTx`, or released by `discardMidnightTx`. The engine reserves
- * the coins a recipe spends when it is built: they leave the available balance
- * until the transaction is submitted or the recipe is discarded, and the
- * reservation is persisted, so an abandoned recipe keeps them out of later
- * builds until a sync reset.
+ * by `proveMidnightTx`, or released by `discardMidnightTx`. It is an opaque
+ * value: the serialized ledger transactions, the account that built it and the
+ * engine instance that built it, with no ledger methods. It survives
+ * `structuredClone` and `postMessage`; pass it back to the SDK unchanged.
+ *
+ * The engine reserves the coins a recipe spends when it is built: they leave
+ * the available balance until the transaction is submitted or the recipe is
+ * discarded, and the reservation is persisted, so an abandoned recipe keeps
+ * them out of later builds until a sync reset. A recipe built before its
+ * account's engine restarted or was reset is refused with
+ * `MidnightStaleTxError`: build it again.
  */
-export type MidnightTxRecipe = BalancingRecipe;
+export type MidnightTxRecipe = OpaqueMidnightRecipe;
 
 /** The options of `buildMidnightTransfer`: the recipient and amount of NIGHT. */
 export interface BuildMidnightTransferProps extends MidnightAccountProps {
@@ -53,44 +52,19 @@ export const buildMidnightTransfer = async (
   wallet: WalletWithMidnight,
   { to, amount, ttl, ...account }: BuildMidnightTransferProps,
 ): Promise<Result<MidnightTxRecipe, Error>> =>
-  withMidnightWallet(wallet, account, midnightWallet =>
-    defer(() => {
-      normalizeMidnightTransfers(midnightWallet.networkId, 'unshielded', [
-        {
-          to,
-          amount,
-          tokenId: toUnshieldedTokenType(
-            NIGHT_TOKEN_ID,
-            midnightWallet.networkId,
-          ),
-        },
-      ]);
-      const resolvedTtl = ttl ?? new Date(Date.now() + defaultTxTtlLength);
-      // Built without its fee, then balanced, so that a release that fails
-      // beside a fee failure is reported (`AggregateError`), not dropped.
-      return midnightWallet
-        .transferTransaction(
-          [
-            {
-              type: 'unshielded',
-              outputs: [
-                {
-                  type: NIGHT_TOKEN_ID,
-                  receiverAddress: UnshieldedAddress.codec.decode(
-                    midnightWallet.networkId,
-                    MidnightBech32m.parse(to),
-                  ),
-                  amount,
-                },
-              ],
-            },
-          ],
-          { ttl: resolvedTtl, payFees: false },
-        )
-        .pipe(
-          switchMap(recipe =>
-            balanceMidnightRecipe(midnightWallet, recipe, resolvedTtl),
-          ),
-        );
+  withMidnightWallet(wallet, account, engine =>
+    midnightOperationsOf(engine).build({
+      kind: 'transfer',
+      transfer: {
+        kind: 'unshielded',
+        outputs: [
+          {
+            to,
+            tokenId: toUnshieldedTokenType(NIGHT_TOKEN_ID, engine.networkId),
+            amount,
+          },
+        ],
+        ttl,
+      },
     }),
   );

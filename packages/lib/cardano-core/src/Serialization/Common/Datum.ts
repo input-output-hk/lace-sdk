@@ -2,7 +2,7 @@ import {
   HexBlob,
   InvalidArgumentError,
   InvalidStateError,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import { CborReader, CborWriter } from '../CBOR';
 import { PlutusData } from '../PlutusData';

@@ -34,6 +34,7 @@ import {
   filterSpendableUtxos,
   getEligibleCollateralUtxo,
   utxoKey,
+  isCardanoAccount,
 } from '../util';
 import { CardanoNetworkId, CardanoSyncFailureId } from '../value-objects';
 
@@ -49,6 +50,7 @@ import {
 } from './composer-flow';
 import { getRewardSpendableDate, mapRewardToActivity } from './helpers';
 import {
+  isWalletResetOperation,
   isAddressDiscoveryOperation,
   isThoroughAddressDiscoveryOperation,
 } from './side-effects/sync-operation-utils';
@@ -86,6 +88,7 @@ import type {
   Activity,
   BlockchainSpecificActivityMetadata,
 } from '@lace-contract/activities';
+import type { TranslationKey } from '@lace-contract/i18n';
 import type { TokenId } from '@lace-contract/tokens';
 import type { AnyAccount } from '@lace-contract/wallet-repo';
 import type { HexBytes } from '@lace-lib/util';
@@ -204,6 +207,44 @@ const slice = createSlice({
   name: 'cardanoContext',
   initialState,
   reducers: {
+    /**
+     * Rebuild one Cardano account's chain-derived state without removing credentials or collateral.
+     * Requires the cardano-sync module's thorough discovery, chained transaction polling,
+     * and UTXO refetch handlers, in addition to the cardano-context side effects.
+     */
+    requestWalletSyncReset: (
+      _state,
+      _action: PayloadAction<{ accountId: AccountId }>,
+    ) => {},
+    /** Request fresh account UTXOs through cardano-sync, bypassing its cached-fetch gate. */
+    refetchAccountUtxos: (
+      _state,
+      _action: PayloadAction<{ accountId: AccountId }>,
+    ) => {},
+    /** Refresh this account's current rewards and staking details, bypassing the cache. */
+    refetchRewardAccountDetails: (
+      _state,
+      _action: PayloadAction<{ accountId: AccountId }>,
+    ) => {},
+    setWalletSyncResetResult: (
+      _state,
+      {
+        payload: _payload,
+      }: PayloadAction<{
+        accountId: AccountId;
+        status: 'Completed' | 'Failed';
+        error?: TranslationKey;
+      }>,
+    ) => {},
+    resetWalletSyncState: (
+      state,
+      { payload: { accountId } }: PayloadAction<{ accountId: AccountId }>,
+    ) => {
+      delete state.accountTransactionHistory[accountId];
+      delete state.accountRewardsHistory[accountId];
+      delete state.accountDelegationsHistory[accountId];
+      delete state.delegationActivities[accountId];
+    },
     setTip: (
       state,
       {
@@ -539,9 +580,7 @@ const slice = createSlice({
     requestManualAddressDiscovery: (
       _state,
       _action: PayloadAction<{ accountId: AccountId }>,
-    ) => {
-      // Trigger action only - no state changes
-    },
+    ) => {},
     /**
      * Trigger action requesting an opt-in proactive security re-scan of the
      * account's on-chain tx history. Observed by the `securityRescan`
@@ -1256,10 +1295,36 @@ const selectStakingStatus = createSelector(
   },
 );
 
+/** Why this account cannot safely begin a reset, or undefined when it can. */
+const selectWalletSyncResetBlockedReason = markParameterizedSelector(
+  createSelector(
+    createSelector(
+      walletsSelectors.wallets.selectActiveNetworkAccounts,
+      (_state: unknown, accountId: AccountId) => accountId,
+      (accounts, accountId) =>
+        accounts.find(candidate => candidate.accountId === accountId),
+    ),
+    activitiesSelectors.activities.selectPendingActivitiesByAccount,
+    syncSelectors.sync.selectSyncStatusByAccount,
+    (account, pending, statuses) => {
+      if (!account || !isCardanoAccount(account)) return 'unavailable';
+      const { accountId } = account;
+      if (pending[accountId]?.length) return 'pending-transactions';
+      if (
+        Object.values(statuses[accountId]?.pendingSync?.operations ?? {}).some(
+          operation =>
+            operation.status === 'Pending' || operation.status === 'InProgress',
+        )
+      )
+        return 'syncing';
+      return undefined;
+    },
+  ),
+);
+
 /**
- * True while a user-triggered (thorough) address discovery for this account
- * is Pending or InProgress. Standard automatic ADDRESS_DISCOVERY is ignored —
- * only the thorough variant drives the manual-sync UI.
+ * True while thorough discovery or a wallet reset for this account is pending or running.
+ * Automatic discovery does not drive the manual-sync overlay.
  */
 const selectIsManualHdSyncInProgress = markParameterizedSelector(
   createSelector(
@@ -1270,10 +1335,22 @@ const selectIsManualHdSyncInProgress = markParameterizedSelector(
       if (!pending) return false;
       return Object.values(pending.operations).some(
         op =>
-          isThoroughAddressDiscoveryOperation(op.operationId) &&
+          (isThoroughAddressDiscoveryOperation(op.operationId) ||
+            isWalletResetOperation(op.operationId)) &&
           (op.status === 'Pending' || op.status === 'InProgress'),
       );
     },
+  ),
+);
+
+const selectWalletSyncResetOperation = markParameterizedSelector(
+  createSelector(
+    syncSelectors.sync.selectSyncStatusByAccount,
+    (_state: unknown, accountId: AccountId) => accountId,
+    (statuses, accountId) =>
+      Object.values(statuses[accountId]?.pendingSync?.operations ?? {}).find(
+        op => isWalletResetOperation(op.operationId),
+      ),
   ),
 );
 
@@ -1300,7 +1377,7 @@ const selectIsAddressDiscoveryInProgress = markParameterizedSelector(
 );
 
 /**
- * AccountId of any account that currently has a thorough address discovery
+ * AccountId of any account that currently has a thorough discovery or wallet reset
  * operation in its `pendingSync` — irrespective of operation status.
  *
  * Returns the accountId while the op is Pending/InProgress (so the overlay
@@ -1320,10 +1397,12 @@ const selectAccountIdInManualHdSync = createSelector(
     for (const accountId in syncStatusByAccount) {
       const pending = syncStatusByAccount[accountId as AccountId]?.pendingSync;
       if (!pending) continue;
-      const hasThorough = Object.values(pending.operations).some(op =>
-        isThoroughAddressDiscoveryOperation(op.operationId),
+      const hasManualSync = Object.values(pending.operations).some(
+        op =>
+          isThoroughAddressDiscoveryOperation(op.operationId) ||
+          isWalletResetOperation(op.operationId),
       );
-      if (hasThorough) return accountId as AccountId;
+      if (hasManualSync) return accountId as AccountId;
     }
     return undefined;
   },
@@ -1334,6 +1413,7 @@ const selectAccountIdInManualHdSync = createSelector(
  * operation for this account, while it still lives in `pendingSync`.
  * Returns 'Completed' or 'Failed' for a brief window before the sync round
  * clears `pendingSync` entirely. Used by `HdSyncOverlay` to pick a toast.
+ * Suppressed while a reset owns the round; reset results notify through a side effect.
  */
 const selectManualHdSyncTerminalStatus = markParameterizedSelector(
   createSelector(
@@ -1342,6 +1422,10 @@ const selectManualHdSyncTerminalStatus = markParameterizedSelector(
     (syncStatusByAccount, accountId) => {
       const pending = syncStatusByAccount[accountId]?.pendingSync;
       if (!pending) return undefined;
+      const reset = Object.values(pending.operations).find(op =>
+        isWalletResetOperation(op.operationId),
+      );
+      if (reset) return undefined;
       for (const op of Object.values(pending.operations)) {
         if (!isThoroughAddressDiscoveryOperation(op.operationId)) continue;
         if (op.status === 'Completed' || op.status === 'Failed') {
@@ -1613,6 +1697,8 @@ export const cardanoContextSelectors = {
     selectDelegationActivities,
     selectRewardsHistoryForAccount,
     selectIsManualHdSyncInProgress,
+    selectWalletSyncResetOperation,
+    selectWalletSyncResetBlockedReason,
     selectIsAddressDiscoveryInProgress,
     selectManualHdSyncTerminalStatus,
     selectAccountIdInManualHdSync,

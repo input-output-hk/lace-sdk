@@ -1,8 +1,8 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { HexBlob, typedBech32, typedHex } from '@lace-lib/util/common';
+import { HexBlob, typedBech32, typedHex } from '@lace-lib/cardano-util';
 import * as BaseEncoding from '@scure/base';
 
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 const MAX_BECH32_LENGTH_LIMIT = 1023;
 

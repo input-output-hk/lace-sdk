@@ -1,8 +1,8 @@
 // A copy of @lace-lib/cardano-input-selection's test vectors: that package's
 // tests depend on this one, so its helpers cannot be imported here.
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { TxTestUtil } from '@lace-lib/cardano-util-dev';
-import { HexBlob } from '@lace-lib/util/common';
 
 import type {
   ProtocolParametersForInputSelection,

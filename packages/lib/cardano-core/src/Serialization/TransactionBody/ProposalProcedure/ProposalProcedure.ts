@@ -1,4 +1,4 @@
-import { HexBlob, InvalidStateError } from '@lace-lib/util/common';
+import { HexBlob, InvalidStateError } from '@lace-lib/cardano-util';
 
 import { Address, RewardAddress } from '../../../Cardano/Address';
 import { GovernanceActionType } from '../../../Cardano/types/Governance';

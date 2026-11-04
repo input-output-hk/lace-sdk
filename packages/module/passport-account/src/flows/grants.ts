@@ -62,6 +62,7 @@ import type { GrantCircuitCall } from '../acc/grants';
 import type { GrantOpenings, GrantSlots } from '../acc/read-grants';
 import type { IndexerClient } from '../infra/indexer';
 import type {
+  AccountBundle,
   GrantBookkeeping,
   GrantId,
   GrantRecord,
@@ -232,6 +233,8 @@ const storedRecord = async (
 type SettledRosterProps = {
   indexer: IndexerClient;
   address: string;
+  /** The build of the account, whose module decodes its ledger state. */
+  bundle: AccountBundle;
   slots: GrantSlots;
   openings: GrantOpenings;
   isSettled: GrantCallConfig['isSettled'];
@@ -249,6 +252,7 @@ type SettledRosterProps = {
 const awaitSettledRoster = async ({
   indexer,
   address,
+  bundle,
   slots,
   openings,
   isSettled,
@@ -257,7 +261,7 @@ const awaitSettledRoster = async ({
   roster: GrantRecord[];
 }> => {
   for (let attempt = 0; attempt < ROSTER_POLL_ATTEMPTS; attempt++) {
-    const ledgerState = await queryAccountLedger(indexer, address);
+    const ledgerState = await queryAccountLedger(indexer, address, bundle);
     const roster = readGrants(ledgerState, slots, openings);
     if (isSettled(roster)) return { ledgerState, roster };
     await sleep(ROSTER_POLL_DELAY_MS);
@@ -317,7 +321,7 @@ const runGrantCall = async ({
   input: { account, devices, localUseCounter },
   ledger: { indexer, ledgerState },
   roster: listed,
-  context: { seams, accountRecords, onProgress },
+  context: { seams, accountRecords, onProgress, bundles },
 }: GrantCallProps): Promise<GrantRoster> => {
   const { networkId } = seams.passportNetwork;
   const accountAddress = AccAddress(account.address);
@@ -344,6 +348,7 @@ const runGrantCall = async ({
           start: { ledgerState, localUseCounter, devices },
           indexer,
           seams,
+          bundles,
           onProgress,
           onAdvanced: write,
         });
@@ -394,6 +399,7 @@ const runGrantCall = async ({
         const settled = await awaitSettledRoster({
           indexer,
           address: account.address,
+          bundle: bundles.get(account.bundleId),
           slots: storedGrantSlots(stored),
           openings: storedGrantOpenings(stored),
           isSettled,
@@ -544,6 +550,7 @@ export const issueGrant = async (
   const ledger = await readAccountLedger(
     account.address,
     seams.passportNetwork,
+    context.bundles.get(account.bundleId),
   );
   await requireGranteeWithdrawals(
     ledger.indexer,
@@ -659,6 +666,7 @@ export const revokeGrant = async (
   const ledger = await readAccountLedger(
     account.address,
     context.seams.passportNetwork,
+    context.bundles.get(account.bundleId),
   );
   const roster = readGrants(ledger.ledgerState);
   const listed = roster.find(record => record.id === grantId);
@@ -717,6 +725,7 @@ export const revokeAllGrants = async (
   const ledger = await readAccountLedger(
     account.address,
     context.seams.passportNetwork,
+    context.bundles.get(account.bundleId),
   );
   const roster = readGrants(ledger.ledgerState);
   const hasLiveReadGrant = roster.some(

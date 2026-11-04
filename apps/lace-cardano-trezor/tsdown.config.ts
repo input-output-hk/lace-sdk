@@ -22,9 +22,6 @@ export default defineConfig({
   clean: true,
   external: id => isBareSpecifier(id) && !isAdapterSource(id),
   outputOptions: {
-    paths: id =>
-      id === '@lace-lib/util/common'
-        ? '@laceio/cardano/util'
-        : id.replace(PORTED, '@laceio/cardano/$1'),
+    paths: id => id.replace(PORTED, '@laceio/cardano/$1'),
   },
 });

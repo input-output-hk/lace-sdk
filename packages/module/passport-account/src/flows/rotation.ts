@@ -29,9 +29,11 @@ import {
 
 import type { FlowProgress, FlowStage } from './types';
 import type { Ledger } from '../acc/acc-module';
+import type { BundleRegistry } from '../acc/bundle';
 import type { GrantCircuitCall } from '../acc/grants';
 import type { IndexerClient } from '../infra/indexer';
 import type {
+  AccountBundle,
   AccountKeyring,
   GrantId,
   LiveDeviceReader,
@@ -167,13 +169,19 @@ export type CallPosition = {
  * @throws {@link GrantRosterUnsettledError} when the indexer never
  * reflects the call within the polling window.
  */
-const awaitAdvancedLedger = async (
-  indexer: IndexerClient,
-  address: string,
-  authNonce: bigint,
-): Promise<Ledger> => {
+const awaitAdvancedLedger = async ({
+  indexer,
+  address,
+  bundle,
+  authNonce,
+}: {
+  indexer: IndexerClient;
+  address: string;
+  bundle: AccountBundle;
+  authNonce: bigint;
+}): Promise<Ledger> => {
   for (let attempt = 0; attempt < LEDGER_POLL_ATTEMPTS; attempt++) {
-    const ledgerState = await queryAccountLedger(indexer, address);
+    const ledgerState = await queryAccountLedger(indexer, address, bundle);
     if (ledgerState.auth_nonce > authNonce) return ledgerState;
     await sleep(LEDGER_POLL_DELAY_MS);
   }
@@ -187,6 +195,8 @@ export type CallChainProps = {
   start: CallPosition;
   indexer: IndexerClient;
   seams: PassportDependencies;
+  /** The registered bundles, among which the account's names the artefacts each call is proved with. */
+  bundles: BundleRegistry;
   onProgress: FlowProgress;
   /** Told the counter each accepted call advanced this device to, so the record keeps up. */
   onAdvanced: (localUseCounter: string) => Promise<void>;
@@ -214,6 +224,7 @@ export const callChain = ({
   start,
   indexer,
   seams,
+  bundles,
   onProgress,
   onAdvanced,
 }: CallChainProps): CallChain => {
@@ -224,6 +235,7 @@ export const callChain = ({
         circuit: call.circuit,
         args: call.args,
         account,
+        bundles,
         localUseCounter: current.localUseCounter,
         ledgerState: current.ledgerState,
         onStage: onProgress,
@@ -233,11 +245,12 @@ export const callChain = ({
     const localUseCounter = advancedCounter.toString();
     await onAdvanced(localUseCounter);
     current = {
-      ledgerState: await awaitAdvancedLedger(
+      ledgerState: await awaitAdvancedLedger({
         indexer,
-        account.address,
-        current.ledgerState.auth_nonce,
-      ),
+        address: account.address,
+        bundle: bundles.get(account.bundleId),
+        authNonce: current.ledgerState.auth_nonce,
+      }),
       localUseCounter,
       devices: withRefreshedLocalDevice(current.devices, localCommitmentHex),
     };

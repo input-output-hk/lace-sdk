@@ -2,9 +2,12 @@ import { Err, Ok } from '@lace-lib/util';
 import { createProvingProviderFromCircuits } from '@lace-module/midnight-sync/sdk';
 import { firstValueFrom, from, timeout } from 'rxjs';
 
+import { midnightOperationsOf } from './midnight-engine-operations';
+import { toMidnightSdkError } from './midnight-errors';
 import { midnightWalletFor, resolveMidnightAccountId } from './midnight-wallet';
 import { resolveProveTimeout } from './prove-midnight-tx';
 
+import type { MidnightEngineOperations } from './midnight-engine-operations';
 import type {
   MidnightAccountProps,
   WalletWithMidnight,
@@ -14,6 +17,7 @@ import type {
   KeyMaterialProvider,
   ProvingProvider,
 } from '@midnight-ntwrk/dapp-connector-api';
+import type { Observable } from 'rxjs';
 
 /** Options for an account-bound circuit provider. */
 export type GetMidnightProvingProviderProps = MidnightAccountProps & {
@@ -44,6 +48,8 @@ const withinTimeout = async <T>(
  * `check`/`prove` reject on transport or attestation failure without fallback,
  * and on timeout.
  * The consumer must authorize disclosure of the circuit preimage to the configured prover.
+ * In Worker mode the circuit's key material is looked up on the page and the
+ * proof server is called from the worker.
  */
 export const getMidnightProvingProvider = async (
   wallet: WalletWithMidnight,
@@ -61,16 +67,24 @@ export const getMidnightProvingProvider = async (
     );
     const account = { ...selection, accountId };
     await midnightWalletFor(wallet, account);
+    const run = async <T>(
+      operation: (operations: MidnightEngineOperations) => Observable<T>,
+    ): Promise<T> => {
+      const engine = await midnightWalletFor(wallet, account);
+      try {
+        return await firstValueFrom(operation(midnightOperationsOf(engine)));
+      } catch (error) {
+        throw toMidnightSdkError(error, { accountId });
+      }
+    };
+    // The provider looks the key material up on this page before it calls `run`, so that a failed lookup rejects
+    // before any engine is asked.
     const provider = createProvingProviderFromCircuits(
       {
-        check: async payload =>
-          (await midnightWalletFor(wallet, account)).proofCircuitProvider.check(
-            payload,
-          ),
-        prove: async payload =>
-          (await midnightWalletFor(wallet, account)).proofCircuitProvider.prove(
-            payload,
-          ),
+        check: async request =>
+          run(operations => operations.checkCircuit(request)),
+        prove: async request =>
+          run(operations => operations.proveCircuit(request)),
       },
       keyMaterialProvider,
       { onKeyMaterialError: 'propagate' },

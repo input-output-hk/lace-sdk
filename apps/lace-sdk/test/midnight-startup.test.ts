@@ -43,7 +43,7 @@ import type { CreateMidnightModuleProps } from '../src/midnight-module';
 import type { FeatureFlag } from '@lace-contract/feature';
 import type {
   MidnightWallet as Engine,
-  MidnightWalletsByAccountId,
+  MidnightEnginesByAccountId,
   MidnightSDKNetworkId,
   MidnightSDKTestNetworkId,
   PartialMidnightNetworksConfig,
@@ -604,7 +604,7 @@ describe('Midnight SDK instance isolation', () => {
     const registry = async (wallet: MidnightWallet) => {
       const registries = await wallet._loadModules('addons.loadMidnightEngine');
       expect(registries).toHaveLength(1);
-      return registries[0];
+      return registries[0].engines$;
     };
     expect(await registry(first)).toBeDefined();
     expect(await registry(first)).not.toBe(await registry(second));
@@ -659,9 +659,8 @@ describe('Midnight engine resolution and teardown', () => {
     // Registrations stand in for provider startup; no external service is contacted.
     // The addon serves the instance's registry subject, which the engine writes.
     const registry = async (wallet: Pick<MidnightWallet, '_loadModules'>) =>
-      (
-        await wallet._loadModules('addons.loadMidnightEngine')
-      )[0] as BehaviorSubject<MidnightWalletsByAccountId>;
+      (await wallet._loadModules('addons.loadMidnightEngine'))[0]
+        .engines$ as BehaviorSubject<MidnightEnginesByAccountId>;
     const registryA = await registry(a);
     const registryB = await registry(b);
     registryA.next({ [accountId]: first });

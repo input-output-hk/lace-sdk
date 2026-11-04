@@ -4,7 +4,7 @@ export type {
   DeepPartial,
   NoExtraProperties,
   WithLogger,
-} from './common/types';
+} from '@lace-lib/cardano-util';
 
 export interface Shutdown {
   shutdown: () => void;

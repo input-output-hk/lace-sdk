@@ -1,7 +1,8 @@
 import { CARDANO_TOKEN_METADATA_SCHEMA_VERSION } from '@lace-contract/cardano-context';
 import { Timestamp } from '@lace-lib/util';
 
-import type { Asset, Cardano } from '@cardano-sdk/core';
+import type { AssetInfoWithMetadataSources } from './provider/blockfrost-asset-provider';
+import type { Cardano } from '@cardano-sdk/core';
 import type {
   CardanoTokenMetadata,
   CardanoTokenMetadataFile,
@@ -89,9 +90,10 @@ const mergeDefinedProperties = (
 };
 
 export const toContractTokenMetadata = (
-  assetInfo: Asset.AssetInfo,
+  assetInfo: AssetInfoWithMetadataSources,
 ): TokenMetadata<CardanoTokenMetadata> => ({
   blockchainSpecific: {
+    metadataSources: assetInfo.metadataSources,
     metadataSchemaVersion: CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
     updatedAt: Timestamp.now(),
     policyId: assetInfo.policyId.toString(),

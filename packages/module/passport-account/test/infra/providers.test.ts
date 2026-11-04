@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UnknownCircuitError } from '../../src/acc/artefact-loader';
+import { accManifest } from '../../src/acc/manifest';
 import { createMidnightProviders } from '../../src/infra/providers';
 
 import type * as ArtefactLoader from '../../src/acc/artefact-loader';
 import type { MidnightProviderStage } from '../../src/infra/providers';
-import type { FeeSponsor, PassportProver } from '@lace-contract/passport';
+import type {
+  AccountBundle,
+  CalledContract,
+  FeeSponsor,
+  PassportProver,
+} from '@lace-contract/passport';
 
 const ledgerMocks = vi.hoisted(() => {
   const clear = vi.fn();
@@ -155,6 +161,63 @@ const network = {
   artefactUrl: 'http://artefacts.example.com/account',
 };
 
+const TALLY_CIRCUIT = 'tally_set_with_jubjub';
+const TALLY_VK = 'aa'.repeat(32);
+const TALLY_ADDRESS = 'cd'.repeat(32);
+
+const emptyModule = {
+  Contract: class {},
+  pureCircuits: {},
+  expectedVk: {},
+  circuitSignatures: {},
+  declaredInterfaces: {},
+};
+
+/** A build extending the account with one gated circuit, served from its own artefact URL. */
+const tallyBundle: AccountBundle = {
+  id: 'account-tally',
+  bindingVersion: accManifest.bindingVersion,
+  module: async () => ({ ...emptyModule, ledger: () => ({}) }),
+  manifest: {
+    ...accManifest,
+    circuits: {
+      ...accManifest.circuits,
+      [TALLY_CIRCUIT]: {
+        name: TALLY_CIRCUIT,
+        keyLocation: `keys/${TALLY_CIRCUIT}`,
+        zkirSha256: 'a1'.repeat(32),
+        proverKeySha256: 'a2'.repeat(32),
+        verifierKeySha256: TALLY_VK,
+      },
+    },
+  },
+  operations: [TALLY_CIRCUIT],
+  verifierKeys: {
+    [TALLY_CIRCUIT]: TALLY_VK,
+    withdraw_unshielded_with_k256: 'tally-build-k256-vk-sha256',
+  },
+  constructorArgs: [],
+  circuits: {},
+  artefactUrl: 'http://artefacts.example.com/account-tally',
+};
+
+const tally: CalledContract = {
+  label: 'Tally',
+  address: TALLY_ADDRESS,
+  interface: 'Tally',
+  module: async () => emptyModule,
+  artefactUrl: 'http://artefacts.example.com/tally',
+  pins: {
+    set: {
+      name: 'set',
+      keyLocation: 'keys/set',
+      zkirSha256: 'b1'.repeat(32),
+      proverKeySha256: 'b2'.repeat(32),
+      verifierKeySha256: 'b3'.repeat(32),
+    },
+  },
+};
+
 const prover = {
   prove: vi.fn(async () => new Uint8Array([7])),
   check: vi.fn(async () => new Uint8Array([8])),
@@ -299,6 +362,36 @@ describe('createMidnightProviders', () => {
       expect(artefactMocks.loadVerifierKey).not.toHaveBeenCalled();
     });
 
+    it('downloads the assets of another bundle from its own artefact URL against its own pins', async () => {
+      const providers = await createProviders({ bundle: tallyBundle });
+      const zkConfigProvider = providers.zkConfigProvider as ZkConfigProvider;
+
+      await expect(zkConfigProvider.getProverKey(TALLY_CIRCUIT)).resolves.toBe(
+        `prover-key-${TALLY_CIRCUIT}`,
+      );
+
+      expect(artefactMocks.loadCircuitAssets).toHaveBeenCalledExactlyOnceWith({
+        artefactUrl: tallyBundle.artefactUrl,
+        circuit: TALLY_CIRCUIT,
+        fetchBytes: expect.any(Function) as unknown,
+        pins: tallyBundle.manifest.circuits,
+      });
+    });
+
+    it('checks a non-proving verifier key of another bundle against that bundle fingerprint, from its artefact URL', async () => {
+      const providers = await createProviders({ bundle: tallyBundle });
+      const zkConfigProvider = providers.zkConfigProvider as ZkConfigProvider;
+
+      await zkConfigProvider.getVerifierKey('withdraw_unshielded_with_k256');
+
+      expect(artefactMocks.loadVerifierKey).toHaveBeenCalledExactlyOnceWith({
+        artefactUrl: tallyBundle.artefactUrl,
+        circuit: 'withdraw_unshielded_with_k256',
+        fetchBytes: expect.any(Function) as unknown,
+        expectedSha256: 'tally-build-k256-vk-sha256',
+      });
+    });
+
     it('lists verifier keys only for circuits the manifest pins, without their prover keys', async () => {
       const providers = await createProviders();
       const zkConfigProvider = providers.zkConfigProvider as ZkConfigProvider;
@@ -387,6 +480,79 @@ describe('createMidnightProviders', () => {
       await expect(
         provingProvider.lookupKey('midnight/zswap/spend'),
       ).resolves.toBeUndefined();
+    });
+
+    it('looks the key material of a called contract circuit up through its pins and artefact URL', async () => {
+      const providers = await createProviders({
+        calledContracts: [tally],
+        bundles: [tallyBundle],
+      });
+      const proofProvider = providers.proofProvider as ProofProvider;
+      const prove = vi.fn(async () => 'proved-tx');
+      await proofProvider.proveTx({ version: 'v9', tx: { prove } });
+      const [provingProvider] = prove.mock.calls[0] as unknown as [
+        ProvingProvider,
+      ];
+
+      await expect(
+        provingProvider.lookupKey(
+          `contract:${TALLY_ADDRESS}/set?vk=${tally.pins.set.verifierKeySha256}`,
+        ),
+      ).resolves.toEqual({
+        proverKey: 'prover-key-set',
+        verifierKey: 'verifier-key-set',
+        ir: 'zkir-set',
+      });
+      expect(artefactMocks.loadCircuitAssets).toHaveBeenCalledExactlyOnceWith({
+        artefactUrl: tally.artefactUrl,
+        circuit: 'set',
+        fetchBytes: expect.any(Function) as unknown,
+        pins: tally.pins,
+      });
+
+      await expect(
+        provingProvider.lookupKey(
+          `contract:${'ab'.repeat(32)}/${TALLY_CIRCUIT}?vk=${TALLY_VK}`,
+        ),
+      ).resolves.toEqual({
+        proverKey: `prover-key-${TALLY_CIRCUIT}`,
+        verifierKey: `verifier-key-${TALLY_CIRCUIT}`,
+        ir: `zkir-${TALLY_CIRCUIT}`,
+      });
+      expect(artefactMocks.loadCircuitAssets).toHaveBeenLastCalledWith({
+        artefactUrl: tallyBundle.artefactUrl,
+        circuit: TALLY_CIRCUIT,
+        fetchBytes: expect.any(Function) as unknown,
+        pins: tallyBundle.manifest.circuits,
+      });
+    });
+  });
+
+  describe('contractModuleProvider', () => {
+    type ContractModuleProvider = {
+      resolve: (calleeAddress: string) => unknown;
+    };
+
+    it('resolves a registered called contract address in any hex case to its module thunk', async () => {
+      const providers = await createProviders({
+        calledContracts: [tally],
+      });
+      const moduleProvider =
+        providers.contractModuleProvider as ContractModuleProvider;
+
+      expect(moduleProvider.resolve(TALLY_ADDRESS)).toBe(tally.module);
+      expect(moduleProvider.resolve(TALLY_ADDRESS.toUpperCase())).toBe(
+        tally.module,
+      );
+      expect(moduleProvider.resolve('ef'.repeat(32))).toBeUndefined();
+    });
+
+    it('resolves nothing on a network without called contracts', async () => {
+      const providers = await createProviders();
+      const moduleProvider =
+        providers.contractModuleProvider as ContractModuleProvider;
+
+      expect(moduleProvider.resolve(TALLY_ADDRESS)).toBeUndefined();
     });
   });
 

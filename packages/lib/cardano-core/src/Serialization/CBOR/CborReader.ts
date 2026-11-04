@@ -7,7 +7,7 @@ import { decodeHalf } from './Half';
 
 import type { CborSimpleValue } from './CborSimpleValue';
 import type { CborTag } from './CborTag';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 // Constants
 const UNEXPECTED_END_OF_BUFFER_MSG = 'Unexpected end of buffer';

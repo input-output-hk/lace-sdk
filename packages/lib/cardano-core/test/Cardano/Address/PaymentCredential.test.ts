@@ -1,10 +1,10 @@
-import { typedBech32 } from '@lace-lib/util/common';
+import { typedBech32 } from '@lace-lib/cardano-util';
 
 import { Cardano } from '../../../src';
 import * as cip19TestVectors from '../../Cip19TestVectors';
 
-vi.mock('@lace-lib/util/common', async () => {
-  const actual = await vi.importActual<any>('@lace-lib/util/common');
+vi.mock('@lace-lib/cardano-util', async () => {
+  const actual = await vi.importActual<any>('@lace-lib/cardano-util');
   return {
     ...actual,
     typedBech32: vi

@@ -1,5 +1,5 @@
 import { Cardano, sortTxIn, sortUtxoByTxIn } from '@lace-lib/cardano-core';
-import { BigIntMath } from '@lace-lib/util/common';
+import { BigIntMath } from '@lace-lib/cardano-util';
 import uniq from 'lodash/uniq.js';
 
 import {

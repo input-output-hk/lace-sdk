@@ -68,6 +68,7 @@ const secondGrant = grantRecord('bb', 1);
 const account: PassportAccountInfo = {
   address: 'acc1address',
   bindingVersion: '1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -84,6 +85,15 @@ describe('passport slice', () => {
       [
         'createAccount',
         () => actions.passport.createAccount({ lockAccount: true }),
+      ],
+      [
+        'createAccount from a bundle with constructor arguments',
+        () =>
+          actions.passport.createAccount({
+            lockAccount: false,
+            bundleId: 'account-tally',
+            constructorArgs: ['ab'.repeat(32)],
+          }),
       ],
       ['signIn', () => actions.passport.signIn()],
       ['addDevice', () => actions.passport.addDevice({ commitmentHex: 'def' })],
@@ -114,6 +124,30 @@ describe('passport slice', () => {
         () =>
           actions.passport.installOperations({
             operations: ['withdraw_unshielded_with_grant_k256'],
+          }),
+      ],
+      [
+        'callContract',
+        () =>
+          actions.passport.callContract({
+            circuit: 'tally_set_with_jubjub',
+            args: ['ab'.repeat(32), '42'],
+          }),
+      ],
+      [
+        'callContract with a held coin',
+        () =>
+          actions.passport.callContract({
+            circuit: 'spend_with_jubjub',
+            args: ['ab'.repeat(32)],
+            witnesses: {
+              heldCoin: {
+                nonceHex: 'cd'.repeat(32),
+                colorHex: 'ef'.repeat(32),
+                value: '5',
+                mtIndex: '2',
+              },
+            },
           }),
       ],
     ] as const)('%s', (_name, trigger) => {
@@ -346,6 +380,36 @@ describe('passport slice', () => {
       });
     });
 
+    describe('setLastContractCall', () => {
+      it('records the last contract call that landed, with its result when the circuit returned one', () => {
+        const called = passportReducers.passport(
+          initialState,
+          actions.passport.setLastContractCall({
+            circuit: 'tally_set_with_jubjub',
+            txId: 'call-tx',
+            result: '42',
+          }),
+        );
+        expect(called.lastContractCall).toEqual({
+          circuit: 'tally_set_with_jubjub',
+          txId: 'call-tx',
+          result: '42',
+        });
+
+        const replaced = passportReducers.passport(
+          called,
+          actions.passport.setLastContractCall({
+            circuit: 'tally_set_with_jubjub',
+            txId: 'later-tx',
+          }),
+        );
+        expect(replaced.lastContractCall).toEqual({
+          circuit: 'tally_set_with_jubjub',
+          txId: 'later-tx',
+        });
+      });
+    });
+
     describe('reset', () => {
       it('restores the initial state', () => {
         const modified: PassportSliceState = {
@@ -356,6 +420,10 @@ describe('passport slice', () => {
           grants: [firstGrant],
           lastIssuedGrantId: firstGrant.id,
           shieldedHoldings: [holding],
+          lastContractCall: {
+            circuit: 'tally_set_with_jubjub',
+            txId: 'call-tx',
+          },
           encKey: 'e1'.repeat(32),
           unsealedGrantIds: [firstGrant.id],
           revocationPendingGrantIds: [secondGrant.id],
@@ -382,6 +450,11 @@ describe('passport slice', () => {
         grants: [firstGrant, secondGrant],
         lastIssuedGrantId: secondGrant.id,
         shieldedHoldings: [holding],
+        lastContractCall: {
+          circuit: 'tally_set_with_jubjub',
+          txId: 'call-tx',
+          result: '42',
+        },
         encKey: 'e3'.repeat(32),
         unsealedGrantIds: [firstGrant.id],
         revocationPendingGrantIds: [secondGrant.id],
@@ -454,6 +527,16 @@ describe('passport slice', () => {
       expect(
         passportSelectors.passport.selectShieldedHoldings(populatedState),
       ).toEqual([holding]);
+    });
+
+    it('selectLastContractCall returns the last contract call that landed', () => {
+      expect(
+        passportSelectors.passport.selectLastContractCall(populatedState),
+      ).toEqual({
+        circuit: 'tally_set_with_jubjub',
+        txId: 'call-tx',
+        result: '42',
+      });
     });
 
     it('selectEncKey returns the enc_key the account is at', () => {

@@ -24,7 +24,13 @@
 // stable-omits: CardanoCustodySignRequestCheck, CardanoCustodyWalletEntity
 // stable-omits: CardanoCustodyWalletId, CardanoSignerHandlers
 // stable-omits: CreateCardanoSignerHandlersProps
-// stable-omits: FEATURE_FLAG_CNIGHT_DESIGNATION, NightDesignationAction
+// stable-omits: FEATURE_FLAG_CNIGHT_DESIGNATION, FEATURE_FLAG_HYDRA_HEADS
+// stable-omits: HydraDepositActivityStates
+// stable-omits: HydraHeadsIndexDeposit, HydraHeadsIndexEntry
+// stable-omits: HydraHeadsIndexHead, HydraHeadsIndexOutRef
+// stable-omits: HydraHeadsIndexSliceState, HydraHeadsIndexStoreState
+// stable-omits: HydraHeadsIndexValue, HydraHeadsSnapshot
+// stable-omits: NightDesignationAction
 // stable-omits: NightDesignationBuildResult, NightDesignationFlowSliceState
 // stable-omits: NightDesignationFlowStoreState, NightDesignationIndexEntry
 // stable-omits: NightDesignationIndexSliceState
@@ -44,12 +50,18 @@
 // stable-omits: checkOrdinaryCardanoTransaction, classifyCardanoCustodyAccount
 // stable-omits: createCardanoSignerHandlers
 // stable-omits: deriveCardanoCustodyAccountPublicKeyFromWords
+// stable-omits: fromHydraHeadsIndexHistory, fromHydraHeadsIndexSnapshot
+// stable-omits: fromHydraHeadsIndexValue
+// stable-omits: hydraHeadsIndexActions, hydraHeadsIndexReducers
+// stable-omits: hydraHeadsIndexSelectors
 // stable-omits: isCardanoCustodyAccount, isCardanoCustodyGrantExhausted
 // stable-omits: nightDesignationFlowActions, nightDesignationFlowReducers
 // stable-omits: nightDesignationFlowSelectors, nightDesignationIndexActions
 // stable-omits: nightDesignationIndexReducers, nightDesignationIndexSelectors
 // stable-omits: parseCardanoCustodyChainId, readCardanoCustodyControlUtxo
+// stable-omits: selectHydraDepositActivityStates
 // stable-omits: signCardanoCustodyDataWithWords
 // stable-omits: signCardanoCustodyTransactionWithWords
+// stable-omits: toHydraDepositActivityStates
 // stable-omits: verifyCardanoCustodyAccountIdentity
 export {};

@@ -1,4 +1,4 @@
-import { transformObj } from '@lace-lib/util/common';
+import { transformObj } from '@lace-lib/cardano-util';
 
 import { mapAdditionalWitnessRequests } from './additionalWitnessRequests';
 import { mapTokenMap } from './assets';
@@ -15,7 +15,7 @@ import {
 
 import type { TrezorTxTransformerContext } from '../types';
 import type { Cardano } from '@lace-lib/cardano-core';
-import type { Transformer } from '@lace-lib/util/common';
+import type { Transformer } from '@lace-lib/cardano-util';
 import type * as Trezor from '@trezor/connect';
 
 export const trezorTxTransformer: Transformer<
@@ -30,8 +30,8 @@ export const trezorTxTransformer: Transformer<
   },
   TrezorTxTransformerContext
 > = {
-  additionalWitnessRequests: ({ inputs }, context) =>
-    mapAdditionalWitnessRequests(inputs, context),
+  additionalWitnessRequests: (body, context) =>
+    mapAdditionalWitnessRequests(body, context),
   auxiliaryData: ({ auxiliaryDataHash }) =>
     auxiliaryDataHash ? mapAuxiliaryData(auxiliaryDataHash) : undefined,
   certificates: ({ certificates }, context) =>

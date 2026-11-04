@@ -4,10 +4,10 @@ import {
   InvalidStringError,
   assertIsHexString,
   typedBech32,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 import { TextDecoder } from 'web-encoding';
 
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 export type AssetId = OpaqueString<'AssetId'>;
 

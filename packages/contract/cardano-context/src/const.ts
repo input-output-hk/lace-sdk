@@ -57,7 +57,7 @@ export const SECURITY_SCAN_WINDOW_START = Timestamp(
 export const LOVELACE_TOKEN_ID = TokenId('lovelace');
 export const ADA_DECIMALS = 6;
 export const COLLATERAL_AMOUNT_LOVELACES = 5_000_000; // 5 ADA in lovelace
-export const CARDANO_TOKEN_METADATA_SCHEMA_VERSION = 1;
+export const CARDANO_TOKEN_METADATA_SCHEMA_VERSION = 2;
 
 /**
  * Slot distance past a top on-chain activity's slot at which we treat an

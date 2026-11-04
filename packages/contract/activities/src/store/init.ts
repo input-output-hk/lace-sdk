@@ -4,14 +4,20 @@ import {
   type LaceModuleStoreInit,
   type PersistedStateProperty,
 } from '@lace-contract/module';
-import { AccountId } from '@lace-contract/wallet-repo';
+import {
+  AccountId,
+  readMisroutedPreviewAccountIds,
+} from '@lace-contract/wallet-repo';
 import { createMigrate, createTransform } from 'redux-persist';
 
 import { MAX_ACTIVITIES_PER_ACCOUNT } from '../const';
 
+import { clearPreviewActivities } from './migrations/4-clear-preview-activities';
 import { resetRewardActivities } from './migrations/reset-reward-activity-dates';
 import { rewardEpochDisplay } from './migrations/reward-epoch-display';
 import { activitiesReducers, type ActivitiesSliceState } from './slice';
+
+import type { Storage } from 'redux-persist';
 
 export const activitiesTransform = createTransform<
   PersistedStateProperty<ActivitiesSliceState>,
@@ -38,19 +44,29 @@ export const activitiesTransform = createTransform<
   return outboundState;
 });
 
-const store: LaceInit<LaceModuleStoreInit> = () => ({
-  reducers: activitiesReducers,
-  persistConfig: {
-    activities: {
-      version: 3,
-      whitelist: ['activities'],
-      migrate: createMigrate({
-        2: rewardEpochDisplay,
-        3: resetRewardActivities,
-      }),
-      transforms: [activitiesTransform],
+const store: LaceInit<LaceModuleStoreInit> = async (_props, dependencies) => {
+  // Read before rehydration, including the wallets version left by a prior boot.
+  const { reduxPersistStorage } = dependencies as typeof dependencies & {
+    reduxPersistStorage: Storage;
+  };
+  const misroutedAccountIds = await readMisroutedPreviewAccountIds(
+    reduxPersistStorage,
+  );
+  return {
+    reducers: activitiesReducers,
+    persistConfig: {
+      activities: {
+        version: 4,
+        whitelist: ['activities'],
+        migrate: createMigrate({
+          2: rewardEpochDisplay,
+          3: resetRewardActivities,
+          4: state => clearPreviewActivities(state, misroutedAccountIds),
+        }),
+        transforms: [activitiesTransform],
+      },
     },
-  },
-});
+  };
+};
 
 export default store;

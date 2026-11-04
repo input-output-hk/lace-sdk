@@ -35,6 +35,23 @@ export const blockchainSpecificAppCustomizationsAddonContract =
   });
 
 /**
+ * Narrow seam for modules that contribute ONLY a portfolio account page
+ * banner (e.g. Cardano's Hydra heads section) without providing the full
+ * blockchain customisation set the blockchain-specific-app-customizations
+ * contract requires.
+ */
+export const portfolioBannerUICustomisationAddonContract = inferContractContext(
+  {
+    name: ContractName('portfolio-banner-ui-customisation-addon'),
+    instance: 'zero-or-more',
+    contractType: 'addon',
+    provides: {
+      addons: ['loadPortfolioBannerUICustomisations'],
+    },
+  },
+);
+
+/**
  * Narrow seam for product modules that contribute ONLY a token-detail
  * customisation (e.g. RealFi's USDr "Manage Stake" entry) without providing
  * the full blockchain customisation set the

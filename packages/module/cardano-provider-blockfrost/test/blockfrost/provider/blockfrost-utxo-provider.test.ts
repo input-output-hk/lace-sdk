@@ -1,4 +1,5 @@
 import { Cardano, Serialization } from '@cardano-sdk/core';
+import { blake2b } from '@cardano-sdk/crypto';
 import { HexBlob } from '@cardano-sdk/util';
 import { logger } from '@cardano-sdk/util-dev';
 import {
@@ -231,6 +232,46 @@ describe('BlockfrostUtxoProvider', () => {
       }
     });
 
+    it('keeps an output whose inline datum is nested too deep to decode, with its datum hash', async () => {
+      const output = (index: number, inlineDatum: string) => ({
+        address: scriptAddress,
+        tx_hash:
+          '768c63e27a1c816a83dc7b07e78af673b2400de8849ea7e7b734ae1333d100d2',
+        output_index: index,
+        amount: [{ unit: 'lovelace', quantity: '5000000' }],
+        block: 'block',
+        data_hash: null,
+        inline_datum: inlineDatum,
+        reference_script_hash: null,
+      });
+      mockResponses(request, [
+        [
+          `addresses/${scriptAddress}/utxos?order=desc&page=1&count=100`,
+          {
+            data: [output(0, '81'.repeat(2000) + '00'), output(1, 'd87980')],
+            status: 200,
+          },
+        ],
+      ]);
+
+      const start = performance.now();
+      const result = await firstValueFrom(
+        provider.getUtxosAtAddress({ address: scriptAddress }),
+      );
+
+      expect(performance.now() - start).toBeLessThan(1000);
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        const [[, nested], [, plain]] = result.value;
+        expect(nested).toEqual({
+          address: scriptAddress,
+          value: { coins: 5_000_000n },
+          datumHash: blake2b.hash(HexBlob('81'.repeat(2000) + '00'), 32),
+        });
+        expect(plain.datum).toBeDefined();
+      }
+    });
+
     describe('an output with a reference script', () => {
       const referenceScript: Cardano.PlutusScript = {
         __type: Cardano.ScriptType.Plutus,
@@ -399,7 +440,10 @@ describe('BlockfrostUtxoProvider', () => {
       it('fails the listing when a reference-script output does not convert', async () => {
         mockResponses(request, [
           listing([
-            { ...listed(1, referenceScriptHash), inline_datum: 'not-cbor' },
+            {
+              ...listed(1, referenceScriptHash),
+              amount: [{ unit: 'lovelace', quantity: 'not-a-number' }],
+            },
             listed(0, null),
           ]),
           txCbor,
@@ -413,6 +457,84 @@ describe('BlockfrostUtxoProvider', () => {
         );
 
         expect(result.isErr()).toBe(true);
+      });
+
+      /**
+       * The producing transaction with an inline datum nested `depth` levels
+       * on its first script output, as a Blockfrost `txs/{hash}/cbor` answer.
+       */
+      const producingTxWithDatum = (depth: number) => {
+        const transaction = Serialization.Transaction.fromCore({
+          id: Cardano.TransactionId('00'.repeat(32)),
+          body: {
+            inputs: [
+              { txId: Cardano.TransactionId('11'.repeat(32)), index: 0 },
+            ],
+            outputs: [
+              {
+                address: Cardano.PaymentAddress(sampleAccountUtxos[0].address),
+                value: { coins: 1_000_000n },
+              },
+              {
+                ...withScript,
+                datum: Serialization.PlutusData.fromCbor(
+                  HexBlob('81'.repeat(depth) + '00'),
+                ).toCore(),
+              },
+              withScript,
+            ],
+            fee: 200_000n,
+          },
+          witness: { signatures: new Map() },
+        });
+        return {
+          hash: transaction.getId(),
+          response: [
+            `txs/${transaction.getId()}/cbor`,
+            { data: { cbor: transaction.toCbor() }, status: 200 },
+          ] as [string, unknown],
+        };
+      };
+
+      it('excludes an unsafe output when the producing transaction nests too deep to decode', async () => {
+        const deep = producingTxWithDatum(70);
+        mockResponses(request, [
+          listing([
+            { ...listed(1, referenceScriptHash), tx_hash: deep.hash },
+            listed(0, null),
+          ]),
+          deep.response,
+        ]);
+
+        const result = await firstValueFrom(
+          provider.getUtxosAtAddress({
+            address: scriptAddress,
+            withReferenceScripts: true,
+          }),
+        );
+
+        expect(result.isOk()).toBe(true);
+        if (result.isOk())
+          expect(result.value.map(([input]) => input.index)).toEqual([0]);
+      });
+
+      it('carries the script of an output whose producing transaction holds a datum nested as deep as a datum may', async () => {
+        const deep = producingTxWithDatum(64);
+        mockResponses(request, [
+          listing([{ ...listed(1, referenceScriptHash), tx_hash: deep.hash }]),
+          deep.response,
+        ]);
+
+        const result = await firstValueFrom(
+          provider.getUtxosAtAddress({
+            address: scriptAddress,
+            withReferenceScripts: true,
+          }),
+        );
+
+        expect(result.isOk()).toBe(true);
+        if (result.isOk())
+          expect(result.value[0]?.[1].scriptReference).toEqual(referenceScript);
       });
 
       it('excludes an unsafe output when the producing CBOR is malformed', async () => {
@@ -584,6 +706,40 @@ describe('BlockfrostUtxoProvider', () => {
 
         expect(transactionReads()).toHaveLength(4);
       });
+    });
+
+    it('stops paging once maxPages pages were read', async () => {
+      const addressUtxo = (index: number) => ({
+        address: scriptAddress,
+        tx_hash: sampleAccountUtxos[0].tx_hash,
+        output_index: index,
+        amount: [{ unit: 'lovelace', quantity: '5000000' }],
+        block: 'block',
+        data_hash: null,
+        inline_datum: null,
+        reference_script_hash: null,
+      });
+      mockResponses(request, [
+        [
+          `addresses/${scriptAddress}/utxos?order=desc&page=1&count=1`,
+          { data: [addressUtxo(0)], status: 200 },
+        ],
+        [
+          `addresses/${scriptAddress}/utxos?order=desc&page=2&count=1`,
+          { data: [addressUtxo(1)], status: 200 },
+        ],
+      ]);
+
+      const result = await firstValueFrom(
+        provider.getUtxosAtAddress({
+          address: scriptAddress,
+          maxPages: 2,
+          pageSize: 1,
+        }),
+      );
+
+      expect(result.unwrap().map(([input]) => input.index)).toEqual([0, 1]);
+      expect(request).toHaveBeenCalledTimes(2);
     });
 
     it('treats a 404 (address never funded) as an empty UTxO set', async () => {

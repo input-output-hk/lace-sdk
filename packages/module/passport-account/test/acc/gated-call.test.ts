@@ -9,7 +9,8 @@ import { HexBytes } from '@lace-lib/util';
 import { jubjub } from '@noble/curves/misc.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { pureCircuits } from '../../src/acc/acc-module';
+import { Contract, pureCircuits } from '../../src/acc/acc-module';
+import { accountBundle } from '../../src/acc/bundle';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 import {
   connectAccountHandle,
@@ -19,7 +20,11 @@ import { ISSUE_GRANT_CIRCUIT } from '../../src/acc/grant-circuits';
 import { prepareIssueGrant } from '../../src/acc/grants';
 
 import type { AccProviders } from '../../src/acc/deploy';
-import type { Authorisation, GrantScopeInput } from '@lace-contract/passport';
+import type {
+  AccountModule,
+  Authorisation,
+  GrantScopeInput,
+} from '@lace-contract/passport';
 
 const contractsMocks = vi.hoisted(() => ({
   findDeployedContract:
@@ -209,7 +214,67 @@ describe('executeGatedCall', () => {
         address,
         ledgerState: context.ledgerState,
       }),
-    ).resolves.toBe(6n);
+    ).resolves.toEqual({ advancedCounter: 6n, result: undefined });
+  });
+
+  it('binds the witness values and the bundle into the authorisation of a described circuit', async () => {
+    const context = createTestContext();
+    const call = vi.fn(async (): Promise<unknown> => ({ txId: 'tally-tx' }));
+    const heldCoin = {
+      nonce: newEntry,
+      color: newEntry,
+      value: 5n,
+      mt_index: 2n,
+    };
+
+    await executeGatedCall({
+      handle: { callTx: { tally_set_with_jubjub: call } },
+      authoriser: context.authoriser as never,
+      circuit: 'tally_set_with_jubjub',
+      args: [{ bytes: newEntry }, 7n],
+      witnessValues: [heldCoin],
+      bundleId: 'account-tally',
+      address,
+      ledgerState: context.ledgerState,
+    });
+
+    expect(context.authoriser.authorise).toHaveBeenCalledExactlyOnceWith({
+      account: address,
+      circuit: 'tally_set_with_jubjub',
+      args: [{ bytes: newEntry }, 7n],
+      witnessValues: [heldCoin],
+      authNonce,
+      useCounter: 2n,
+      bundleId: 'account-tally',
+    });
+    expect(call).toHaveBeenCalledExactlyOnceWith(
+      { bytes: newEntry },
+      7n,
+      cannedAuthorisation.pk,
+      cannedAuthorisation.useCounter,
+      cannedAuthorisation.sigR,
+      cannedAuthorisation.sigS,
+      cannedAuthorisation.grindNonce,
+    );
+  });
+
+  it('reports the transaction id and the return value the finalized call carries', async () => {
+    const context = createTestContext({ liveCounters: [5n] });
+    context.call.mockResolvedValueOnce({
+      public: { txId: 'call-tx', status: 'SucceedEntirely' },
+      private: { result: 42n },
+    });
+
+    await expect(
+      executeGatedCall({
+        handle: context.handle,
+        authoriser: context.authoriser as never,
+        circuit: 'add_device_with_jubjub',
+        args: [newEntry],
+        address,
+        ledgerState: context.ledgerState,
+      }),
+    ).resolves.toEqual({ advancedCounter: 6n, txId: 'call-tx', result: 42n });
   });
 
   it('produces a request the jubjub authoriser accepts end to end', async () => {
@@ -270,7 +335,7 @@ describe('executeGatedCall', () => {
     });
     await vi.advanceTimersByTimeAsync(10_000);
 
-    await expect(pending).resolves.toBe(3n);
+    await expect(pending).resolves.toMatchObject({ advancedCounter: 3n });
     expect(context.call).toHaveBeenCalledTimes(2);
   });
 
@@ -289,7 +354,7 @@ describe('executeGatedCall', () => {
         address,
         ledgerState: context.ledgerState,
       }),
-    ).resolves.toBe(6n);
+    ).resolves.toMatchObject({ advancedCounter: 6n });
   });
 
   it.each(['FailEntirely', 'FailFallible'])(
@@ -375,6 +440,7 @@ describe('connectAccountHandle', () => {
     privateStateProvider: 'private-state',
     walletProvider: 'wallet',
     midnightProvider: 'midnight',
+    contractModuleProvider: 'contract-modules',
   };
 
   it('finds the deployed contract with the private state holding no encryption secret and no coins', async () => {
@@ -408,5 +474,37 @@ describe('connectAccountHandle', () => {
       ([, options]) => options.privateStateId,
     );
     expect(first).not.toBe(second);
+  });
+
+  it('compiles the given bundle module and seeds the private state it is given', async () => {
+    contractsMocks.findDeployedContract.mockResolvedValue({ callTx: {} });
+    const module = vi.fn(
+      async (): Promise<AccountModule> =>
+        ({ Contract } as unknown as AccountModule),
+    );
+    const privateState = {
+      coins: {
+        ['ab'.repeat(32)]: {
+          nonceHex: 'cd'.repeat(32),
+          colorHex: 'ab'.repeat(32),
+          value: '5',
+          mtIndex: '2',
+        },
+      },
+    };
+
+    await connectAccountHandle(providers, 'ac'.repeat(32), {
+      bundle: { ...accountBundle, id: 'account-tally', module },
+      privateState,
+    });
+
+    expect(module).toHaveBeenCalledOnce();
+    expect(contractsMocks.findDeployedContract).toHaveBeenCalledExactlyOnceWith(
+      providers,
+      expect.objectContaining({
+        contractAddress: 'ac'.repeat(32),
+        initialPrivateState: privateState,
+      }),
+    );
   });
 });

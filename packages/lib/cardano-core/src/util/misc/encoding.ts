@@ -1,4 +1,4 @@
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export const bytesToHex = (bytes: Uint8Array): HexBlob =>
   Buffer.from(bytes).toString('hex') as HexBlob;

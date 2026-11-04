@@ -1,0 +1,6 @@
+kind: Fixed
+body: Screen readers can focus and edit wallet text fields directly without an extra focusable wrapper.
+time: 2026-10-24T04:51:49.994715632-03:00
+custom:
+  Build: stable
+  Package: sdk

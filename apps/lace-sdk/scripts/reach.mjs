@@ -10,7 +10,11 @@ import path from 'node:path';
 
 import ts from 'typescript';
 
-import { channelEntryNames, entrySource } from './entries.mjs';
+import {
+  channelBuildInputSources,
+  channelEntryNames,
+  entrySource,
+} from './entries.mjs';
 
 export const packageDirectory = path.resolve(import.meta.dirname, '..');
 
@@ -47,7 +51,18 @@ export const channelEntries = channel =>
   );
 
 /**
- * The SDK's own source files a build channel reaches from its entries, as
+ * Every file a build channel compiles from: its entries and the build inputs
+ * that are not entries, such as the canary build's worker.
+ */
+export const channelBuildRoots = channel => [
+  ...channelEntries(channel),
+  ...channelBuildInputSources(channel).map(source =>
+    path.join(packageDirectory, source),
+  ),
+];
+
+/**
+ * The SDK's own source files a build channel reaches from its build roots, as
  * real paths. reachedWorkspaceFiles collects the workspace packages' source
  * alone; the SDK's own counts whole (release-scope.ts), less what only the
  * other channel's build reaches.
@@ -61,7 +76,7 @@ export const reachedOwnSource = channel => {
       channel,
       new Set(
         ts
-          .createProgram(channelEntries(channel), compilerOptions(channel))
+          .createProgram(channelBuildRoots(channel), compilerOptions(channel))
           .getSourceFiles()
           .map(file => fs.realpathSync(file.fileName))
           .filter(file => file.startsWith(source)),

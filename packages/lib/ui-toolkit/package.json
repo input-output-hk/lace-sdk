@@ -9,6 +9,7 @@
     "src/*"
   ],
   "dependencies": {
+    "@cardano-sdk/core": "0.47.1",
     "@gorhom/portal": "^1.0.14",
     "@hugeicons/core-free-icons": "^4.3.4",
     "@hugeicons/react-native": "^1.0.11",

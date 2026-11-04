@@ -29,6 +29,7 @@
     "@lace-contract/wallet-repo": "*",
     "@lace-lib/cardano-custody": "*",
     "@lace-lib/core": "*",
+    "@lace-lib/hydra-head": "*",
     "@lace-lib/util": "*",
     "@lace-lib/util-render": "*",
     "libsodium-wrappers-sumo": "^0.8.4",

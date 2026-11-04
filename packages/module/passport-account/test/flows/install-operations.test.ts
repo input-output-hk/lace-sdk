@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import {
   AccAddress,
+  AccBindingVersion,
   AuthorityRetiredError,
   MaintenanceAuthorityMismatchError,
   MaintenanceUpdateRefusedError,
@@ -13,6 +14,7 @@ import { HexBytes } from '@lace-lib/util';
 import * as ledger from '@midnightntwrk/ledger-v9';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { accountBundle, createBundleRegistry } from '../../src/acc/bundle';
 import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import {
@@ -20,6 +22,8 @@ import {
   encodeDevicePublicKey,
 } from '../../src/acc/envelopes';
 import { GRANTEE_WITHDRAWAL_CIRCUITS } from '../../src/acc/grant-circuits';
+import { accManifest } from '../../src/acc/manifest';
+import { createPassportRegistry } from '../../src/acc/registry';
 import { JubjubDevice } from '../../src/acc/signer';
 import { installOperations } from '../../src/flows/install-operations';
 
@@ -29,6 +33,7 @@ import type { submitMaintenanceUpdate } from '../../src/acc/deploy';
 import type * as AccountCall from '../../src/flows/account-call';
 import type { FlowContext } from '../../src/flows/types';
 import type {
+  AccountBundle,
   KeySessionFlow,
   MaintenanceVerifyingKey,
   PassportAccountInfo,
@@ -79,6 +84,7 @@ const network = {
 const account: PassportAccountInfo = {
   address,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: NETWORK,
 };
@@ -86,6 +92,8 @@ const indexer = vi.hoisted(() => ({ tag: 'indexer' }));
 const devicePublicKey = encodeDevicePublicKey(new JubjubDevice(31n).pk);
 const K256_WITHDRAWALS = GRANTEE_WITHDRAWAL_CIRCUITS['secp256k1-ecdsa'];
 const RECOVERY_OPERATION = 'recover_submit';
+const COUNTER_OPERATION = 'counter_bump_with_jubjub';
+const COUNTER_BUNDLE_ID = 'account-counter';
 
 /**
  * A verifier key the pinned compiler line emits, standing in for every
@@ -99,8 +107,44 @@ const verifierKey = new Uint8Array(
 for (const operation of [...DEPLOYED_OPERATIONS, RECOVERY_OPERATION]) {
   pins.expectedVk[operation] = HexBytes.fromByteArray(sha256(verifierKey));
 }
+/** Another key under the same header: what the counter build pins for its own operation. */
+const counterKey = verifierKey.slice();
+counterKey[counterKey.length - 1] ^= 1;
 
-const getVerifierKey = vi.fn(async (_operation: string) => verifierKey);
+/** A build of the account with one more operation, pinning its own verifier key for it. */
+const counterBundle: AccountBundle = {
+  id: COUNTER_BUNDLE_ID,
+  bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  module: async () => ({
+    Contract: class {},
+    ledger: () => ({}),
+    pureCircuits: {},
+    expectedVk: {},
+    circuitSignatures: {},
+    declaredInterfaces: {},
+  }),
+  manifest: {
+    ...accManifest,
+    bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  },
+  operations: [...DEPLOYED_OPERATIONS, COUNTER_OPERATION],
+  verifierKeys: {
+    ...pins.expectedVk,
+    [COUNTER_OPERATION]: HexBytes.fromByteArray(sha256(counterKey)),
+  },
+  constructorArgs: [],
+  circuits: {},
+};
+/** The same account, recognised on chain as one of the counter build. */
+const counterAccount: PassportAccountInfo = {
+  ...account,
+  bindingVersion: counterBundle.bindingVersion,
+  bundleId: COUNTER_BUNDLE_ID,
+};
+
+const getVerifierKey = vi.fn(async (operation: string) =>
+  operation === COUNTER_OPERATION ? counterKey : verifierKey,
+);
 const publicDataProvider = { tag: 'public-data' };
 const providers = { publicDataProvider, zkConfigProvider: { getVerifierKey } };
 
@@ -123,10 +167,13 @@ const ledgerOf = (encKey: Uint8Array, inbox: readonly Uint8Array[]) => ({
 /**
  * An account this device created, its envelopes the whole inbox, with
  * the authority its roster key derives and the ledger the indexer
- * serves for it.
+ * serves for it. The key registers `bundles` beside the default.
  */
-const createdAccount = async () => {
-  const encryptionKey = devEncryptionKey();
+const createdAccount = async (bundles?: readonly AccountBundle[]) => {
+  const encryptionKey = devEncryptionKey(
+    undefined,
+    createPassportRegistry({ bundles }),
+  );
   const created = await encryptionKey.createKeys(NETWORK, { devicePublicKey });
   mocks.queryAccountLedger.mockResolvedValue(
     ledgerOf(created.encKey, created.envelopes),
@@ -167,6 +214,7 @@ const contextOver = (encryptionKey: PassportEncryptionKey): FlowContext => ({
   },
   onProgress: vi.fn(),
   rpId: undefined,
+  bundles: createBundleRegistry([counterBundle]),
 });
 
 /** The operations an account holds when it lacks `missing` of the roster. */
@@ -239,6 +287,9 @@ describe('installOperations', () => {
       network,
       prover: context.seams.passportProver,
       sponsor: context.seams.passportSponsor,
+      bundle: accountBundle,
+      bundles: [accountBundle, counterBundle],
+      calledContracts: [],
       onStage: context.onProgress,
     });
     expect(installedPerUpdate()).toEqual([K256_WITHDRAWALS]);
@@ -254,6 +305,98 @@ describe('installOperations', () => {
     expect(
       ledger.verifySignature(authority, update.dataToSign, signature),
     ).toBe(true);
+  });
+
+  it('installs on an account of a registered bundle the operation its roster adds, under that bundle', async () => {
+    const {
+      encryptionKey,
+      created: { authority },
+    } = await createdAccount([counterBundle]);
+    chain.committee = [authority];
+    mocks.queryAccountOperations.mockResolvedValue(DEPLOYED_OPERATIONS);
+    const signMaintenanceUpdate = vi.spyOn(
+      encryptionKey,
+      'signMaintenanceUpdate',
+    );
+    const context = contextOver(encryptionKey);
+
+    await expect(
+      installOperations(
+        { account: counterAccount, operations: [COUNTER_OPERATION] },
+        context,
+      ),
+    ).resolves.toEqual({
+      operations: [COUNTER_OPERATION],
+      alreadyInstalled: [],
+    });
+
+    expect(withKeySession).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function),
+      {
+        kind: 'install-operations',
+        account: AccAddress(address),
+        operations: [COUNTER_OPERATION],
+        bundleId: COUNTER_BUNDLE_ID,
+      },
+    );
+    expect(mocks.createMidnightProviders).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        bundle: counterBundle,
+        bundles: [accountBundle, counterBundle],
+        calledContracts: [],
+      }),
+    );
+    expect(signMaintenanceUpdate).toHaveBeenCalledExactlyOnceWith(
+      NETWORK,
+      expect.objectContaining({
+        changes: {
+          kind: 'insert-verifier-keys',
+          bundleId: COUNTER_BUNDLE_ID,
+          inserts: [{ operation: COUNTER_OPERATION, verifierKey: counterKey }],
+        },
+      }),
+    );
+    expect(installedPerUpdate()).toEqual([[COUNTER_OPERATION]]);
+  });
+
+  it('refuses, on an account of the default bundle, an operation only another registered bundle adds', async () => {
+    const {
+      encryptionKey,
+      created: { authority },
+    } = await createdAccount();
+    chain.committee = [authority];
+    mocks.queryAccountOperations.mockResolvedValue(DEPLOYED_OPERATIONS);
+
+    await expect(
+      installOperations(
+        { account, operations: [COUNTER_OPERATION] },
+        contextOver(encryptionKey),
+      ),
+    ).rejects.toThrow(
+      new OperationNotInstallableError(
+        `Not operations of the account bundle 'account': ${COUNTER_OPERATION}.`,
+      ),
+    );
+    expect(withKeySession).not.toHaveBeenCalled();
+    expect(mocks.submitMaintenanceUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses, on an account of a registered bundle, a verifier key that is not the one that bundle pins, submitting nothing', async () => {
+    const {
+      encryptionKey,
+      created: { authority },
+    } = await createdAccount([counterBundle]);
+    chain.committee = [authority];
+    mocks.queryAccountOperations.mockResolvedValue(DEPLOYED_OPERATIONS);
+    getVerifierKey.mockResolvedValueOnce(verifierKey);
+
+    await expect(
+      installOperations(
+        { account: counterAccount, operations: [COUNTER_OPERATION] },
+        contextOver(encryptionKey),
+      ),
+    ).rejects.toThrow(MaintenanceUpdateRefusedError);
+    expect(mocks.submitMaintenanceUpdate).not.toHaveBeenCalled();
   });
 
   it('follows a rotation that lands while the verifier keys download, signing with the new roster key', async () => {
@@ -375,7 +518,7 @@ describe('installOperations', () => {
 
     await expect(install).rejects.toBeInstanceOf(OperationNotInstallableError);
     await expect(install).rejects.toThrow(
-      'Not operations this module deploys: recover_submit, add_device_with_k256.',
+      "Not operations of the account bundle 'account': recover_submit, add_device_with_k256.",
     );
     expect(withKeySession).not.toHaveBeenCalled();
     expect(mocks.submitMaintenanceUpdate).not.toHaveBeenCalled();
@@ -489,7 +632,7 @@ describe('installOperations', () => {
       ),
     ).rejects.toThrow(
       new OperationNotInstallableError(
-        `Not operations this module deploys: ${RECOVERY_OPERATION}.`,
+        `Not operations of the account bundle 'account': ${RECOVERY_OPERATION}.`,
       ),
     );
     expect(withKeySession).not.toHaveBeenCalled();

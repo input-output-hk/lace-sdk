@@ -1,11 +1,14 @@
-import { InvalidArgumentError, InvalidStateError } from '@lace-lib/util/common';
+import {
+  InvalidArgumentError,
+  InvalidStateError,
+} from '@lace-lib/cardano-util';
 
 import { CborReader, CborReaderState, CborTag } from '../CBOR';
 import { CborSet, Credential, Hash } from '../Common';
 
 import type { Cardano } from '../..';
 import type * as Crypto from '@lace-lib/cardano-crypto';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** The wire representation used by a {@link Guards} instance. */
 export enum GuardsKind {

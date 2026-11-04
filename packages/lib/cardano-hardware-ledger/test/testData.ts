@@ -2,7 +2,7 @@ import * as Ledger from '@cardano-foundation/ledgerjs-hw-app-cardano';
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
 import { AddressType, KeyRole } from '@lace-lib/cardano-key-management';
-import { Base64Blob, HexBlob } from '@lace-lib/util/common';
+import { Base64Blob, HexBlob } from '@lace-lib/cardano-util';
 
 import type { LedgerTxTransformerContext } from '../src';
 export const rewardAccount = Cardano.RewardAccount(

@@ -16,10 +16,12 @@ import {
   defer,
   EMPTY,
   firstValueFrom,
+  map,
   NEVER,
   of,
   Subject,
   TimeoutError,
+  timer,
 } from 'rxjs';
 import { dummyLogger } from 'ts-log';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,7 +39,10 @@ import {
   proveMidnightTx,
 } from '../src/prove-midnight-tx';
 
-import type { MidnightTxRecipe } from '../src/build-midnight-transfer';
+import { pageModeEngineAccess } from './midnight-engine-access-fake';
+import { decodeLedgerFakes, ledgerFake } from './midnight-ledger-fakes';
+import { toMidnightTxRecipe } from './midnight-opaque-fixtures';
+
 import type { WalletWithMidnight } from '../src/midnight-wallet';
 import type {
   AttestationProgressEvent,
@@ -48,7 +53,11 @@ import type {
 } from '@lace-contract/midnight-context';
 import type { ModuleInitProps } from '@lace-contract/module';
 import type { AttestedProverProvider } from '@lace-lib/vendor/attested-proving-service';
-import type { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';
+import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
+import type {
+  BalancingRecipe,
+  WalletFacade,
+} from '@midnightntwrk/wallet-sdk/facade';
 
 const ledgerMocks = vi.hoisted(() => ({
   createCheckPayload: vi.fn(() => new Uint8Array([0xcc])),
@@ -95,7 +104,7 @@ const fixture = () => {
       network: { selectAllActiveNetworkIds$: networks },
     } as unknown as WalletWithMidnight['stateObservables'],
     _loadModules: (async () => [
-      registry,
+      pageModeEngineAccess(registry),
     ]) as unknown as WalletWithMidnight['_loadModules'],
   };
   const transport = {
@@ -103,9 +112,11 @@ const fixture = () => {
     prove: vi.fn(async () => new Uint8Array([2])),
   };
   const engine = {
+    accountId,
     proofCircuitProvider: createCircuitProviderFromTransport(transport),
   } as unknown as MidnightWallet;
   registry.next({ [accountId]: engine });
+  decodeLedgerFakes();
   return { wallet, registry, networks, transport, engine };
 };
 const keyMaterialProvider = () => ({
@@ -125,7 +136,14 @@ const provider = (
   },
   ...overrides,
 });
-const recipe = {} as MidnightTxRecipe;
+const recipe = {
+  type: 'UNPROVEN_TRANSACTION',
+  transaction: ledgerFake({}),
+} as unknown as BalancingRecipe;
+const proved = ledgerFake({}) as unknown as FinalizedTransaction;
+// The opaque value a build returned for the recipe under this engine.
+const recipeFor = (engine: MidnightWallet, built = recipe) =>
+  toMidnightTxRecipe(engine, built);
 const phase: AttestationProgressEvent = {
   type: 'phase',
   phase: 'proving',
@@ -394,7 +412,7 @@ describe('operation-scoped proving progress', () => {
       };
       const onProgress = vi.fn();
       const pending = proveMidnightTx(wallet, {
-        recipe,
+        recipe: recipeFor(engine),
         onProgress,
         proveTimeout: 20,
       });
@@ -405,10 +423,16 @@ describe('operation-scoped proving progress', () => {
         { interval: 1 },
       );
       emit(phase);
-      if (outcome === 'complete') operation.next({} as never);
+      if (outcome === 'complete') operation.next(proved as never);
       if (outcome === 'failure') operation.error(new Error('proof failed'));
       const result = await pending;
       expect(result.isOk()).toBe(outcome === 'complete');
+      // A timed-out proof keeps its recipe held, so its operation stays observed until the engine settles it.
+      if (outcome === 'timeout') {
+        emit(phase);
+        expect(operation.observed).toBe(true);
+        operation.error(new Error('proof failed'));
+      }
       expect(operation.observed).toBe(false);
       emit(phase);
       expect(onProgress).toHaveBeenCalledTimes(1);
@@ -426,19 +450,21 @@ describe('operation-scoped proving progress', () => {
     engine.finalizeRecipe = (value, emit) =>
       defer(async () => access.finalizeRecipe(facade, value, emit));
     let finish!: () => void;
-    const firstRecipe = {
+    const firstRecipe = recipeFor(engine, {
       type: 'UNPROVEN_TRANSACTION',
-      transaction: {
+      transaction: ledgerFake({
         prove: async () =>
-          new Promise<void>(resolve => {
-            finish = resolve;
+          new Promise(resolve => {
+            finish = () => {
+              resolve(proved);
+            };
           }),
-      },
-    } as unknown as MidnightTxRecipe;
-    const secondRecipe = {
+      }),
+    } as unknown as BalancingRecipe);
+    const secondRecipe = recipeFor(engine, {
       type: 'UNPROVEN_TRANSACTION',
-      transaction: { prove: async () => ({}) },
-    } as unknown as MidnightTxRecipe;
+      transaction: ledgerFake({ prove: async () => proved }),
+    } as unknown as BalancingRecipe);
     const firstEvents: AttestationProgressEvent[] = [];
     const secondEvents: AttestationProgressEvent[] = [];
     const pending = proveMidnightTx(wallet, {
@@ -503,33 +529,34 @@ describe('proving timeouts', () => {
       value => ({ value }),
       (error: unknown) => ({ value: undefined, error }),
     );
+  type Stalled = ReturnType<typeof stalledProving>;
   const helpers: [
     string,
-    (wallet: WalletWithMidnight, proveTimeout?: number) => Promise<unknown>,
+    (context: Stalled, proveTimeout?: number) => Promise<unknown>,
   ][] = [
     [
       'proveMidnightTx',
-      async (wallet, proveTimeout) =>
-        proveMidnightTx(wallet, { recipe, proveTimeout }),
+      async ({ wallet, engine }, proveTimeout) =>
+        proveMidnightTx(wallet, { recipe: recipeFor(engine), proveTimeout }),
     ],
     [
       'balanceMidnightSealedTransaction',
-      async (wallet, proveTimeout) =>
+      async ({ wallet }, proveTimeout) =>
         balanceMidnightSealedTransaction(wallet, { tx: '00', proveTimeout }),
     ],
     [
       'balanceMidnightUnsealedTransaction',
-      async (wallet, proveTimeout) =>
+      async ({ wallet }, proveTimeout) =>
         balanceMidnightUnsealedTransaction(wallet, { tx: '00', proveTimeout }),
     ],
     [
       'makeMidnightTransfer',
-      async (wallet, proveTimeout) =>
+      async ({ wallet }, proveTimeout) =>
         makeMidnightTransfer(wallet, { desiredOutputs: [], proveTimeout }),
     ],
     [
       'makeMidnightIntent',
-      async (wallet, proveTimeout) =>
+      async ({ wallet }, proveTimeout) =>
         makeMidnightIntent(wallet, {
           desiredInputs: [],
           desiredOutputs: [],
@@ -539,12 +566,12 @@ describe('proving timeouts', () => {
     ],
     [
       'getMidnightProvingProvider check',
-      async (wallet, proveTimeout) =>
+      async ({ wallet }, proveTimeout) =>
         (await circuit(wallet, proveTimeout)).check(new Uint8Array(), 'c'),
     ],
     [
       'getMidnightProvingProvider prove',
-      async (wallet, proveTimeout) =>
+      async ({ wallet }, proveTimeout) =>
         (await circuit(wallet, proveTimeout)).prove(new Uint8Array(), 'c'),
     ],
   ];
@@ -555,9 +582,43 @@ describe('proving timeouts', () => {
   it.each(helpers)(
     '%s stops waiting for a stalled proof server after proveTimeout',
     async (_name, call) => {
-      const { wallet } = stalledProving();
-      const outcome = await settle(call(wallet, 20));
+      const outcome = await settle(call(stalledProving(), 20));
       expect(timedOut(outcome)).toBeInstanceOf(TimeoutError);
+    },
+  );
+
+  it.each(
+    helpers.filter(([name]) =>
+      [
+        'balanceMidnightSealedTransaction',
+        'balanceMidnightUnsealedTransaction',
+        'makeMidnightTransfer',
+        'makeMidnightIntent',
+      ].includes(name),
+    ),
+  )(
+    '%s gives proveTimeout to proving only: balancing and signing that take longer still end in a proved transaction',
+    async (_name, call) => {
+      const context = stalledProving();
+      const slowly = () => timer(40).pipe(map(() => recipe));
+      Object.assign(context.engine, {
+        balanceFinalizedTransaction: vi.fn(slowly),
+        balanceUnboundTransaction: vi.fn(slowly),
+        transferTransaction: vi.fn(slowly),
+        balanceUnprovenTransaction: vi.fn(slowly),
+        initSwap: vi.fn(slowly),
+        signRecipe: vi.fn(slowly),
+        finalizeRecipe: vi.fn(() => of(proved)),
+      });
+
+      const result = (await call(context, 30)) as {
+        isOk: () => boolean;
+        error?: unknown;
+      };
+
+      expect(result.error).toBeUndefined();
+      expect(result.isOk()).toBe(true);
+      expect(context.engine.finalizeRecipe).toHaveBeenCalledOnce();
     },
   );
 
@@ -565,9 +626,9 @@ describe('proving timeouts', () => {
     '%s waits the proveMidnightTx default before giving up',
     async (_name, call) => {
       vi.useFakeTimers();
-      const { wallet } = stalledProving();
+      const context = stalledProving();
       let outcome: { value: unknown; error?: unknown } | undefined;
-      void settle(call(wallet)).then(settled => {
+      void settle(call(context)).then(settled => {
         outcome = settled;
       });
       await vi.advanceTimersByTimeAsync(DEFAULT_PROVE_TIMEOUT_MS - 1);
@@ -581,11 +642,12 @@ describe('proving timeouts', () => {
   it.each([2 ** 31, Number.POSITIVE_INFINITY, 0, -1, Number.NaN])(
     'every proving helper refuses proveTimeout %s as Err before proving',
     async proveTimeout => {
-      const { wallet, engine, transport } = stalledProving();
+      const context = stalledProving();
+      const { wallet, engine, transport } = context;
       const results = await Promise.all([
         ...helpers
           .filter(([name]) => !name.startsWith('getMidnightProvingProvider'))
-          .map(async ([, call]) => call(wallet, proveTimeout)),
+          .map(async ([, call]) => call(context, proveTimeout)),
         getMidnightProvingProvider(wallet, {
           keyMaterialProvider: keyMaterialProvider(),
           proveTimeout,
@@ -612,9 +674,9 @@ describe('proving timeouts', () => {
     '%s keeps waiting under the largest delay a timer honours',
     async (_name, call) => {
       vi.useFakeTimers();
-      const { wallet } = stalledProving();
+      const context = stalledProving();
       let outcome: { value: unknown; error?: unknown } | undefined;
-      void settle(call(wallet, 2 ** 31 - 1)).then(settled => {
+      void settle(call(context, 2 ** 31 - 1)).then(settled => {
         outcome = settled;
       });
       await vi.advanceTimersByTimeAsync(DEFAULT_PROVE_TIMEOUT_MS * 2);

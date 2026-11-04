@@ -52,10 +52,7 @@ const NETWORK_ID_PATTERN = /^[a-z1-9-]+$/;
 const HTTP_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:']);
 const WS_PROTOCOLS: ReadonlySet<string> = new Set(['ws:', 'wss:']);
 
-const protocolOf = (
-  field: keyof PassportNetworkConfig,
-  url: string,
-): string => {
+const protocolOf = (field: string, url: string): string => {
   try {
     return new URL(url).protocol;
   } catch {
@@ -66,7 +63,7 @@ const protocolOf = (
 };
 
 const requireProtocol = (
-  field: keyof PassportNetworkConfig,
+  field: string,
   url: string,
   allowed: ReadonlySet<string>,
 ): void => {
@@ -86,8 +83,8 @@ const requireProtocol = (
  * inside the first chain flow. The node and artefact URLs are reached over
  * HTTP and the node URL is also rewritten to its websocket relay by
  * replacing the scheme, so both must be http(s); the indexer subscription
- * URL is opened as a websocket, so it must be ws(s). Returns the config it
- * was given.
+ * URL is opened as a websocket, so it must be ws(s). Returns the config
+ * it was given.
  */
 export const validatePassportNetwork = (
   network: PassportNetworkConfig,

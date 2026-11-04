@@ -13,6 +13,11 @@ import type {
 } from './types';
 import type { Cardano } from '@cardano-sdk/core';
 import type { DynamicallyLoadedInit } from '@lace-contract/module';
+import type {
+  HydraDepositStatus,
+  HydraTxClassification,
+  HydraTxProtocol,
+} from '@lace-lib/hydra-head';
 import type { StateFromReducersMapObject } from '@reduxjs/toolkit';
 
 type CardanoDependencies = CardanoInMemorySigningDependencies &
@@ -96,6 +101,52 @@ export type CardanoActivityUtxoMetadata = {
 export type CardanoNightDesignationActivityMetadata = {
   action: 'deregister' | 'designate' | 'update';
   dustPubkeyHex?: string;
+};
+
+/**
+ * What a Cardano activity carries when its transaction is a Hydra Head layer 1
+ * step: a deposit into a head, a recover, an increment, a fanout or another
+ * head transaction. The activity keeps its Send or Receive type; this only
+ * labels it.
+ */
+export type CardanoHydraActivityMetadata = {
+  /**
+   * The Hydra protocol generation from the transaction's Hydra marker. Absent
+   * when the transaction carries no marker and was recognised by its script
+   * addresses alone.
+   */
+  protocol?: HydraTxProtocol;
+  /**
+   * The Hydra transaction name, for example `DepositTx`, inferred from the
+   * script addresses the transaction spends and pays. `HeadTx` is a head step
+   * the addresses could not tell apart and the marker did not name.
+   */
+  txName: HydraTxClassification;
+  /** Hex policy id of the head state token, when the transaction reveals it. */
+  headId?: string;
+  /**
+   * ISO 8601 instant up to and including which the head may absorb the
+   * deposit; set on deposits only. A string so the activity stays
+   * serializable.
+   */
+  depositDeadline?: string;
+};
+
+/**
+ * The live state of a Cardano activity whose transaction created a Hydra
+ * deposit that still sits at the deposit validator. It comes from the indexed
+ * deposit UTxO and the current time and is never stored on the activity: once
+ * the head absorbs the deposit or its owner recovers it, the activity has no
+ * state.
+ */
+export type CardanoHydraDepositActivityState = {
+  /** Whether the head may still absorb the deposit or it can only be recovered. */
+  status: HydraDepositStatus;
+  /**
+   * ISO 8601 instant up to and including which the head may absorb the
+   * deposit, read from the indexed deposit datum.
+   */
+  deadline: string;
 };
 
 export type CardanoActivityBlockchainSpecific = ActivityExtensionMetadata &

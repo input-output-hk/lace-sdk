@@ -1,5 +1,7 @@
 import { merge } from 'rxjs';
 
+import { MIDNIGHT_CHECKPOINT_COLLECTION } from '../checkpoint-collection';
+
 import { loadActivityDetails, updateActivities } from './activities';
 import { watchProofActivities, dismissProofActivity } from './proof-activities';
 import { migrateUnavailableProofServerSelection } from './proof-server-kill-switch';
@@ -25,35 +27,42 @@ import type { SerializedMidnightWallet } from '@lace-contract/midnight-context';
 import type { LaceInitSync } from '@lace-contract/module';
 import type { CollectionStorage } from '@lace-contract/storage';
 
+type StorageSideEffects = (
+  storage: CollectionStorage<SerializedMidnightWallet>,
+) => SideEffect[];
+
+// Where the engine keeps its checkpoints, wallet deletion and bulk resync wipe them: this page's storage unless the
+// engine runs in a worker.
+const pageStorageSideEffects: StorageSideEffects = storage => [
+  createDeleteWalletSideEffect(storage),
+  createClearWalletStateOnResync(storage),
+];
+
 /**
  * The engine's side effects plus the ones a loadout adds over the same
  * persisted wallet-state storage. The engine set reads only the contracts
  * the engine itself depends on; a loadout decides what else it can run.
+ * `storageSideEffects` replaces the engine's wallet deletion and bulk resync
+ * when the engine keeps its checkpoints elsewhere.
  */
 export const createInitializeSideEffects =
   (
-    loadoutSideEffects: (
-      storage: CollectionStorage<SerializedMidnightWallet>,
-    ) => SideEffect[],
+    loadoutSideEffects: StorageSideEffects,
+    storageSideEffects: StorageSideEffects = pageStorageSideEffects,
   ): LaceInitSync<SideEffect[]> =>
   () =>
     [
       (actionObservables, stateObservables, dependencies) => {
         const midnightStateStorage =
-          dependencies.createCollectionStorage<SerializedMidnightWallet>({
-            collectionId: 'midnightWalletState',
-            // accountId is the id every lookup keys on, and unlike
-            // walletId+networkId it cannot collide between two entries — a
-            // collision here would silently merge two accounts' documents.
-            computeDocId: wallet => String(wallet.accountId),
-          });
+          dependencies.createCollectionStorage<SerializedMidnightWallet>(
+            MIDNIGHT_CHECKPOINT_COLLECTION,
+          );
 
         return merge(
           ...[
             updateActivities,
             loadActivityDetails,
-            createDeleteWalletSideEffect(midnightStateStorage),
-            createClearWalletStateOnResync(midnightStateStorage),
+            ...storageSideEffects(midnightStateStorage),
             requestResyncWallet,
             autoDismissMidnightSyncFailureOnResume,
             autoDismissMidnightSyncFailureOnSyncSuccess,

@@ -19,6 +19,7 @@ import {
 
 import { BlockfrostProvider } from '../blockfrost-provider';
 import { BlockfrostToCardanoSDK } from '../blockfrost-to-cardano-sdk';
+import { MAX_TRANSACTION_DEPTH, isCborWithinLimits } from '../cbor-limits';
 
 import type { BlockfrostUtxo } from '../blockfrost-to-cardano-sdk';
 import type { Responses } from '@blockfrost/blockfrost-js';
@@ -115,12 +116,14 @@ export class BlockfrostUtxoProvider extends BlockfrostProvider {
    * a valid empty result here, not an error.
    *
    * `address` is a payment address (e.g. `addr1...` / a script `addr1w...`).
-   * `pageSize` is the number of UTxOs per Blockfrost page (default 100), and
+   * `pageSize` is the number of UTxOs per Blockfrost page (default 100),
+   * `maxPages` the pages read at most (default unbounded), and
    * `withReferenceScripts` defaults to false.
    */
   public getUtxosAtAddress({
     address,
     pageSize = 100,
+    maxPages,
     withReferenceScripts = false,
   }: GetUtxosAtAddressProps): Observable<
     Result<Cardano.Utxo[], ProviderError>
@@ -129,6 +132,7 @@ export class BlockfrostUtxoProvider extends BlockfrostProvider {
       this.paginatedRequests<Responses['address_utxo_content']>({
         endpoint: `addresses/${address}/utxos?order=desc`,
         pageSize,
+        maxPages,
       }).catch((error: unknown) => {
         // Blockfrost responds 404 for an address with no UTxO history — a
         // valid empty result, not an error. This applies to the listing
@@ -205,6 +209,13 @@ export class BlockfrostUtxoProvider extends BlockfrostProvider {
     );
   }
 
+  /**
+   * The producing transaction, decoded. A transaction that is larger or
+   * nests deeper than the decoders are allowed is refused before any
+   * decoding, as the inline datums of a listing are: anyone can pay to a
+   * listed address with a reference script and a datum crafted to stall the
+   * decoder, and its UTxO is excluded like any other unreadable one.
+   */
   async #readTransaction(
     hash: string,
   ): Promise<Result<Serialization.Transaction, unknown>> {
@@ -212,6 +223,15 @@ export class BlockfrostUtxoProvider extends BlockfrostProvider {
       const { cbor } = await this.request<Responses['tx_content_cbor']>(
         `txs/${hash}/cbor`,
       );
+      if (!isCborWithinLimits(cbor, MAX_TRANSACTION_DEPTH)) {
+        return Err(
+          new ProviderError(
+            ProviderFailure.InvalidResponse,
+            undefined,
+            `Transaction ${hash} is larger or nests deeper than can be decoded`,
+          ),
+        );
+      }
       return Ok(Serialization.Transaction.fromCbor(Serialization.TxCBOR(cbor)));
     } catch (error) {
       return Err(error);

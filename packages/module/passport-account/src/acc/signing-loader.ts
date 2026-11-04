@@ -1,6 +1,8 @@
+import type { BundleRegistry } from './bundle';
 import type * as deviceReadersModule from './device-readers';
 import type * as grantsModule from './grants';
 import type * as jubjubAuthoriserModule from './jubjub-authoriser';
+import type { PassportRegistry } from './registry';
 import type * as signerModule from './signer';
 
 /** The jubjub signing surface the passkey ceremony builds on. */
@@ -68,3 +70,29 @@ export type DeviceEntryDerivation = typeof deviceReadersModule;
 export const loadDeviceEntryDerivation = cachedLoad(
   async () => import('./device-readers'),
 );
+
+/**
+ * Cached dynamic import of the bundle registry, whose default bundle
+ * carries the verifier key table of the generated module and so evaluates
+ * it: the signer reaches it only when a flow names a build, a circuit or
+ * operations it must hold to what it pins.
+ */
+const loadAccountBundles = cachedLoad(async () => import('./bundle'));
+
+/**
+ * A loader of the registry over the default bundle and the `registry` a
+ * host registers, built once over the cached import of the bundle
+ * registry: a seam that holds a request to a bundle's roster and pins
+ * resolves the bundle through it, and so evaluates the generated module
+ * only when it first does. A registry refused for a bundle that breaks a
+ * rule is retried on the next call, as a failed load is.
+ */
+export const bundleRegistryLoader = (
+  registry?: PassportRegistry,
+): (() => Promise<BundleRegistry>) =>
+  cachedLoad(async () =>
+    (await loadAccountBundles()).createBundleRegistry(
+      registry?.bundles,
+      registry?.calledContracts,
+    ),
+  );

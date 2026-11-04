@@ -1,5 +1,5 @@
 import { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
-import { BigIntMath } from '@lace-lib/util/common';
+import { BigIntMath } from '@lace-lib/cardano-util';
 
 import * as Address from '../../Cardano/Address';
 import * as Cardano from '../../Cardano/types';

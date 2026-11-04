@@ -1,10 +1,10 @@
 import { Cardano } from '@lace-lib/cardano-core';
 import { util } from '@lace-lib/cardano-key-management';
-import { areStringsEqualInConstantTime } from '@lace-lib/util/common';
+import { areStringsEqualInConstantTime } from '@lace-lib/cardano-util';
 
 import type { TrezorTxTransformerContext } from '../types';
 import type * as Crypto from '@lace-lib/cardano-crypto';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 import type * as Trezor from '@trezor/connect';
 
 export const toRequiredSigner: Transform<

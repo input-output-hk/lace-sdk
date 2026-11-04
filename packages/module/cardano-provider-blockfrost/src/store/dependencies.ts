@@ -362,6 +362,13 @@ export const initializeDependencies: LaceInit<
         );
         return activityProvider.getAddressTransactionHistory(props);
       },
+      getAssetTransactionHistory: (props, context) => {
+        const activityProvider = getAccountActivityProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        return activityProvider.getAssetTransactionHistory(props);
+      },
       getTransactionDetails: (txId: Cardano.TransactionId, context) => {
         const activityProvider = getAccountActivityProvider(
           getBlockfrostConfig(context, blockfrostConfigs),

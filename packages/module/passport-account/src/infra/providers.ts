@@ -3,7 +3,6 @@ import {
   loadVerifierKey,
   UnknownCircuitError,
 } from '../acc/artefact-loader';
-import { accManifest } from '../acc/manifest';
 
 import { createManifestKeyMaterialResolver } from './http-prover';
 import { applyNetworkId } from './network-id';
@@ -11,8 +10,10 @@ import { applyNetworkId } from './network-id';
 import type { FetchBytes } from '../acc/artefact-loader';
 import type { AccCircuitAssets } from '../acc/artefact-loader';
 import type { AccProviders, RandomBytes } from '../acc/deploy';
-import type { AccManifest, AccProvingCircuitName } from '../acc/manifest';
 import type {
+  AccountBundle,
+  CalledContract,
+  CalleeModule,
   FeeSponsor,
   PassportNetworkConfig,
   PassportProver,
@@ -83,16 +84,32 @@ const defaultFetchBytes: FetchBytes = async url => {
 };
 
 export type CreateMidnightProvidersProps = {
-  /** Endpoints of the Midnight network the account lives on. */
+  /** Endpoints of the Midnight network the account lives on, with its called contracts. */
   network: PassportNetworkConfig;
   /** Prover the proof provider adapts; resolves its own key material. */
   prover: PassportProver;
   /** Fee sponsor the wallet provider delegates balancing to. */
   sponsor: FeeSponsor;
+  /**
+   * The bundle of the account the providers serve, whose pins and
+   * artefact URL the ZK assets are downloaded by; defaults to the
+   * vendored one, loaded only then, so the providers reach no generated
+   * contract code until a flow runs.
+   */
+  bundle?: AccountBundle;
+  /**
+   * Every registered bundle, the default first, which the key material
+   * lookup joins across by verifier key hash; defaults to `bundle` alone.
+   */
+  bundles?: readonly AccountBundle[];
+  /**
+   * The contracts the host registered for the bundles' circuits to call,
+   * which the module provider executes and the key material lookup
+   * proves into; none by default.
+   */
+  calledContracts?: readonly CalledContract[];
   /** Artefact download transport; defaults to the global fetch. */
   fetchBytes?: FetchBytes;
-  /** Integrity pins for the ZK assets; defaults to the bundled manifest. */
-  manifest?: AccManifest;
   /** Called when a provider call enters an observable flow stage. */
   onStage?: (stage: MidnightProviderStage) => void;
   /** Randomness for the ephemeral Zswap keys; defaults to Web Crypto. */
@@ -145,16 +162,23 @@ const createInMemoryPrivateStateProvider = () => {
  * swapping the platform seams in where the stock providers would expect a
  * full wallet:
  *
- * - zkConfigProvider downloads ZK assets through {@link loadCircuitAssets},
- *   so every byte is verified against the manifest's sha256 pins. A
- *   verifier key asked for alone is downloaded alone, so deploying an
- *   account fetches no prover key it does not prove with. A circuit this
- *   module never proves, such as a secp256k1 grant withdrawal, has no
- *   manifest entry: its verifier key asked for alone is verified against
- *   the contract's own expected pin, and it is skipped when verifier keys
- *   are listed.
+ * - zkConfigProvider downloads ZK assets through {@link loadCircuitAssets}
+ *   from the bundle's artefact URL, the network's when it has none, so
+ *   every byte is verified against the bundle's sha256 pins. A verifier
+ *   key asked for alone is downloaded alone, so deploying an account
+ *   fetches no prover key it does not prove with. A circuit this module
+ *   never proves, such as a secp256k1 grant withdrawal, has no manifest
+ *   entry: its verifier key asked for alone is verified against the
+ *   bundle's own fingerprint, and it is skipped when verifier keys are
+ *   listed.
  * - proofProvider adapts the {@link PassportProver} to the ledger's
- *   circuit-level proving interface.
+ *   circuit-level proving interface, looking key material up across every
+ *   registered bundle and the network's called contracts by verifier key
+ *   hash, see {@link createManifestKeyMaterialResolver}.
+ * - contractModuleProvider resolves the address a cross-contract call
+ *   names to the generated module of the called contract registered for
+ *   the network under it, and to nothing for any other address; the
+ *   runtime checks the module against the chain itself.
  * - walletProvider delegates balancing to the {@link FeeSponsor}; the user
  *   holds no tokens, so the sponsor covers every fee. Its Zswap keys are
  *   ephemeral, generated per flow: the transactions move no coins, the
@@ -171,8 +195,10 @@ export const createMidnightProviders = async ({
   network,
   prover,
   sponsor,
+  bundle: givenBundle,
+  bundles: givenBundles,
+  calledContracts = [],
   fetchBytes = defaultFetchBytes,
-  manifest = accManifest,
   onStage,
   randomBytes = defaultRandomBytes,
   createPublicDataProvider,
@@ -180,6 +206,8 @@ export const createMidnightProviders = async ({
 }: CreateMidnightProvidersProps): Promise<AccProviders> => {
   await applyNetworkId(network.networkId);
   const ledger = await import('@midnightntwrk/ledger-v9');
+  const bundle = givenBundle ?? (await import('../acc/bundle')).accountBundle;
+  const bundles = givenBundles ?? [bundle];
 
   const zswapKeys = ledger.ZswapSecretKeys.fromSeed(
     randomBytes(ZSWAP_SEED_LENGTH),
@@ -188,64 +216,46 @@ export const createMidnightProviders = async ({
   const encryptionPublicKey = zswapKeys.encryptionPublicKey;
   zswapKeys.clear();
 
-  const assetCache = new Map<
-    AccProvingCircuitName,
-    Promise<AccCircuitAssets>
-  >();
-  const circuitAssets = async (
-    circuit: AccProvingCircuitName,
-  ): Promise<AccCircuitAssets> => {
+  const pins = bundle.manifest.circuits;
+  const artefactUrl = bundle.artefactUrl ?? network.artefactUrl;
+  const assetCache = new Map<string, Promise<AccCircuitAssets>>();
+  const circuitAssets = async (circuit: string): Promise<AccCircuitAssets> => {
     let assets = assetCache.get(circuit);
     if (!assets) {
-      assets = loadCircuitAssets({
-        artefactUrl: network.artefactUrl,
-        circuit,
-        fetchBytes,
-        manifest,
-      });
+      assets = loadCircuitAssets({ artefactUrl, circuit, fetchBytes, pins });
       assetCache.set(circuit, assets);
     }
     return assets;
   };
-  const isPinnedCircuit = (
-    circuitId: string,
-  ): circuitId is AccProvingCircuitName => circuitId in manifest.circuits;
+  const isPinnedCircuit = (circuitId: string): boolean => circuitId in pins;
 
   const verifierKeyCache = new Map<string, Promise<Uint8Array>>();
-  const verifierKeyPin = async (circuitId: string): Promise<string> => {
-    if (isPinnedCircuit(circuitId)) {
-      return manifest.circuits[circuitId].verifierKeySha256;
-    }
-    const { expectedVk } = await import('../acc/acc-module');
-    const expectedSha256 = expectedVk[circuitId];
+  const verifierKeyPin = (circuitId: string): string => {
+    const expectedSha256 =
+      pins[circuitId]?.verifierKeySha256 ?? bundle.verifierKeys[circuitId];
     if (!expectedSha256) throw new UnknownCircuitError(circuitId);
     return expectedSha256;
   };
   const verifierKey = async (circuitId: string): Promise<Uint8Array> => {
-    const cachedAssets = isPinnedCircuit(circuitId)
-      ? assetCache.get(circuitId)
-      : undefined;
+    const cachedAssets = assetCache.get(circuitId);
     if (cachedAssets) return (await cachedAssets).verifierKey;
     let key = verifierKeyCache.get(circuitId);
     if (!key) {
-      key = (async () => {
-        const expectedSha256 = await verifierKeyPin(circuitId);
-        return loadVerifierKey({
-          artefactUrl: network.artefactUrl,
+      key = (async () =>
+        loadVerifierKey({
+          artefactUrl,
           circuit: circuitId,
           fetchBytes,
-          expectedSha256,
-        });
-      })();
+          expectedSha256: verifierKeyPin(circuitId),
+        }))();
       verifierKeyCache.set(circuitId, key);
     }
     return key;
   };
 
   const zkConfigProvider = {
-    getZKIR: async (circuitId: AccProvingCircuitName) =>
-      (await circuitAssets(circuitId)).zkir,
-    getProverKey: async (circuitId: AccProvingCircuitName) =>
+    getZKIR: async (circuitId: string) => (await circuitAssets(circuitId)).zkir,
+    getProverKey: async (circuitId: string) =>
       (await circuitAssets(circuitId)).proverKey,
     getVerifierKey: async (circuitId: string) => verifierKey(circuitId),
     getVerifierKeys: async (circuitIds: string[]) =>
@@ -257,16 +267,27 @@ export const createMidnightProviders = async ({
               [circuitId, await verifierKey(circuitId)] as const,
           ),
       ),
-    get: async (circuitId: AccProvingCircuitName) => ({
+    get: async (circuitId: string) => ({
       circuitId,
       ...(await circuitAssets(circuitId)),
     }),
   };
 
+  const contractModuleProvider = {
+    resolve: (
+      calleeAddress: string,
+    ): (() => Promise<CalleeModule>) | undefined =>
+      calledContracts.find(
+        contract =>
+          contract.address.toLowerCase() === calleeAddress.toLowerCase(),
+      )?.module,
+  };
+
   const resolveKeyMaterial = createManifestKeyMaterialResolver({
     artefactUrl: network.artefactUrl,
     fetchBytes,
-    manifest,
+    bundles,
+    calledContracts,
   });
   const provingProvider = {
     prove: async (
@@ -345,5 +366,6 @@ export const createMidnightProviders = async ({
     privateStateProvider: createInMemoryPrivateStateProvider(),
     walletProvider,
     midnightProvider,
+    contractModuleProvider,
   };
 };

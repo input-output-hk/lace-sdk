@@ -1,6 +1,6 @@
 import type { Cardano } from '@lace-lib/cardano-core';
 import type { Ed25519PublicKeyHex } from '@lace-lib/cardano-crypto';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 import type { Runtime } from 'webextension-polyfill';
 
 /** A hex-encoded string of the corresponding bytes. */

@@ -1,4 +1,30 @@
-import type { MidnightCoinDetail } from './types';
+import { NIGHT_TOKEN_ID } from './const';
+import { toUnshieldedTokenType } from './utils';
+
+import type { MidnightSDKNetworkId } from './const';
+import type { MidnightCoinDetail, MidnightSpecificSendFlowData } from './types';
+
+/**
+ * Whether a send moves NIGHT out of an account that generates DUST, which
+ * reduces that generation. A designation registers NIGHT without moving it, so
+ * it never does. Any tank capacity counts, including a cap below what a surface
+ * displays: even a one-speck cap can lose generation.
+ */
+export const sendReducesDustGeneration = ({
+  flowType,
+  tokenIds,
+  dustTankState,
+  networkId,
+}: {
+  flowType: MidnightSpecificSendFlowData['flowType'];
+  tokenIds: readonly string[];
+  dustTankState: 'decaying' | 'empty' | 'filled' | 'refilling' | undefined;
+  networkId: MidnightSDKNetworkId;
+}): boolean =>
+  flowType !== 'dust-designation' &&
+  dustTankState !== undefined &&
+  dustTankState !== 'empty' &&
+  tokenIds.includes(toUnshieldedTokenType(NIGHT_TOKEN_ID, networkId));
 
 export type DesignationTargetType = 'external' | 'none' | 'self';
 

@@ -19,7 +19,6 @@
       "inputs": [
         "{projectRoot}/**/*",
         "{workspaceRoot}/packages/lib/cardano-*/src/**/*",
-        "{workspaceRoot}/packages/lib/util/src/common/**/*",
         "{workspaceRoot}/apps/lace-cardano/dist/**/*",
         "{workspaceRoot}/tsconfig.base.json"
       ],

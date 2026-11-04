@@ -7,6 +7,7 @@
 
 export type SignerFlowKind =
   | 'add-device'
+  | 'call-contract'
   | 'create-account'
   | 'install-operations'
   | 'issue-grant'
@@ -25,7 +26,11 @@ export type SignerFlowKind =
  * the user approves sealing the viewing secret to. A device removal
  * always rotates the account encryption key, so the removed device is
  * sealed nothing newer. A create-account flow carries `lockAccount`,
- * whether the creation retires the contract's maintenance authority. A
+ * whether the creation retires the contract's maintenance authority, and,
+ * for a creation from a bundle other than the default, `bundleId`, the
+ * account bundle the account is created from, with `constructorArgs`,
+ * the values of that bundle's declared constructor arguments as
+ * canonical strings in declaration order, which consent shows. A
  * grant flow carries the grant it names and the `account` it acts on:
  * revoke-grant its id, revoke-all-grants nothing more, and issue-grant
  * the account the grant is issued from, the scope the user is asked to
@@ -42,7 +47,13 @@ export type SignerFlowKind =
  * may be sealed to, the removed one left out; consent lists them. An
  * install-operations flow carries the `account` it upgrades and the
  * `operations` whose verifier keys the account's maintenance authority
- * signs in. Every hex field other than the commitment is lowercase.
+ * signs in. A call-contract flow carries the `account` it calls from,
+ * the `bundleId` of the account's build, the `circuit` of that build it
+ * calls, its `args` as the canonical strings of the circuit's declared
+ * arguments in declaration order, and `callees`, the addresses of the
+ * called contracts those arguments name, in order; the signer renders
+ * the call from the descriptor it pins for the circuit, never from the
+ * dApp. Every hex field other than the commitment is lowercase.
  */
 export type SignerFlow = {
   kind: SignerFlowKind;
@@ -57,7 +68,12 @@ export type SignerFlow = {
   reader?: { readerPublicKey: string; devicePublicKey: string };
   devices?: string[];
   lockAccount?: boolean;
+  bundleId?: string;
+  constructorArgs?: string[];
   operations?: string[];
+  circuit?: string;
+  args?: string[];
+  callees?: string[];
 };
 
 /**
@@ -116,6 +132,11 @@ export type ExtensionSignerRequestPayloads = {
   'flow-close': SignerFlowOutcome;
   'device-public-key': EmptyPayload;
   'device-commitments': { account: string; epoch: string; counters: string[] };
+  /**
+   * A call for the device to sign; `bundleId` names the account bundle
+   * whose descriptor describes `circuit` when it is not one of the
+   * module's own.
+   */
   authorise: {
     account: string;
     circuit: string;
@@ -123,6 +144,7 @@ export type ExtensionSignerRequestPayloads = {
     witnessValues: unknown[];
     authNonce: string;
     useCounter: string;
+    bundleId?: string;
   };
   /**
    * This device's X25519 reader public key on the network `networkId`
@@ -232,9 +254,10 @@ export type ExtensionSignerRequestPayloads = {
    * derives: `authority`, the verifying key of the account's one-key
    * committee, and `counter`, as decimal, as the chain holds them, and
    * `changes`, either the replace of that authority by the one the
-   * keyring's live roster key derives, or the inserts of pinned verifier
-   * keys, each key as hex. The signer builds the update from these and
-   * never signs bytes it is sent. The keyring carries the live envelope
+   * keyring's live roster key derives, or the inserts of verifier keys the
+   * account bundle `bundleId` names pins, each key as hex. The signer
+   * builds the update from these and never signs bytes it is sent. The
+   * keyring carries the live envelope
    * and, beside it, at most as many others as one request carries; the
    * answer is the signature, with the authority a replace installs, or
    * null when no roster key of those envelopes derives `authority`, so a
@@ -248,6 +271,7 @@ export type ExtensionSignerRequestPayloads = {
     changes:
       | {
           kind: 'insert-verifier-keys';
+          bundleId: string;
           inserts: { operation: string; verifierKey: string }[];
         }
       | {

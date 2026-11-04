@@ -7,9 +7,19 @@ import type { Ledger } from './generated/index.js';
  * module. All imports of the generated code go through this wrapper so
  * the rest of the module depends on one stable, explicitly typed API:
  * the `Contract` constructor (takes the witnesses), the `ledger` decoder
- * for on-chain state, and the locally evaluated `pureCircuits`.
+ * for on-chain state, the locally evaluated `pureCircuits`, and the data
+ * exports the runtime checks a module against the chain by: the
+ * `expectedVk` fingerprints, the `circuitSignatures` and the
+ * `declaredInterfaces`.
  */
-export const { Contract, ledger, pureCircuits, expectedVk } = AccModule;
+export const {
+  Contract,
+  ledger,
+  pureCircuits,
+  expectedVk,
+  circuitSignatures,
+  declaredInterfaces,
+} = AccModule;
 export type { Ledger };
 export type { PureCircuits, Witnesses } from './generated/index.js';
 

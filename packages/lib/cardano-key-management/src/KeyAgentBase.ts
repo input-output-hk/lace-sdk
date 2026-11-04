@@ -18,7 +18,7 @@ import type {
 import type { Cardano, Serialization } from '@lace-lib/cardano-core';
 import type * as Crypto from '@lace-lib/cardano-crypto';
 import type { Cip30DataSignature } from '@lace-lib/cardano-dapp-connector';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export abstract class KeyAgentBase implements KeyAgent {
   readonly #serializableData: SerializableKeyAgentData;

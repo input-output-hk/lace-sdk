@@ -1,6 +1,7 @@
 import type { GrantRecipient, GrantScopeInput } from './grants';
 import type {
   AccAddress,
+  AccBindingVersion,
   DeviceCommitmentHex,
   DeviceEpoch,
   GrantId,
@@ -23,7 +24,10 @@ export type AuthScheme = 'jubjub-schnorr';
 export type GranteeScheme = 'jubjub-schnorr' | 'secp256k1-ecdsa';
 
 /**
- * A circuit call awaiting authorisation by a device key.
+ * A circuit call awaiting authorisation by a device key. A call to a
+ * circuit a bundle describes names that bundle in `bundleId`, so the
+ * authoriser builds its challenge from the pure circuit the descriptor
+ * names; the module's own circuits leave it out.
  */
 export interface AuthorisationRequest {
   account: AccAddress;
@@ -32,6 +36,7 @@ export interface AuthorisationRequest {
   witnessValues: readonly unknown[];
   authNonce: bigint;
   useCounter: UseCounter;
+  bundleId?: string;
 }
 
 /**
@@ -65,7 +70,11 @@ export type Authorisation = {
  * revoke-all, some grant does; the new secret is then sealed again to the
  * read grants that stay live. A create-account flow carries
  * `lockAccount`, whether the creation retires the contract's maintenance
- * authority. A device removal always rotates the
+ * authority, `bundleId`, the account bundle the account is created from,
+ * and `constructorArgs`, the bundle's declared constructor arguments as
+ * the canonical strings a consent screen shows, in declaration order; a
+ * creation from the default bundle, which declares none, may leave both
+ * out. A device removal always rotates the
  * key, so the removed device is sealed nothing newer, and an add-device
  * flow that hands over the keys while a read grant is live rotates them
  * first. A flow that rotates the key carries `devices`, the live device entries, as 32-byte
@@ -73,11 +82,16 @@ export type Authorisation = {
  * removed one left out, so the user sees who keeps reading. An
  * install-operations flow carries the `account` it upgrades and the
  * `operations` whose verifier keys the account's maintenance authority
- * signs in, in installation order.
+ * signs in, in installation order. A call-contract flow carries the
+ * `account` it calls from, the `bundleId` of the account's build, the
+ * `circuit` of that build it calls, its `args`, the canonical strings of
+ * the circuit's declared arguments in declaration order, and `callees`,
+ * the addresses of the called contracts those arguments name, in order.
  */
 export type KeySessionFlow = {
   kind:
     | 'add-device'
+    | 'call-contract'
     | 'create-account'
     | 'install-operations'
     | 'issue-grant'
@@ -97,7 +111,12 @@ export type KeySessionFlow = {
   reader?: DeviceReader;
   devices?: string[];
   lockAccount?: boolean;
+  bundleId?: string;
+  constructorArgs?: string[];
   operations?: string[];
+  circuit?: string;
+  args?: string[];
+  callees?: string[];
 };
 
 /**
@@ -273,8 +292,8 @@ export type AccountKeys = {
 
 /**
  * One verifier key a maintenance update installs: the operation it
- * verifies and the raw key bytes, which must match the key the module
- * pins for that operation.
+ * verifies and the raw key bytes, which must match the key the account's
+ * bundle pins for that operation.
  */
 export type MaintenanceVerifierKey = {
   operation: string;
@@ -284,12 +303,14 @@ export type MaintenanceVerifierKey = {
 /**
  * What a maintenance update changes: either it replaces the authority
  * with `authority`, which must be the one the keyring's live roster key
- * derives, or it installs the pinned verifier keys `inserts` lists, at
- * least one.
+ * derives, or it installs the verifier keys `inserts` lists, at least
+ * one, each of an operation in the roster of the account bundle
+ * `bundleId` names and pinned by that bundle.
  */
 export type MaintenanceChanges =
   | {
       kind: 'insert-verifier-keys';
+      bundleId: string;
       inserts: readonly MaintenanceVerifierKey[];
     }
   | { kind: 'replace-authority'; authority: MaintenanceVerifyingKey };
@@ -539,6 +560,157 @@ export interface PassportNetworkConfig {
   nodeUrl: string;
   artefactUrl: string;
 }
+
+/**
+ * The integrity pins of the circuits a called contract proves, keyed by
+ * circuit name, so a call into it is proved with its own artefacts
+ * checked against its own digests.
+ */
+export type CalledContractPins = Readonly<
+  Record<string, AccCircuitManifestEntry>
+>;
+
+/**
+ * The exports of a compact-generated module the runtime resolves a
+ * cross-contract call against: the callee's `Contract` constructor, its
+ * pure circuits, and the `expectedVk`, `circuitSignatures` and
+ * `declaredInterfaces` the runtime checks against the chain and against
+ * the interface the caller declares.
+ */
+export type CalleeModule = Omit<AccountModule, 'ledger'>;
+
+/**
+ * One contract deployed on a network that an account bundle's circuits
+ * may call: the `label` a consent screen shows, its `address` as 64
+ * lowercase hex characters, the `interface`, the contract type name a
+ * bundle declares for it, its generated `module`, loaded only when a call
+ * resolves to it, the `artefactUrl` its proving artefacts are served
+ * from, and the `pins` of every circuit a call into it may prove. The
+ * runtime checks the module against the chain itself, so a registration
+ * that drifts from the deployed contract fails before anything is proved.
+ */
+export type CalledContract = {
+  label: string;
+  address: string;
+  interface: string;
+  module: () => Promise<CalleeModule>;
+  artefactUrl: string;
+  pins: CalledContractPins;
+};
+
+/**
+ * One argument of a bundle circuit or constructor, as the argument
+ * decoder and a consent screen see it: its `name` in the circuit's own
+ * declaration, the `label` a user reads, and its type. A `uint` carries
+ * the largest value the circuit accepts as a decimal string. A `contract`
+ * argument names, by `interface`, a contract type the bundle declares,
+ * and takes the address of a registered called contract.
+ * A `contract-address` argument is derived, never supplied by a caller:
+ * it is filled with the address of the `contract` argument `of` names,
+ * for a circuit that hashes its callee's address into its challenge and
+ * so takes the address as a parameter of its own.
+ */
+export type ArgumentDescriptor =
+  | { name: string; label: string; type: 'bool' }
+  | { name: string; label: string; type: 'bytes32' }
+  | { name: string; label: string; type: 'contract'; interface: string }
+  | { name: string; label: string; type: 'uint'; maxval: string }
+  | { name: string; type: 'contract-address'; of: string };
+
+/**
+ * One witness a bundle circuit reads from the caller's private state,
+ * with the `label` a consent screen shows its value under. `held_coin`
+ * is a shielded coin the account holds, for a circuit that spends one.
+ */
+export type WitnessDescriptor = { name: 'held_coin'; label: string };
+
+/**
+ * What a bundle pins about one circuit a caller may run on an account of
+ * its build: the `label` a consent screen shows, its `args` in
+ * declaration order, before the authorisation arguments, the pure
+ * circuit of its module that builds its `challenge`, the argument and
+ * witness names that enter that challenge in its order, between the
+ * device key and the auth nonce, and the `witnesses` it reads.
+ */
+export type CircuitDescriptor = {
+  label: string;
+  args: readonly ArgumentDescriptor[];
+  challenge: string;
+  challengeArgs: readonly string[];
+  witnesses: readonly WitnessDescriptor[];
+};
+
+/**
+ * Integrity record for one proving circuit's downloadable ZK assets.
+ * `keyLocation` is the artefact-root-relative path prefix of the key
+ * files (`<keyLocation>.prover` and `<keyLocation>.verifier`); the
+ * circuit IR lives at `zkir/<name>.bzkir`. Each sha256 is the lowercase
+ * hex digest of the exact bytes the compiler emitted, so any tampered or
+ * mismatched download can be rejected before it reaches the prover.
+ */
+export type AccCircuitManifestEntry = {
+  name: string;
+  keyLocation: string;
+  zkirSha256: string;
+  proverKeySha256: string;
+  verifierKeySha256: string;
+};
+
+/**
+ * Compile-time description of one build of the account contract: the
+ * binding version it was compiled as, the toolchain that produced it,
+ * the integrity pins of every circuit a flow proves, keyed by circuit
+ * name, and the pure circuits it evaluates locally.
+ */
+export type AccManifest = {
+  bindingVersion: AccBindingVersion;
+  toolchain: Record<string, string>;
+  circuits: Record<string, AccCircuitManifestEntry>;
+  pureCircuits: readonly string[];
+};
+
+/**
+ * The exports of a compact-generated account module the Passport module
+ * needs: the `Contract` constructor over its witnesses, the `ledger`
+ * decoder of its on-chain state, the locally evaluated pure circuits,
+ * the sha256 fingerprint of every circuit's verifier key, and the
+ * circuit signatures and declared contract interfaces the runtime checks
+ * a cross-contract call against. The shapes are loose because the
+ * precise types are the generated module's own; a flow that constructs
+ * the contract or decodes the state narrows them to its build.
+ */
+export type AccountModule = {
+  Contract: new (witnesses: never) => unknown;
+  pureCircuits: Readonly<Record<string, unknown>>;
+  expectedVk: Readonly<Record<string, string>>;
+  circuitSignatures: Readonly<Record<string, unknown>>;
+  declaredInterfaces: Readonly<Record<string, unknown>>;
+  ledger(state: unknown): unknown;
+};
+
+/**
+ * One build of the account contract a host registers: its `id`, its
+ * binding version, its generated `module`, loaded only when an account
+ * of this build is used, its `manifest` of integrity pins, its
+ * `operations`, the circuits it installs in installation order, the
+ * sha256 of every operation's verifier key, carried statically so the
+ * build of an account is recognised from the chain without loading the
+ * module, the `constructorArgs` its constructor takes after the standard
+ * ones, and a descriptor for each circuit a caller may run, keyed by
+ * circuit name. `artefactUrl` is where its proving artefacts are served;
+ * the default bundle leaves it out and uses the network's.
+ */
+export type AccountBundle = {
+  id: string;
+  bindingVersion: AccBindingVersion;
+  module: () => Promise<AccountModule>;
+  manifest: AccManifest;
+  operations: readonly string[];
+  verifierKeys: Readonly<Record<string, string>>;
+  constructorArgs: readonly ArgumentDescriptor[];
+  circuits: Readonly<Record<string, CircuitDescriptor>>;
+  artefactUrl?: string;
+};
 
 /**
  * Platform-specific capabilities a Passport module implementation must

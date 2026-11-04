@@ -10,7 +10,7 @@
     "@lace-lib/cardano-core": "*",
     "@lace-lib/cardano-crypto": "*",
     "@lace-lib/cardano-dapp-connector": "*",
-    "@lace-lib/util": "*",
+    "@lace-lib/cardano-util": "*",
     "bip39": "3.1.0",
     "chacha": "2.1.0",
     "get-random-values": "2.1.0",

@@ -1,4 +1,4 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 import sodium from 'libsodium-wrappers-sumo';
 
 import {
@@ -9,7 +9,7 @@ import {
 import { Ed25519PublicKey } from './Ed25519PublicKey';
 import { Ed25519Signature } from './Ed25519Signature';
 
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const SCALAR_INDEX = 0;
 const SCALAR_SIZE = 32;

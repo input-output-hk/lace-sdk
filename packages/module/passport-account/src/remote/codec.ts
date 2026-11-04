@@ -16,6 +16,7 @@ import {
   INBOX_ENTRY_LENGTH,
   MAX_INBOX_ENTRIES_PER_REQUEST,
 } from '../acc/inbox';
+import { BUNDLE_ID_PATTERN } from '../acc/manifest';
 import { GRANT_VIEW_SEAL_LENGTH } from '../acc/view-seal';
 import { storedGranteeScheme } from '../flows/types';
 
@@ -127,6 +128,17 @@ const decodeString = (value: unknown, field: string): string => {
 /** Reads a boolean, refusing anything coerced from another type. */
 export const decodeBoolean = (value: unknown, field: string): boolean => {
   if (typeof value !== 'boolean') throw new MalformedPayloadError(field);
+  return value;
+};
+
+/**
+ * Reads an account bundle id as a well-formed one: lowercase letters,
+ * digits and hyphens. Which bundle it names is the registry's to say.
+ */
+export const decodeBundleId = (value: unknown, field: string): string => {
+  if (typeof value !== 'string' || !BUNDLE_ID_PATTERN.test(value)) {
+    throw new MalformedPayloadError(field);
+  }
   return value;
 };
 
@@ -374,6 +386,17 @@ const decodePendingDeployment = (
       `${field}.handoverAuthority`,
     ),
     keyEntries: decodeKeyEntries(value.keyEntries, `${field}.keyEntries`),
+    ...(value.bundleId === undefined
+      ? {}
+      : { bundleId: decodeBundleId(value.bundleId, `${field}.bundleId`) }),
+    ...(value.constructorArgs === undefined
+      ? {}
+      : {
+          constructorArgs: decodeStrings(
+            value.constructorArgs,
+            `${field}.constructorArgs`,
+          ),
+        }),
   };
 };
 
@@ -381,6 +404,8 @@ const decodePendingDeployment = (
 const DEPLOYMENT_ONLY_FIELDS = [
   'operations',
   'lockAccount',
+  'bundleId',
+  'constructorArgs',
   'verifierKeysDigest',
   'saltHex',
   'authorityKey',
@@ -915,6 +940,7 @@ export const encodeMaintenanceChanges = (
       }
     : {
         kind: 'insert-verifier-keys',
+        bundleId: changes.bundleId,
         inserts: changes.inserts.map(({ operation, verifierKey }) => ({
           operation,
           verifierKey: encodeBytes(verifierKey),
@@ -935,9 +961,10 @@ const decodeVerifierKey = (value: unknown, field: string): Uint8Array => {
 
 /**
  * Reads the changes of a maintenance update: a replace naming the
- * authority it installs, or the verifier key inserts it makes, each an
- * operation name and its key, at most one per operation of the deployed
- * roster. Any other kind is refused.
+ * authority it installs, or the verifier key inserts it makes under the
+ * bundle it names, each an operation name and its key. The protocol
+ * bounds the inserts of one update at the size of the default roster;
+ * more, or any other kind of change, is refused.
  */
 export const decodeMaintenanceChanges = (
   value: unknown,
@@ -958,6 +985,7 @@ export const decodeMaintenanceChanges = (
   }
   return {
     kind: 'insert-verifier-keys',
+    bundleId: decodeBundleId(value.bundleId, `${field}.bundleId`),
     inserts: value.inserts.map((insert: unknown, index) => {
       const at = `${field}.inserts[${index}]`;
       if (!isRecord(insert)) throw new MalformedPayloadError(at);

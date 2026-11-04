@@ -6,6 +6,7 @@ import { retryBackoff } from 'backoff-rxjs';
 import {
   bufferTime,
   catchError,
+  combineLatest,
   defer,
   distinct,
   distinctUntilChanged,
@@ -53,6 +54,8 @@ import { clearStaleCardanoSyncsOnNetworkChange } from './side-effects/clear-stal
 import { clearStaleCardanoSyncsOnResume } from './side-effects/clear-stale-cardano-syncs-on-resume';
 import { findMissingTokensMetadataForActivities } from './side-effects/find-missing-tokens-metadata-for-activities';
 import { loadTokensMetadata } from './side-effects/load-tokens-metadata';
+import { resetWalletSync } from './side-effects/reset-wallet-sync';
+import { resetWalletSyncToast } from './side-effects/reset-wallet-sync-toast';
 import { securityRescan } from './side-effects/security-rescan';
 import { securityRescanToast } from './side-effects/security-rescan-toast';
 import { syncLovelaceTokenTickerWithChain } from './side-effects/sync-lovelace-token-ticker-with-chain';
@@ -136,54 +139,70 @@ export const trackTokenMetadata =
     _,
     {
       tokens: { selectAllRaw$, selectTokensMetadata$ },
-      cardanoContext: { selectChainId$ },
+      cardanoContext: { selectChainId$, selectActiveCardanoAccounts$ },
       failures: { selectFailureById$ },
     },
     { actions, cardanoProvider: { getTokenMetadata } },
   ) =>
-    selectAllRaw$.pipe(
-      distinctWithoutMetadata(selectTokensMetadata$),
-      withLatestFrom(selectChainId$.pipe(filter(Boolean))),
-      mergeMap(
-        ([tokenId, chainId]): Observable<
-          Result<TokenMetadataOk, TokenMetadataError>
-        > =>
-          getTokenMetadata({ tokenId }, { chainId }).pipe(
-            map(result =>
-              Ok({ tokenId, metadata: unwrapOrThrowError(result) }),
-            ),
-            retryBackoff(PROVIDER_REQUEST_RETRY_CONFIG),
-            catchError(() => of(Err({ tokenId }))),
+    selectChainId$.pipe(
+      filter(Boolean),
+      switchMap(chainId =>
+        combineLatest([selectAllRaw$, selectActiveCardanoAccounts$]).pipe(
+          map(([tokens, accounts]) => {
+            const network = CardanoNetworkId(chainId.networkMagic);
+            const accountIds = new Set(
+              accounts
+                .filter(account => account.blockchainNetworkId === network)
+                .map(account => account.accountId),
+            );
+            return tokens.filter(token => accountIds.has(token.accountId));
+          }),
+          // Scope deduplication, requests and buffered results to this network.
+          distinctWithoutMetadata(selectTokensMetadata$),
+          mergeMap(
+            (
+              tokenId,
+            ): Observable<Result<TokenMetadataOk, TokenMetadataError>> =>
+              getTokenMetadata({ tokenId }, { chainId }).pipe(
+                map(result =>
+                  Ok({ tokenId, metadata: unwrapOrThrowError(result) }),
+                ),
+                retryBackoff(PROVIDER_REQUEST_RETRY_CONFIG),
+                catchError(() => of(Err({ tokenId }))),
+              ),
           ),
-      ),
-      groupBy(result => result.isOk()),
-      mergeMap(group$ =>
-        group$.key
-          ? group$.pipe(
-              bufferTime(batchInterval),
-              mergeMap(okResults => {
-                if (okResults.length === 0) return EMPTY;
-                const metadatas = okResults.map(toUpsertTokenMetadataPayload);
-                return merge(
-                  of(actions.tokens.upsertTokensMetadata({ metadatas })),
-                  from(metadatas.map(toTokenMetadataFailureId)).pipe(
-                    autoDismissFailureOnSuccess(selectFailureById$),
-                  ),
-                );
-              }),
-            )
-          : group$.pipe(
-              map(errorResult => {
-                const { tokenId } = errorResult.unwrapErr();
-                return actions.failures.addFailure({
-                  failureId: TokenMetadataFailureId(tokenId),
-                  message: 'sync.error.token-metadata-fetch-failed',
-                  retryAction: actions.cardanoContext.loadTokenMetadata({
-                    tokenId,
+          groupBy(result => result.isOk()),
+          mergeMap(group$ =>
+            group$.key
+              ? group$.pipe(
+                  bufferTime(batchInterval),
+                  mergeMap(okResults => {
+                    if (okResults.length === 0) return EMPTY;
+                    const metadatas = okResults.map(
+                      toUpsertTokenMetadataPayload,
+                    );
+                    return merge(
+                      of(actions.tokens.upsertTokensMetadata({ metadatas })),
+                      from(metadatas.map(toTokenMetadataFailureId)).pipe(
+                        autoDismissFailureOnSuccess(selectFailureById$),
+                      ),
+                    );
                   }),
-                });
-              }),
-            ),
+                )
+              : group$.pipe(
+                  map(errorResult => {
+                    const { tokenId } = errorResult.unwrapErr();
+                    return actions.failures.addFailure({
+                      failureId: TokenMetadataFailureId(tokenId),
+                      message: 'sync.error.token-metadata-fetch-failed',
+                      retryAction: actions.cardanoContext.loadTokenMetadata({
+                        tokenId,
+                      }),
+                    });
+                  }),
+                ),
+          ),
+        ),
       ),
     );
 
@@ -445,6 +464,8 @@ export const createRegisterCardanoBlockchainNetworks =
 
 export const createCardanoProviderSideEffects = (config: AppConfig) => [
   createRegisterCardanoBlockchainNetworks(config.defaultTestnetChainId),
+  resetWalletSync,
+  resetWalletSyncToast,
   clearStaleCardanoSyncsOnResume,
   clearStaleCardanoSyncsOnNetworkChange,
   securityRescan,

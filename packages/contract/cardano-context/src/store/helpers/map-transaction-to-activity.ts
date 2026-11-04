@@ -18,6 +18,7 @@ import {
 import { computeOwnNetCoins } from './compute-own-net-coins';
 import { assetProvider } from './get-fallback-asset';
 
+import type { EnabledExtensionActivities } from '../../extensions';
 import type {
   CardanoPaymentAddress,
   CardanoRewardAccount,
@@ -40,7 +41,7 @@ export type MapTransactionToActivityParams = {
   protocolParameters: RequiredProtocolParameters;
   resolveInput: Cardano.ResolveInput;
   logger: Logger;
-  isExtensionActivityEnabled: boolean;
+  enabledExtensionActivities: EnabledExtensionActivities;
 };
 
 /**
@@ -53,6 +54,7 @@ export type MapTransactionToActivityParams = {
  *   - `protocolParameters`: Current protocol parameters required for transaction validation and processing.
  *   - `resolveInput`: A resolver function used to fetch detailed information about transaction inputs.
  *   - `logger`: A logger instance for logging purposes during processing.
+ *   - `enabledExtensionActivities`: Which feature classifications apply, by their feature flags.
  * @returns An observable for the account activity operation result.
  * Results will be encapsulated in the `Result` type, which is a success (`Ok`) or error (`Err`).
  *
@@ -70,7 +72,7 @@ export const mapTransactionToActivity = ({
   protocolParameters,
   resolveInput,
   logger,
-  isExtensionActivityEnabled,
+  enabledExtensionActivities,
 }: MapTransactionToActivityParams): Observable<Result<Activity, Error>> => {
   const ownAddresses = accountAddresses.map(address =>
     Cardano.PaymentAddress(address),
@@ -95,13 +97,13 @@ export const mapTransactionToActivity = ({
     }),
   });
 
-  // Activities the features classify themselves, from the tx body alone: the
-  // type and the metadata the UI renders without re-parsing it. It applies
-  // only while the feature is on.
-  const classifiedActivity = classifyExtensionActivity(txDetails.body);
-  const extensionActivity = isExtensionActivityEnabled
-    ? classifiedActivity
-    : undefined;
+  // Activities the features classify themselves, from the tx alone: the type
+  // and the metadata the UI renders without re-parsing it. Each applies only
+  // while its feature is on.
+  const extensionActivity = classifyExtensionActivity(
+    txDetails,
+    enabledExtensionActivities,
+  );
 
   // What the chain actually consumed, unresolved: consumers that care about
   // ownership intersect this with the account's own UTxO set, which does that

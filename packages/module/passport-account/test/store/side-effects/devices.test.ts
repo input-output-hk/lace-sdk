@@ -36,6 +36,7 @@ const knownUseCounter = '2';
 const account: PassportAccountInfo = {
   address: accountAddress,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -181,6 +182,7 @@ const runFlowTest = ({
           issueGrant$: NEVER,
           installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
+          callContract$: NEVER,
           revokeAllGrants$: NEVER,
           revokeGrant$: NEVER,
           removeDevice$: hot(removeDevice, {

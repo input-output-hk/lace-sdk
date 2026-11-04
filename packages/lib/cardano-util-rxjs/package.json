@@ -7,7 +7,7 @@
   "sideEffects": false,
   "main": "src/index.ts",
   "dependencies": {
-    "@lace-lib/util": "*",
+    "@lace-lib/cardano-util": "*",
     "backoff-rxjs": "7.0.0",
     "rxjs": "^7.8.1",
     "ts-log": "^2.2.7"

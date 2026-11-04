@@ -2,12 +2,12 @@ import { Cardano } from '@lace-lib/cardano-core';
 import {
   InvalidArgumentError,
   areNumbersEqualInConstantTime,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import { resolveStakeKeyPath } from './keyPaths';
 
 import type { TrezorTxTransformerContext } from '../types';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 import type * as Trezor from '@trezor/connect';
 
 export const toTrezorWithdrawal: Transform<

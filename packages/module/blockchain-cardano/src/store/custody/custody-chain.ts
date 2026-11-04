@@ -2,7 +2,7 @@ import { Cardano } from '@cardano-sdk/core';
 import { isRetriableError } from '@lace-lib/util-provider';
 import { firstValueFrom } from 'rxjs';
 
-import { unwrapProviderResult } from '../night-designation/unwrap-provider-result';
+import { unwrapProviderResult } from '../helpers/unwrap-provider-result';
 
 import { failCustodyBuild, messageOf } from './build-failure';
 

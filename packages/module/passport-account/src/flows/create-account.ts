@@ -6,9 +6,10 @@ import {
 } from '@lace-contract/passport';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 
+import { decodeArguments, normaliseArguments } from '../acc/arguments';
 import { deployAccount, resumeAccountDeployment } from '../acc/deploy';
 import { inboxEntries } from '../acc/inbox-walk';
-import { accManifest } from '../acc/manifest';
+import { ACCOUNT_BUNDLE_ID } from '../acc/manifest';
 import {
   isPendingDeployment,
   lockChoiceMismatch,
@@ -29,6 +30,7 @@ import type {
   PendingDeployment,
 } from './types';
 import type { AccProviders, DeployedAccount } from '../acc/deploy';
+import type { AccountBundle } from '@lace-contract/passport';
 
 /** The initial device entry is inserted at epoch 0 with use counter 0. */
 const INITIAL_DEVICE_EPOCH = DeviceEpoch(0n);
@@ -43,6 +45,14 @@ export type CreateAccountInput = {
    * each choice trades.
    */
   lockAccount: boolean;
+  /** The registered bundle to create the account from; the default when left out. */
+  bundleId?: string;
+  /**
+   * The values of the bundle's declared constructor arguments as strings,
+   * in declaration order, a contract argument as the address of a
+   * registered called contract; none when left out.
+   */
+  constructorArgs?: readonly string[];
 };
 
 /**
@@ -84,6 +94,10 @@ const pendingRecord = async (
 
 type DeploymentProps = {
   providers: AccProviders;
+  bundle: AccountBundle;
+  /** The bundle's constructor arguments as canonical strings and as decoded. */
+  constructorArgs: readonly string[];
+  constructorValues: readonly unknown[];
   lockAccount: boolean;
   pending: PendingRecord | undefined;
   local: LocalDevice;
@@ -98,16 +112,20 @@ type Deployment = { deployed: DeployedAccount; pending: PendingDeployment };
 
 /**
  * Runs the deployment: a fresh one, which draws the account keys first,
- * deploys with their `enc_key`, hands an unlocked account's maintenance
- * to the authority their roster key derives, and records the pending
- * deployment, with this device's envelope and registration, as soon as
- * the deploy lands so an interruption can be resumed; or the remaining
- * waves of a recorded one, with the key entries and the handover
- * authority it recorded. Both wait for the fee sponsor to be ready
- * before building each transaction.
+ * deploys the bundle with their `enc_key` and its constructor arguments,
+ * hands an unlocked account's maintenance to the authority their roster
+ * key derives, and records the pending deployment, with this device's
+ * envelope and registration, as soon as the deploy lands so an
+ * interruption can be resumed; or the remaining waves of a recorded one,
+ * with the key entries, the handover authority and the constructor
+ * arguments it recorded. Both wait for the fee sponsor to be ready before
+ * building each transaction.
  */
 const deploy = async ({
   providers,
+  bundle,
+  constructorArgs,
+  constructorValues,
   lockAccount,
   pending,
   local,
@@ -124,6 +142,7 @@ const deploy = async ({
     return {
       deployed: await resumeAccountDeployment({
         providers,
+        bundle,
         authoriser: passportAuthoriser,
         address: pending.address,
         pending: pending.deployment,
@@ -142,6 +161,9 @@ const deploy = async ({
   const progress: { recorded?: PendingDeployment } = {};
   const deployed = await deployAccount({
     providers,
+    bundle,
+    constructorArgs,
+    constructorValues,
     authoriser: passportAuthoriser,
     encPublicKey: keys.encKey,
     lockAccount,
@@ -151,7 +173,7 @@ const deploy = async ({
       progress.recorded = { ...deployment, keyEntries };
       await accountRecords.write({
         address,
-        bindingVersion: accManifest.bindingVersion,
+        bindingVersion: bundle.bindingVersion,
         localUseCounter: INITIAL_USE_COUNTER_VALUE,
         deployment: progress.recorded,
       });
@@ -169,8 +191,17 @@ const deploy = async ({
  * seam, the Account Custody Contract deployment in waves with sponsored
  * fees, the initial device activation, the delivery of the account keys
  * to this device's inbox, and the local persistence of the account
- * record. Every step runs inside one key session, so the whole flow costs
- * a single ceremony rather than one per authoriser call. The flow never
+ * record. The account is created from the registered bundle `bundleId`
+ * names, the default, the vendored build, when none is named, whose id
+ * is published with it, and its constructor takes the values
+ * `constructorArgs` gives for the arguments the bundle declares, decoded
+ * by their descriptors before any prompt: a bundle no registry holds is
+ * refused with AccountBundleUnknownError, a value that does not fit its
+ * argument with CallArgumentInvalidError and a contract argument naming
+ * no registered called contract, or one of another
+ * interface, with CalledContractNotRegisteredError. Every step runs
+ * inside one key session, so the whole flow costs a single ceremony
+ * rather than one per authoriser call. The flow never
  * holds the encryption secret: the seam draws it at random, seals it to
  * this device's reader key and hands back only its public key, which the
  * constructor takes as `enc_key`, with this device's envelope and its
@@ -195,13 +226,16 @@ const deploy = async ({
  * chain holds, activates once every wave is in and appends whichever key
  * entry the inbox still lacks; a creation that died after its activation
  * landed resumes from there. A resumed creation finishes exactly as it
- * began, with the keys recorded then: a request under another lock choice
- * than the recorded one is refused with CreationLockMismatchError, and a
- * build pinning other verifier keys than the recorded deployment with
- * CreationArtefactMismatchError, both before any wave. The session names
- * the lock choice, so an authoriser that asks consent first shows it; a
- * hosted signer refuses the same lock mismatch itself, and a resume
- * started from another origin than the creation it resumes.
+ * began, with the keys and the constructor arguments recorded then: a
+ * request under another lock choice than the recorded one is refused
+ * with CreationLockMismatchError, and one naming another bundle than the
+ * recorded one, or a build pinning other verifier keys than the recorded
+ * deployment, with CreationArtefactMismatchError, all before any wave.
+ * The session names the lock choice and, for a bundle other than the
+ * default, the bundle with its constructor arguments, so an authoriser
+ * that asks consent first shows them; a hosted signer refuses the same
+ * lock mismatch itself, and a resume started from another origin than
+ * the creation it resumes.
  *
  * A device already holding a completed account record refuses with
  * AccountExistsError before the ceremony runs: the record is the only
@@ -213,24 +247,43 @@ const deploy = async ({
  * session, where it costs no extra prompt.
  */
 export const createAccount = async (
-  { lockAccount }: CreateAccountInput,
+  {
+    lockAccount,
+    bundleId = ACCOUNT_BUNDLE_ID,
+    constructorArgs: givenConstructorArgs = [],
+  }: CreateAccountInput,
   context: FlowContext,
 ): Promise<CreatedAccount> => {
-  const { seams, accountRecords, onProgress } = context;
-  const presence = await accountRecords.presence();
-  if (presence === 'complete') {
-    throw new AccountExistsError();
-  }
+  const { seams, accountRecords, onProgress, bundles } = context;
   const {
     passportAuthoriser,
     passportNetwork,
     passportProver,
     passportSponsor,
   } = seams;
+  const bundle = bundles.get(bundleId);
+  const constructorArgs = normaliseArguments(
+    bundle.constructorArgs,
+    givenConstructorArgs,
+  );
+  const constructorValues = decodeArguments(
+    bundle.constructorArgs,
+    constructorArgs,
+    bundles.calledContracts,
+  );
+  const presence = await accountRecords.presence();
+  if (presence === 'complete') {
+    throw new AccountExistsError();
+  }
 
   return inKeySession(
     passportAuthoriser,
-    { kind: 'create-account', lockAccount },
+    {
+      kind: 'create-account',
+      lockAccount,
+      ...(bundle.id === ACCOUNT_BUNDLE_ID ? {} : { bundleId: bundle.id }),
+      ...(constructorArgs.length === 0 ? {} : { constructorArgs }),
+    },
     async () => {
       const local = await readLocalDevice(seams);
       const pending =
@@ -242,10 +295,16 @@ export const createAccount = async (
         network: passportNetwork,
         prover: passportProver,
         sponsor: passportSponsor,
+        bundle,
+        bundles: bundles.bundles,
+        calledContracts: bundles.calledContracts,
         onStage: onProgress,
       });
       const { deployed, pending: deployment } = await deploy({
         providers,
+        bundle,
+        constructorArgs,
+        constructorValues,
         lockAccount,
         pending,
         local,
@@ -257,7 +316,8 @@ export const createAccount = async (
       }
       const account = {
         address: deployed.address,
-        bindingVersion: accManifest.bindingVersion,
+        bindingVersion: bundle.bindingVersion,
+        bundleId: bundle.id,
         status: 'ready' as const,
         networkId: passportNetwork.networkId,
       };
@@ -266,6 +326,7 @@ export const createAccount = async (
       const { indexer, ledgerState } = await readAccountLedger(
         deployed.address,
         passportNetwork,
+        bundle,
       );
       const held = new Set<string>(
         inboxEntries(ledgerState).map(entry => HexBytes.fromByteArray(entry)),
@@ -288,6 +349,7 @@ export const createAccount = async (
         },
         indexer,
         seams,
+        bundles,
         onProgress,
         onAdvanced: async localUseCounter =>
           accountRecords.write({

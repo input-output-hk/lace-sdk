@@ -6,6 +6,7 @@ import {
 import * as ledger from '@midnightntwrk/ledger-v9';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { accountBundle, createBundleRegistry } from '../../src/acc/bundle';
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import {
   deviceEnvelopes,
@@ -23,6 +24,7 @@ import type { IndexerClient } from '../../src/infra/indexer';
 import type {
   AccountKeyring,
   MaintenanceVerifyingKey,
+  PassportAccountInfo,
   PassportDependencies,
   PassportEncryptionKey,
 } from '@lace-contract/passport';
@@ -44,6 +46,14 @@ vi.mock('../../src/infra/providers', () => ({
 const NETWORK = 'undeployed';
 const address = 'ac'.repeat(32);
 const account = AccAddress(address);
+const accountInfo: PassportAccountInfo = {
+  address,
+  bindingVersion: accountBundle.bindingVersion,
+  bundleId: accountBundle.id,
+  status: 'ready',
+  networkId: NETWORK,
+};
+const bundles = createBundleRegistry();
 const network = {
   networkId: NETWORK,
   indexerUrl: 'http://indexer.example.com/api/v3/graphql',
@@ -148,8 +158,9 @@ describe('followRosterAuthority', () => {
     onChain([previous]);
 
     await followRosterAuthority({
-      address,
+      account: accountInfo,
       seams,
+      bundles,
       keyring,
       authority: next,
       onProgress,
@@ -165,6 +176,9 @@ describe('followRosterAuthority', () => {
       network,
       prover: seams.passportProver,
       sponsor: seams.passportSponsor,
+      bundle: accountBundle,
+      bundles: [accountBundle],
+      calledContracts: [],
       onStage: onProgress,
     });
     expect(mocks.submitMaintenanceUpdate).toHaveBeenCalledOnce();
@@ -195,7 +209,8 @@ describe('followRosterAuthority', () => {
     onChain([]);
 
     await followRosterAuthority({
-      address,
+      account: accountInfo,
+      bundles,
       seams: seamsOver(encryptionKey),
       keyring,
       authority: next,
@@ -212,7 +227,8 @@ describe('followRosterAuthority', () => {
 
     await expect(
       followRosterAuthority({
-        address,
+        account: accountInfo,
+        bundles,
         seams: seamsOver(withoutSigner(encryptionKey)),
         keyring,
         authority: next,
@@ -228,7 +244,8 @@ describe('followRosterAuthority', () => {
 
     await expect(
       followRosterAuthority({
-        address,
+        account: accountInfo,
+        bundles,
         seams: seamsOver(encryptionKey),
         keyring,
         authority: next,
@@ -244,7 +261,8 @@ describe('followRosterAuthority', () => {
 
     await expect(
       followRosterAuthority({
-        address,
+        account: accountInfo,
+        bundles,
         seams: seamsOver(encryptionKey),
         keyring,
         authority: next,
@@ -260,7 +278,8 @@ describe('followRosterAuthority', () => {
 
     await expect(
       followRosterAuthority({
-        address,
+        account: accountInfo,
+        bundles,
         seams: seamsOver(withoutSigner(encryptionKey)),
         keyring,
         authority: next,
@@ -280,7 +299,8 @@ describe('followRosterAuthority', () => {
 
     await expect(
       followRosterAuthority({
-        address,
+        account: accountInfo,
+        bundles,
         seams: seamsOver(encryptionKey),
         keyring,
         authority: next,

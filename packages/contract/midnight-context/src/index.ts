@@ -5,8 +5,15 @@ export * from './contract';
 export { midnightEngineAddonContract } from './midnight-engine-addon';
 export type * from './types';
 
-export { midnightWalletsForRuntime } from './midnight-wallet';
-export type { MidnightWalletsByAccountId } from './midnight-wallet';
+export {
+  inProcessMidnightWallets$,
+  isRemoteMidnightEngine,
+  midnightWalletsForRuntime,
+} from './midnight-wallet';
+export type {
+  MidnightEnginesByAccountId,
+  MidnightWalletsByAccountId,
+} from './midnight-wallet';
 export { midnightAccounts$ } from './midnight-accounts';
 export { registerMidnightBlockchainNetworks } from './register-midnight-blockchain-networks';
 export * from './const';

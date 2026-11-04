@@ -1,10 +1,10 @@
-import { typedBech32 } from '@lace-lib/util/common';
+import { typedBech32 } from '@lace-lib/cardano-util';
 import * as BaseEncoding from '@scure/base';
 
 import { CredentialType } from './Address';
 
 import type { Credential } from './Address';
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 /** Payment credential as bech32 (addr_vkh for key hash, script for script hash - per CIP-5) */
 export type PaymentCredential = OpaqueString<'PaymentCredential'>;

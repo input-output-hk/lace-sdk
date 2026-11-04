@@ -12,8 +12,8 @@ import {
   KeyRole,
   util,
 } from '@lace-lib/cardano-key-management';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { mockProviders as mocks } from '@lace-lib/cardano-util-dev';
-import { HexBlob } from '@lace-lib/util/common';
 import uniqBy from 'lodash/uniqBy.js';
 import { dummyLogger } from 'ts-log';
 

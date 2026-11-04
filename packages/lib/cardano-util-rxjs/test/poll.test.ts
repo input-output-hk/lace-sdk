@@ -1,5 +1,5 @@
+import { InvalidStringError } from '@lace-lib/cardano-util';
 import { createLogger } from '@lace-lib/cardano-util-dev';
-import { InvalidStringError } from '@lace-lib/util/common';
 import { retryBackoff } from 'backoff-rxjs';
 import {
   BehaviorSubject,

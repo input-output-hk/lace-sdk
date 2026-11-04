@@ -1,6 +1,6 @@
 import { crc32 } from '@foxglove/crc';
 import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
-import { HexBlob, InvalidArgumentError } from '@lace-lib/util/common';
+import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import {
   CborReader,

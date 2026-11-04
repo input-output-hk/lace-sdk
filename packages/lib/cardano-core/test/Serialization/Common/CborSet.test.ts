@@ -6,7 +6,7 @@ import {
   CborWriter,
 } from '../../../src/Serialization';
 
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 class TestNumber {
   #value: number;

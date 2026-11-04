@@ -42,6 +42,8 @@ apps/lace-sdk-site
 apps/lace-extension-shell/vendor/lace-lib-vendor
 # compact-generated Account Custody Contract module vendored by passport-account
 packages/module/passport-account/src/acc/generated
+# compact-generated test bundle modules vendored by the passport-account-tally fixture
+packages/fixture/passport-account-tally/generated
 # vendored upstream blueprint and Preprod reference script record of the Cardano account custody contract; the SHA-256 of each is pinned
 packages/lib/cardano-custody/src/blueprint/plutus.json
 packages/lib/cardano-custody/src/blueprint/preprod.json

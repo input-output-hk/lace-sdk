@@ -59,7 +59,7 @@ describe('loadCircuitAssets', () => {
       artefactUrl,
       circuit,
       fetchBytes,
-      manifest: manifestForFixtures(),
+      pins: manifestForFixtures().circuits,
     });
 
     expect(assets).toEqual({
@@ -79,7 +79,7 @@ describe('loadCircuitAssets', () => {
       artefactUrl: `${artefactUrl}/`,
       circuit,
       fetchBytes: fetchFixtures(fixtures),
-      manifest: manifestForFixtures(),
+      pins: manifestForFixtures().circuits,
     });
 
     expect(assets.zkir).toEqual(new Uint8Array([1, 2, 3]));
@@ -103,7 +103,7 @@ describe('loadCircuitAssets', () => {
           artefactUrl,
           circuit,
           fetchBytes: fetchFixtures(tampered),
-          manifest: manifestForFixtures(),
+          pins: manifestForFixtures().circuits,
         }),
       ).rejects.toThrow(ArtefactIntegrityError);
     },
@@ -119,7 +119,7 @@ describe('loadCircuitAssets', () => {
         artefactUrl,
         circuit,
         fetchBytes: fetchFixtures(tampered),
-        manifest: manifestForFixtures(),
+        pins: manifestForFixtures().circuits,
       }),
     ).rejects.toThrow(
       `sha256 mismatch for ${url}: expected ${sha256Hex(

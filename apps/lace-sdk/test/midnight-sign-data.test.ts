@@ -14,6 +14,8 @@ import {
   signMidnightData,
 } from '../src/midnight';
 
+import { pageModeEngineAccess } from './midnight-engine-access-fake';
+
 import type {
   SignDataOptions,
   SignMidnightDataProps,
@@ -50,12 +52,14 @@ const setup = (accounts = [accountId]) => {
       },
     },
     _loadModules: async () => [
-      of({
-        [accountId]: { signData } as unknown as MidnightWallet,
-        [secondAccountId]: {
-          signData: secondSignData,
-        } as unknown as MidnightWallet,
-      }),
+      pageModeEngineAccess(
+        of({
+          [accountId]: { signData } as unknown as MidnightWallet,
+          [secondAccountId]: {
+            signData: secondSignData,
+          } as unknown as MidnightWallet,
+        }),
+      ),
     ],
   } as unknown as WalletWithMidnight;
   return { wallet, signData, secondSignData };

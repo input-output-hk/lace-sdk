@@ -1,14 +1,10 @@
-import {
-  type Cardano,
-  ProviderError,
-  ProviderFailure,
-} from '@cardano-sdk/core';
+import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import { addressesActions } from '@lace-contract/addresses';
 import { failuresActions } from '@lace-contract/failures';
 import { tokensActions } from '@lace-contract/tokens';
 import { Milliseconds, Ok } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
-import { defer, of } from 'rxjs';
+import { BehaviorSubject, defer, of, startWith } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -24,6 +20,8 @@ import {
   account1someOtherTokens,
   chainId,
   midnightDustTokens,
+  previewAccountCardanoWalletAccounts,
+  threeAccountCardanoWalletAccounts,
 } from '../../mocks';
 
 import type { CardanoProviderDependencies } from '../../../src/types';
@@ -65,7 +63,7 @@ describe('cardano-context side effects', () => {
               account1someOtherTokens,
             ],
           });
-          const selectTokensMetadata$ = hot<
+          const selectTokensMetadata$ = cold<
             Partial<Record<TokenId, StoredTokenMetadata>>
           >('a', {
             a: {
@@ -92,7 +90,12 @@ describe('cardano-context side effects', () => {
           return {
             actionObservables: {},
             stateObservables: {
-              cardanoContext: { selectChainId$ },
+              cardanoContext: {
+                selectChainId$,
+                selectActiveCardanoAccounts$: of(
+                  threeAccountCardanoWalletAccounts,
+                ),
+              },
               tokens: { selectAllRaw$, selectTokensMetadata$ },
               failures: {
                 selectFailureById$: cold('a', { a: noFailureSelector }),
@@ -144,7 +147,12 @@ describe('cardano-context side effects', () => {
           return {
             actionObservables: {},
             stateObservables: {
-              cardanoContext: { selectChainId$ },
+              cardanoContext: {
+                selectChainId$,
+                selectActiveCardanoAccounts$: of(
+                  threeAccountCardanoWalletAccounts,
+                ),
+              },
               tokens: { selectAllRaw$, selectTokensMetadata$ },
               failures: {
                 selectFailureById$: cold('a', { a: noFailureSelector }),
@@ -201,7 +209,12 @@ describe('cardano-context side effects', () => {
           return {
             actionObservables: {},
             stateObservables: {
-              cardanoContext: { selectChainId$ },
+              cardanoContext: {
+                selectChainId$,
+                selectActiveCardanoAccounts$: of(
+                  threeAccountCardanoWalletAccounts,
+                ),
+              },
               tokens: { selectAllRaw$, selectTokensMetadata$ },
               failures: {
                 selectFailureById$: cold('a', { a: noFailureSelector }),
@@ -259,7 +272,12 @@ describe('cardano-context side effects', () => {
           return {
             actionObservables: {},
             stateObservables: {
-              cardanoContext: { selectChainId$ },
+              cardanoContext: {
+                selectChainId$,
+                selectActiveCardanoAccounts$: of(
+                  threeAccountCardanoWalletAccounts,
+                ),
+              },
               tokens: { selectAllRaw$, selectTokensMetadata$ },
               failures: { selectFailureById$ },
             },
@@ -285,69 +303,208 @@ describe('cardano-context side effects', () => {
       );
     });
 
-    it('refreshes stale Cardano metadata missing the schema version', () => {
+    it('refreshes persisted tokens only on their account network, including when the token list does not change', () => {
       testSideEffect(
         trackTokenMetadata(batchInterval),
-        ({ cold, expectObservable, flush }) => {
-          const selectChainId$ = cold<Cardano.ChainId>('a', { a: chainId });
-          const selectAllRaw$ = cold<RawToken[]>('a', {
-            a: [account0someAdaTokens],
-          });
-          const selectTokensMetadata$ = cold<
-            Partial<Record<TokenId, StoredTokenMetadata>>
-          >('a', {
-            a: {
-              [LOVELACE_TOKEN_ID]: {
-                tokenId: LOVELACE_TOKEN_ID,
-                decimals: 6,
-                blockchainSpecific: {},
-              },
-            },
-          });
-
-          const refreshedMetadata = {
-            decimals: 6,
-            blockchainSpecific: {
-              metadataSchemaVersion: CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
-            },
-          };
-          const getTokenMetadata = vi
-            .fn()
-            .mockReturnValue(of(Ok<TokenMetadata>(refreshedMetadata)));
+        ({ hot, expectObservable, flush }) => {
+          const tokenId = account1someOtherTokens.tokenId;
+          const metadata = { decimals: 0, blockchainSpecific: {} };
+          const getTokenMetadata = vi.fn().mockReturnValue(of(Ok(metadata)));
 
           return {
             actionObservables: {},
             stateObservables: {
-              cardanoContext: { selectChainId$ },
-              tokens: { selectAllRaw$, selectTokensMetadata$ },
-              failures: {
-                selectFailureById$: cold('a', { a: noFailureSelector }),
+              cardanoContext: {
+                selectChainId$: hot('----p-------v', {
+                  p: Cardano.ChainIds.Preprod,
+                  v: Cardano.ChainIds.Preview,
+                }).pipe(startWith(Cardano.ChainIds.Mainnet)),
+                // Selectors may emit independently during a network change.
+                selectActiveCardanoAccounts$: of([
+                  ...threeAccountCardanoWalletAccounts,
+                  ...previewAccountCardanoWalletAccounts,
+                ]),
               },
+              tokens: {
+                selectAllRaw$: new BehaviorSubject([
+                  account1someOtherTokens,
+                  {
+                    ...account1someOtherTokens,
+                    accountId: previewAccountCardanoWalletAccounts[0].accountId,
+                  },
+                ]),
+                selectTokensMetadata$: of({}),
+              },
+              failures: { selectFailureById$: of(noFailureSelector) },
             },
             dependencies: {
+              actions,
               cardanoProvider: {
                 getTokenMetadata,
               } as unknown as CardanoProviderDependencies['cardanoProvider'],
-              actions,
             },
             assertion: sideEffect$ => {
-              expectObservable(sideEffect$, '^ 20ms !').toBe('-----a', {
+              expectObservable(sideEffect$, '^ 20ms !').toBe('9ms a 7ms a', {
                 a: actions.tokens.upsertTokensMetadata({
-                  metadatas: [
-                    {
-                      tokenId: LOVELACE_TOKEN_ID,
-                      ...refreshedMetadata,
-                    },
-                  ],
+                  metadatas: [{ tokenId, ...metadata }],
                 }),
               });
-
               flush();
-              expect(getTokenMetadata).toHaveBeenCalledTimes(1);
+              expect(getTokenMetadata.mock.calls).toEqual([
+                [{ tokenId }, { chainId: Cardano.ChainIds.Preprod }],
+                [{ tokenId }, { chainId: Cardano.ChainIds.Preview }],
+              ]);
             },
           };
         },
       );
     });
+
+    it.each([0, 3])(
+      'discards previous-network metadata during a switch with a %s ms provider delay',
+      delay => {
+        testSideEffect(
+          trackTokenMetadata(batchInterval),
+          ({ cold, hot, expectObservable, flush }) => {
+            const tokenId = account1someOtherTokens.tokenId;
+            const metadata = (ticker: string) => ({
+              decimals: 0,
+              ticker,
+              blockchainSpecific: {},
+            });
+            const getTokenMetadata = vi
+              .fn()
+              .mockReturnValueOnce(
+                cold(`${delay}ms a`, { a: Ok(metadata('PREPROD')) }),
+              )
+              .mockReturnValueOnce(
+                cold(`${delay}ms a`, { a: Ok(metadata('PREVIEW')) }),
+              );
+
+            return {
+              actionObservables: {},
+              stateObservables: {
+                cardanoContext: {
+                  selectChainId$: hot('--v', {
+                    v: Cardano.ChainIds.Preview,
+                  }).pipe(startWith(Cardano.ChainIds.Preprod)),
+                  selectActiveCardanoAccounts$: of([
+                    ...threeAccountCardanoWalletAccounts,
+                    ...previewAccountCardanoWalletAccounts,
+                  ]),
+                },
+                tokens: {
+                  selectAllRaw$: new BehaviorSubject([
+                    account1someOtherTokens,
+                    {
+                      ...account1someOtherTokens,
+                      accountId:
+                        previewAccountCardanoWalletAccounts[0].accountId,
+                    },
+                  ]),
+                  selectTokensMetadata$: of({}),
+                },
+                failures: { selectFailureById$: of(noFailureSelector) },
+              },
+              dependencies: {
+                actions,
+                cardanoProvider: {
+                  getTokenMetadata,
+                } as unknown as CardanoProviderDependencies['cardanoProvider'],
+              },
+              assertion: sideEffect$ => {
+                expectObservable(sideEffect$, '^ 20ms !').toBe(
+                  `${delay + 7}ms a`,
+                  {
+                    a: actions.tokens.upsertTokensMetadata({
+                      metadatas: [{ tokenId, ...metadata('PREVIEW') }],
+                    }),
+                  },
+                );
+                flush();
+                expect(getTokenMetadata).toHaveBeenCalledTimes(2);
+              },
+            };
+          },
+        );
+      },
+    );
+
+    it.each([undefined, 1])(
+      'refreshes stale Cardano metadata with schema version %s',
+      metadataSchemaVersion => {
+        testSideEffect(
+          trackTokenMetadata(batchInterval),
+          ({ cold, expectObservable, flush }) => {
+            const selectChainId$ = cold<Cardano.ChainId>('a', { a: chainId });
+            const selectAllRaw$ = cold<RawToken[]>('a', {
+              a: [account1someOtherTokens],
+            });
+            const selectTokensMetadata$ = cold<
+              Partial<Record<TokenId, StoredTokenMetadata>>
+            >('a', {
+              a: {
+                [account1someOtherTokens.tokenId]: {
+                  tokenId: account1someOtherTokens.tokenId,
+                  decimals: 6,
+                  blockchainSpecific: {
+                    metadataSchemaVersion,
+                    metadataSources: ['token-registry'],
+                  },
+                },
+              },
+            });
+
+            const refreshedMetadata = {
+              decimals: 6,
+              blockchainSpecific: {
+                metadataSchemaVersion: CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
+                metadataSources: ['on-chain'],
+              },
+            };
+            const getTokenMetadata = vi
+              .fn()
+              .mockReturnValue(of(Ok<TokenMetadata>(refreshedMetadata)));
+
+            return {
+              actionObservables: {},
+              stateObservables: {
+                cardanoContext: {
+                  selectChainId$,
+                  selectActiveCardanoAccounts$: of(
+                    threeAccountCardanoWalletAccounts,
+                  ),
+                },
+                tokens: { selectAllRaw$, selectTokensMetadata$ },
+                failures: {
+                  selectFailureById$: cold('a', { a: noFailureSelector }),
+                },
+              },
+              dependencies: {
+                cardanoProvider: {
+                  getTokenMetadata,
+                } as unknown as CardanoProviderDependencies['cardanoProvider'],
+                actions,
+              },
+              assertion: sideEffect$ => {
+                expectObservable(sideEffect$, '^ 20ms !').toBe('-----a', {
+                  a: actions.tokens.upsertTokensMetadata({
+                    metadatas: [
+                      {
+                        tokenId: account1someOtherTokens.tokenId,
+                        ...refreshedMetadata,
+                      },
+                    ],
+                  }),
+                });
+
+                flush();
+                expect(getTokenMetadata).toHaveBeenCalledTimes(1);
+              },
+            };
+          },
+        );
+      },
+    );
   });
 });

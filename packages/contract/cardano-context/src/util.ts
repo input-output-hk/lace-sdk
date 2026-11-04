@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import BigNumber from 'bignumber.js';
 
 import { COLLATERAL_AMOUNT_LOVELACES } from './const';
@@ -12,6 +11,7 @@ import type {
   CardanoProvider,
   CardanoProviderContext,
 } from './types';
+import type { Cardano } from '@cardano-sdk/core';
 import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type {
   AnyAddress,
@@ -154,21 +154,7 @@ export const filterSpendableUtxos = (
   return utxos.filter(utxo => !unspendableSet.has(utxoKey(utxo)));
 };
 
-/**
- * The payment credential of a base, enterprise or pointer address; `undefined`
- * for anything else (reward, Byron, unparseable).
- */
-export const getPaymentCredential = (
-  address: Cardano.PaymentAddress,
-): Cardano.Credential | undefined => {
-  const parsed = Cardano.Address.fromString(address);
-  if (!parsed) return undefined;
-  return (
-    parsed.asBase()?.getPaymentCredential() ??
-    parsed.asEnterprise()?.getPaymentCredential() ??
-    parsed.asPointer()?.getPaymentCredential()
-  );
-};
+export { getPaymentCredential } from '@lace-lib/core';
 
 /**
  * An input resolver that answers from `localUtxos` first and asks the

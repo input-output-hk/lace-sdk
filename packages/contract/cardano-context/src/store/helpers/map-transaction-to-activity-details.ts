@@ -8,7 +8,10 @@ import {
   computeNetFlows,
   type TokenTransferValue,
 } from '../../compute-net-flows';
-import { isAccountTokenOf } from '../../extensions';
+import {
+  classifyExtensionTransaction,
+  isAccountTokenOf,
+} from '../../extensions';
 
 import { computeOwnNetCoins } from './compute-own-net-coins';
 import { inputOutputTransformer } from './input-output-transform';
@@ -17,6 +20,7 @@ import {
   fetchAssetsMetadata,
 } from './transaction-inspectors';
 
+import type { EnabledExtensionActivities } from '../../extensions';
 import type {
   CardanoRewardAccount,
   CardanoTokenMetadata,
@@ -48,11 +52,16 @@ export type MapActivityToActivityDetailsParams = {
     tokenId: TokenId,
   ) => Observable<Result<TokenMetadata<CardanoTokenMetadata>, Error>>;
   logger: Logger;
+  enabledExtensionActivities: EnabledExtensionActivities;
 };
 
 export type BuildCardanoTransactionParams = {
   logger: Logger;
-  txDetails: Pick<ExtendedTxDetails, 'auxiliaryData' | 'body'> & {
+  enabledExtensionActivities: EnabledExtensionActivities;
+  txDetails: Pick<
+    ExtendedTxDetails,
+    'auxiliaryData' | 'body' | 'id' | 'inputSource'
+  > & {
     body: Pick<
       Cardano.HydratedTxBody,
       | 'certificates'
@@ -193,7 +202,16 @@ const buildTxSummaryFromNetFlows = (
 };
 
 const buildCardanoTransaction = ({
-  txDetails: {
+  txDetails,
+  enabledExtensionActivities,
+  summary,
+  assetsInfo,
+  accountAddresses,
+  rewardAccount,
+  protocolParameters,
+  tokenTransfer,
+}: BuildCardanoTransactionParams): CardanoTransaction => {
+  const {
     auxiliaryData,
     body: {
       inputs,
@@ -204,14 +222,7 @@ const buildCardanoTransaction = ({
       donation,
       withdrawals,
     },
-  },
-  summary,
-  assetsInfo,
-  accountAddresses,
-  rewardAccount,
-  protocolParameters,
-  tokenTransfer,
-}: BuildCardanoTransactionParams): CardanoTransaction => {
+  } = txDetails;
   const { collateral, deposit, resolvedInputs, returnedDeposit } = summary;
   // Account tokens are no holding: the details list them nowhere, as the
   // balance and tokens do not.
@@ -258,6 +269,7 @@ const buildCardanoTransaction = ({
     proposalProcedures,
     certificates,
     txSummary,
+    ...classifyExtensionTransaction(txDetails, enabledExtensionActivities),
     // TODO: LW-13466 add pools in case of delegation transaction. Requires stakePoolProvider
   };
 };
@@ -271,6 +283,7 @@ export const mapTransactionToActivityDetails = ({
   inputResolver,
   getTokenMetadata,
   logger,
+  enabledExtensionActivities,
 }: MapActivityToActivityDetailsParams): Observable<
   Result<ActivityDetail<CardanoTransaction>, Error>
 > => {
@@ -303,6 +316,7 @@ export const mapTransactionToActivityDetails = ({
       cardano: buildCardanoTransaction({
         txDetails,
         logger,
+        enabledExtensionActivities,
         summary,
         metadata,
         assetsInfo,

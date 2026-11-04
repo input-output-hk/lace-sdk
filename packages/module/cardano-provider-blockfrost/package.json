@@ -20,6 +20,7 @@
     "@lace-lib/util-provider": "*"
   },
   "devDependencies": {
-    "@blockfrost/blockfrost-js": "^6.0.0"
+    "@blockfrost/blockfrost-js": "^6.0.0",
+    "@lace-lib/cardano-custody": "*"
   }
 }

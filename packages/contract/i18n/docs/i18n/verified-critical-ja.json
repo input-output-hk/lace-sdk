@@ -43,5 +43,13 @@
   "midnight.send-flow.stage.confirmation",
   "midnight.send-flow.proof-material",
   "v2.swap.verified-only",
-  "v2.swap.verified-only-hint"
+  "v2.swap.verified-only-hint",
+  "dapp-connector.cardano.sign-tx.asset-identity.name-hex",
+  "dapp-connector.cardano.sign-tx.asset-identity.quantity",
+  "dapp-connector.cardano.sign-tx.asset-identity.source",
+  "dapp-connector.cardano.sign-tx.asset-identity.on-chain",
+  "dapp-connector.cardano.sign-tx.asset-identity.no-metadata",
+  "dapp-connector.cardano.sign-tx.asset-identity.verification",
+  "dapp-connector.cardano.sign-tx.asset-identity.unverified",
+  "dapp-connector.cardano.sign-tx.asset-identity.metadata-hint"
 ]

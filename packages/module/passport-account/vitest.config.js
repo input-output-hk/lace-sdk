@@ -12,6 +12,10 @@ export default defineConfig({
         __dirname,
         '../../../node_modules/@scure/bip39/wordlists/english.js',
       ),
+      '@midnight-ntwrk/compact-runtime': resolve(
+        __dirname,
+        'node_modules/@midnight-ntwrk/compact-runtime/dist/index.js',
+      ),
     },
   },
   test: {

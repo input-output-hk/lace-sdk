@@ -6,6 +6,8 @@ import {
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { accountBundle } from '../../src/acc/bundle';
+import { createPassportRegistry } from '../../src/acc/registry';
 import { createDependencies } from '../../src/store/dependencies';
 import {
   isSealedRecord,
@@ -65,6 +67,7 @@ const deviceCall: DeviceCallInput = {
   account: {
     address: record.address,
     bindingVersion: record.bindingVersion,
+    bundleId: 'account',
     status: 'ready',
     networkId: 'undeployed',
   },
@@ -275,6 +278,29 @@ describe('streaming a flow promise as an observable (via passportFlows.createAcc
 });
 
 describe('createDependencies', () => {
+  it('builds one bundle registry of the default and the registered bundles, exposed as passportBundles and handed to every flow', async () => {
+    const tallyBundle = { ...accountBundle, id: 'account-tally' };
+    mocks.signIn.mockResolvedValue('recognised');
+    const { passportBundles, passportFlows } = createDependencies({
+      authoriser,
+      encryptionKey,
+      sponsor,
+      prover,
+      network,
+      registry: createPassportRegistry({ bundles: [tallyBundle] }),
+    });
+
+    expect(passportBundles.bundles).toEqual([accountBundle, tallyBundle]);
+    passportFlows.signIn(createFlowRunnerDependencies() as never).subscribe();
+    await vi.waitFor(() => {
+      expect(mocks.signIn).toHaveBeenCalledOnce();
+    });
+    const [{ bundles }] = mocks.signIn.mock.calls[0] as unknown as [
+      FlowContext,
+    ];
+    expect(bundles).toBe(passportBundles);
+  });
+
   it('maps the five seams onto the contract fields', () => {
     expect(
       createDependencies({
@@ -338,6 +364,7 @@ describe('createDependencies', () => {
         },
         accountRecords: expect.any(Object) as unknown,
         onProgress: expect.any(Function) as unknown,
+        bundles: expect.any(Object) as unknown,
       },
     );
     const [, { accountRecords }] = mocks.createAccount.mock
@@ -455,6 +482,7 @@ describe('createDependencies', () => {
       },
       accountRecords: expect.any(Object) as unknown,
       onProgress: expect.any(Function) as unknown,
+      bundles: expect.any(Object) as unknown,
     });
     const [{ accountRecords }] = mocks.signIn.mock.calls[0] as unknown as [
       FlowContext,
@@ -525,6 +553,7 @@ describe('createDependencies', () => {
         },
         accountRecords: expect.any(Object) as unknown,
         onProgress: expect.any(Function) as unknown,
+        bundles: expect.any(Object) as unknown,
       });
       const [, { accountRecords }] = flow.mock.calls[0] as unknown as [
         unknown,
@@ -598,6 +627,7 @@ describe('createDependencies', () => {
         },
         accountRecords: expect.any(Object) as unknown,
         onProgress: expect.any(Function) as unknown,
+        bundles: expect.any(Object) as unknown,
         rpId: 'lace.io',
       });
       const [, { accountRecords }] = flow.mock.calls[0] as unknown as [
@@ -672,6 +702,7 @@ describe('createDependencies', () => {
         },
         accountRecords: expect.any(Object) as unknown,
         onProgress: expect.any(Function) as unknown,
+        bundles: expect.any(Object) as unknown,
         rpId: 'lace.io',
       },
     );
@@ -715,6 +746,7 @@ describe('createDependencies', () => {
         },
         accountRecords: expect.any(Object) as unknown,
         onProgress: expect.any(Function) as unknown,
+        bundles: expect.any(Object) as unknown,
         rpId: 'lace.io',
       },
     );

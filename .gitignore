@@ -19,6 +19,8 @@ node_modules
 coverage
 apps/lace-mobile-storybook/allure-results
 apps/lace-mobile-storybook/allure-report
+# Regenerable Send visual evidence belongs in PR attachments or CI artifacts.
+/docs/testing/lw-15731/golden/
 
 # misc
 .DS_Store
@@ -111,6 +113,16 @@ apps/*/modules/*/android/.gradle/
 .reassure/
 **/.gradle/
 
+apps/lace-next-storybook/reports/
+
+# Generated validation payloads belong in local reports or CI artifacts.
+apps/lace-next-storybook/evidence/
+apps/lace-next-e2e/evidence/
+apps/lace-next-mobile-e2e/evidence/
+docs/testing/lw-15593-*/
+docs/testing/lw-15593-*.json
+docs/testing/lw-15593/**/*.raw
+docs/testing/lw-15593/**/*.raw.*
 # EAS local-signing file: carries plain-text signing passwords; CI writes it
 # on runners only — a local copy must never be committable.
 apps/lace-next/credentials.json

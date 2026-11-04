@@ -7,7 +7,7 @@
   "sideEffects": false,
   "main": "src/index.ts",
   "dependencies": {
-    "@lace-lib/util": "*",
+    "@lace-lib/cardano-util": "*",
     "blake2b": "2.1.4",
     "libsodium-wrappers-sumo": "0.7.10",
     "lodash": "^4.17.21",

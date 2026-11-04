@@ -10,8 +10,12 @@ import { BlockfrostProvider } from '../blockfrost-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
 import type { GetAssetArgs } from '@cardano-sdk/core';
+import type { CardanoTokenMetadata } from '@lace-contract/cardano-context';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
+
+export type AssetInfoWithMetadataSources = Asset.AssetInfo &
+  Pick<CardanoTokenMetadata, 'metadataSources'>;
 
 export class BlockfrostAssetProvider extends BlockfrostProvider {
   public constructor(client: HttpClient, logger: Logger) {
@@ -21,7 +25,7 @@ export class BlockfrostAssetProvider extends BlockfrostProvider {
   public async getAsset({
     assetId,
     extraData,
-  }: GetAssetArgs): Promise<Asset.AssetInfo> {
+  }: GetAssetArgs): Promise<AssetInfoWithMetadataSources> {
     try {
       const response = await this.request<Responses['asset']>(
         `assets/${assetId.toString()}`,
@@ -31,6 +35,11 @@ export class BlockfrostAssetProvider extends BlockfrostProvider {
       const quantity = BigInt(response.quantity);
       return {
         assetId,
+        // Presentation mappers fall back across sources, so provenance must come from the response.
+        metadataSources: [
+          ...(response.onchain_metadata != null ? ['on-chain' as const] : []),
+          ...(response.metadata != null ? ['token-registry' as const] : []),
+        ],
         fingerprint: Cardano.AssetFingerprint(response.fingerprint),
         name,
         nftMetadata: extraData?.nftMetadata

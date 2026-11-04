@@ -13,6 +13,7 @@ import {
 
 import { validatePassportNetwork } from './infra/networks';
 
+import type { PassportRegistry } from './acc/registry';
 import type { AccountRecordStore } from './store/account-record';
 import type {
   FeeSponsor,
@@ -50,6 +51,16 @@ export type CreatePassportAccountModuleProps = {
    * it before it can issue grants.
    */
   rpId?: string;
+  /**
+   * What the host registers: the account bundles beside the default one,
+   * each a build of the account contract an account may be deployed from
+   * or recognised as, and the contracts their circuits may call. The same
+   * value goes to the authoriser, the encryption key, the prover and the
+   * dev deposit. Built by `createPassportRegistry`, which refuses a
+   * bundle or called contract that breaks a registry rule; none beside
+   * the default by default.
+   */
+  registry?: PassportRegistry;
 };
 
 /**

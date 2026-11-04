@@ -1,4 +1,4 @@
-import { BigIntMath } from '@lace-lib/util/common';
+import { BigIntMath } from '@lace-lib/cardano-util';
 
 import { removeNegativesFromTokenMap } from '../Asset/util';
 import { RewardAccount, isAddressWithin } from '../Cardano/Address';

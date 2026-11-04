@@ -1,5 +1,5 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { Cardano, Serialization } from '../../src';
 import { ScriptLanguage } from '../../src/Serialization/Scripts/ScriptLanguage';

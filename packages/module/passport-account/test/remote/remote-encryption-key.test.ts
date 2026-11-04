@@ -450,13 +450,14 @@ describe('createRemoteEncryptionKey', () => {
       counter: 4n,
       changes: {
         kind: 'insert-verifier-keys' as const,
+        bundleId: 'account-tally',
         inserts: [
           { operation: 'withdraw_unshielded', verifierKey: Uint8Array.of(1) },
         ],
       },
     };
 
-    it('asks the signer to sign the update the request names and decodes what it signed', async () => {
+    it('asks the signer to sign the update the request names, the bundle of an install included, and decodes what it signed', async () => {
       const client = {
         request: vi.fn(async () => ({ signature, authority })),
       };
@@ -476,6 +477,7 @@ describe('createRemoteEncryptionKey', () => {
           counter: '4',
           changes: {
             kind: 'insert-verifier-keys',
+            bundleId: 'account-tally',
             inserts: [{ operation: 'withdraw_unshielded', verifierKey: '01' }],
           },
         },

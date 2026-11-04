@@ -1,4 +1,4 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import type { Metadatum, MetadatumMap } from '../Cardano/types/AuxiliaryData';
 

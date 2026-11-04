@@ -1,9 +1,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
+import { NIGHT_TOKEN_ID } from '../src/const';
 import {
   calculateDustTimeRemainingSeconds,
   formatDustTime,
+  sendReducesDustGeneration,
 } from '../src/dust-utils';
+import { toUnshieldedTokenType } from '../src/utils';
 
 describe('formatDustTime', () => {
   it('returns undefined for 0 seconds', () => {
@@ -150,5 +153,55 @@ describe('calculateDustTimeRemainingSeconds', () => {
         }),
       ).toBe(0);
     });
+  });
+});
+
+describe('sendReducesDustGeneration', () => {
+  const night = toUnshieldedTokenType(NIGHT_TOKEN_ID, 'preview');
+  const send = {
+    flowType: 'send' as const,
+    tokenIds: ['other', night],
+    dustTankState: 'refilling' as const,
+    networkId: 'preview' as const,
+  };
+
+  it('warns when NIGHT leaves an account whose tank has capacity', () => {
+    expect(sendReducesDustGeneration(send)).toBe(true);
+    expect(
+      sendReducesDustGeneration({ ...send, dustTankState: 'filled' }),
+    ).toBe(true);
+    expect(
+      sendReducesDustGeneration({ ...send, dustTankState: 'decaying' }),
+    ).toBe(true);
+    expect(sendReducesDustGeneration({ ...send, flowType: undefined })).toBe(
+      true,
+    );
+  });
+
+  it('stays silent for an empty or unknown tank', () => {
+    expect(sendReducesDustGeneration({ ...send, dustTankState: 'empty' })).toBe(
+      false,
+    );
+    expect(
+      sendReducesDustGeneration({ ...send, dustTankState: undefined }),
+    ).toBe(false);
+  });
+
+  it('stays silent for a designation, which moves no NIGHT', () => {
+    expect(
+      sendReducesDustGeneration({ ...send, flowType: 'dust-designation' }),
+    ).toBe(false);
+  });
+
+  it('stays silent without native NIGHT of the same network', () => {
+    expect(sendReducesDustGeneration({ ...send, tokenIds: ['other'] })).toBe(
+      false,
+    );
+    expect(
+      sendReducesDustGeneration({
+        ...send,
+        tokenIds: [toUnshieldedTokenType(NIGHT_TOKEN_ID, 'mainnet')],
+      }),
+    ).toBe(false);
   });
 });

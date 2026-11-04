@@ -2,7 +2,7 @@ import { MidnightInMemoryDataSigner } from './midnight-in-memory-data-signer';
 import { MidnightInMemoryTransactionSigner } from './midnight-in-memory-transaction-signer';
 
 import type {
-  MidnightWalletsByAccountId,
+  MidnightEnginesByAccountId,
   MidnightDataSigner,
   MidnightSignerContext,
   MidnightSignerFactory,
@@ -14,7 +14,7 @@ import type { Observable } from 'rxjs';
 
 export class MidnightInMemorySignerFactory implements MidnightSignerFactory {
   public constructor(
-    private readonly wallets$: Observable<MidnightWalletsByAccountId>,
+    private readonly wallets$: Observable<MidnightEnginesByAccountId>,
   ) {}
 
   public canSign(account: AnyAccount): boolean {

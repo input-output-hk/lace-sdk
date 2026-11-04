@@ -43,6 +43,7 @@ const accountAddress = 'ac'.repeat(32);
 const account: PassportAccountInfo = {
   address: accountAddress,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };

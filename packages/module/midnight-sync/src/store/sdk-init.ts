@@ -3,16 +3,30 @@ import {
   registerMidnightBlockchainNetworks,
 } from '@lace-contract/midnight-context';
 
+import {
+  createMidnightEngineClient,
+  registerMidnightEngineClient,
+} from '../worker/engine-client';
+
 import { createMidnightSideEffectDependencies } from './dependencies';
 import { createInitializeSideEffects } from './side-effects';
 import {
   createApplyNetworkConfigOverrides,
   createApplyNetworkDefaultsMiddleware,
 } from './side-effects/network-config';
-import { createHeadlessResetSyncStateSideEffect } from './side-effects/resync';
+import {
+  createHeadlessResetSyncStateSideEffect,
+  createWorkerClearWalletStateOnResync,
+  createWorkerDeleteWalletSideEffect,
+  createWorkerResetSyncStateSideEffect,
+  showMidnightEngineResets,
+} from './side-effects/resync';
+import { surfaceMidnightEngineFailures } from './side-effects/watch';
 
 import type { MidnightEngineOptions } from './dependencies';
 import type { MidnightNetworkStartupConfig } from './side-effects/network-config';
+import type { ConnectMidnightEngine } from '../worker/engine-client';
+import type { MidnightWorkerStorageKind } from '../worker/protocol';
 import type {
   AccessAuthSecret,
   Authenticate,
@@ -32,9 +46,21 @@ export type MidnightSyncAuth = {
   authenticate: Authenticate;
 };
 
+/** Runs every account's engine in a worker shared by the app's pages instead of on this page. */
+export type MidnightSyncWorkerOptions = {
+  /** Opens a connection to the worker's engine host. */
+  connect: ConnectMidnightEngine;
+  /** Where the worker keeps the engines' checkpoints. */
+  storage: MidnightWorkerStorageKind;
+  /** Attach to an engine already running with other settings, adopting them, instead of failing. */
+  adopt?: boolean;
+};
+
 export type MidnightSyncSdkOptions = MidnightNetworkStartupConfig &
   Pick<MidnightEngineOptions, 'batchUpdates' | 'createAttestedProver'> & {
     auth: MidnightSyncAuth;
+    /** Absent: the engine runs on this page. */
+    worker?: MidnightSyncWorkerOptions;
   };
 
 // The contract starts the wallet on this testnet and reads it without a
@@ -59,8 +85,9 @@ export const createSdkStoreInit = ({
   networks = {},
   supportedNetworkIds,
   defaultProofServers,
+  worker,
 }: MidnightSyncSdkOptions): LaceInit<LaceModuleStoreInit> => {
-  const initializeSideEffects = createInitializeSideEffects(storage => [
+  const initializePageSideEffects = createInitializeSideEffects(storage => [
     registerMidnightBlockchainNetworks,
     createApplyNetworkConfigOverrides(networks),
     createHeadlessResetSyncStateSideEffect(storage),
@@ -71,16 +98,46 @@ export const createSdkStoreInit = ({
   });
   return (props, dependencies) => {
     assertDefaultTestnetConfigured(props.runtime.config);
+    const pageDependencies = initializeDependencies(props, dependencies);
+    const middleware = [
+      createApplyNetworkDefaultsMiddleware({
+        supportedNetworkIds,
+        defaultProofServers,
+      }),
+    ];
+    if (!worker)
+      return {
+        middleware,
+        sideEffects: initializePageSideEffects(props, dependencies),
+        sideEffectDependencies: { ...pageDependencies, ...auth },
+      };
+    // Checkpoints live in the worker, so every side effect that would wipe them on this page goes to the worker.
+    const client = createMidnightEngineClient({
+      ...worker,
+      accessAuthSecret: auth.accessAuthSecret,
+      attestedProver: !!createAttestedProver,
+      batchUpdates,
+      logger: dependencies.logger,
+    });
+    registerMidnightEngineClient(props.runtime, client);
     return {
-      middleware: [
-        createApplyNetworkDefaultsMiddleware({
-          supportedNetworkIds,
-          defaultProofServers,
-        }),
-      ],
-      sideEffects: initializeSideEffects(props, dependencies),
+      middleware,
+      sideEffects: createInitializeSideEffects(
+        () => [
+          registerMidnightBlockchainNetworks,
+          createApplyNetworkConfigOverrides(networks),
+          createWorkerResetSyncStateSideEffect(client),
+          showMidnightEngineResets(client),
+          surfaceMidnightEngineFailures(client),
+        ],
+        () => [
+          createWorkerDeleteWalletSideEffect(client),
+          createWorkerClearWalletStateOnResync(client),
+        ],
+      )(props, dependencies),
       sideEffectDependencies: {
-        ...initializeDependencies(props, dependencies),
+        ...pageDependencies,
+        startMidnightAccountWallet: client.startAccountEngine,
         ...auth,
       },
     };

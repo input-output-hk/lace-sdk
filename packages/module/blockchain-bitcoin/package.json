@@ -28,6 +28,7 @@
     "@lace-contract/wallet-active-state": "*",
     "@lace-contract/wallet-repo": "*",
     "@lace-lib/core": "*",
+    "@lace-lib/extension-messaging": "*",
     "@lace-lib/ui-toolkit": "*",
     "@lace-lib/util": "*",
     "@lace-lib/util-redacted": "*",

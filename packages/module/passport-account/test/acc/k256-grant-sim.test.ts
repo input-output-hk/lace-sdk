@@ -17,6 +17,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { pureCircuits } from '../../src/acc/acc-module';
+import { createBundleRegistry } from '../../src/acc/bundle';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import { originHash } from '../../src/acc/grants';
@@ -151,6 +152,7 @@ const owner = (): FlowContext => {
     accountRecords: memoryRecords(),
     onProgress: vi.fn(),
     rpId,
+    bundles: createBundleRegistry(),
   };
 };
 

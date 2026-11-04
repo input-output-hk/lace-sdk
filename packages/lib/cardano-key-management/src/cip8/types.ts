@@ -1,7 +1,7 @@
 import type { GroupedAddress } from '../types';
 import type { Cardano } from '@lace-lib/cardano-core';
 import type * as Crypto from '@lace-lib/cardano-crypto';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export type CoseSign1CborHex = HexBlob;
 export type CoseKeyCborHex = HexBlob;

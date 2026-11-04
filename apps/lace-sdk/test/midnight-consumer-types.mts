@@ -8,6 +8,7 @@ import {
   MidnightAccountNotFoundError,
   MidnightNetworkNotConfiguredError,
   MidnightNothingToRegisterError,
+  MidnightStaleTxError,
   MidnightWalletNotReadyError,
   isForbiddenTokenName,
   isTakenTokenName,
@@ -76,6 +77,14 @@ import {
   type MidnightNetworkConfig,
   type MidnightSDKNetworkId,
   type BlockchainNetworkId,
+  MidnightAttestedProverUnsupportedError,
+  MidnightEngineResetError,
+  MidnightSubmitInterruptedError,
+  MidnightWorkerSettingsConflictError,
+  MidnightWorkerStartupError,
+  MidnightWorkerStoppedError,
+  MidnightWorkerUnsupportedError,
+  type MidnightWorkerOptions,
 } from '@laceio/sdk/midnight';
 
 const password = new TextEncoder().encode('consumer');
@@ -416,6 +425,20 @@ export const stagedNightAfterConsent = async (
   const transaction: MidnightFinalizedTx = (
     await proveMidnightTx(wallet, proving)
   ).unwrap();
+  const activityHash: string = transaction.activityHash;
+  // @ts-expect-error A proved value holds bytes, not a ledger transaction.
+  transaction.transactionHash();
+  if (recipe.type === 'UNPROVEN_TRANSACTION')
+    // @ts-expect-error A recipe holds bytes, not ledger transactions.
+    recipe.transaction.serialize();
+  // @ts-expect-error Only the SDK makes a recipe value; an app passes back the one it received.
+  const forged: MidnightTxRecipe = {
+    accountId: recipe.accountId,
+    engineGeneration: recipe.engineGeneration,
+    type: 'UNPROVEN_TRANSACTION',
+    transaction: new Uint8Array(),
+  };
+  void [activityHash, forged];
   const submission: SubmitMidnightTxProps = { ...account, transaction };
   // Obtain separate authorization before invoking the returned submission.
   return () => submitMidnightTx(wallet, submission);
@@ -458,17 +481,19 @@ export const balanceAndErrorContracts = (
     ...(account.accountId
       ? [
           new MidnightNothingToRegisterError(account.accountId),
+          new MidnightStaleTxError(account.accountId),
           new MidnightWalletNotReadyError(account.accountId, 1),
         ]
       : []),
   ];
   const missing = new MidnightAccountNotFoundError('Missing');
   const code: MidnightErrorCode = missing.code;
+  const stale: MidnightErrorCode = 'midnight-stale-tx';
   // @ts-expect-error Error codes are a closed SDK vocabulary.
   const unsupportedCode: MidnightErrorCode = 'confirmed';
   const success: Result<bigint, Error> = Ok(1n);
   const failure: Result<bigint, Error> = Err(missing);
-  void [errors, code, unsupportedCode, success, failure];
+  void [errors, code, stale, unsupportedCode, success, failure];
 };
 
 export const publicBoundary = () => {
@@ -529,4 +554,30 @@ export const connectorAfterConsent = async (
       transaction: swapped.unwrap(),
     }),
   };
+};
+
+export const workerMode = (account: MidnightAccountSelection) => {
+  const options: MidnightWorkerOptions = { storage: 'indexeddb', adopt: true };
+  createMidnightModule({ ...moduleProps, worker: true });
+  createMidnightModule({ ...moduleProps, worker: options });
+  createMidnightModule({ ...moduleProps, worker: { adopt: true } });
+  // @ts-expect-error The worker keeps the engines' state in memory or in IndexedDB.
+  createMidnightModule({ ...moduleProps, worker: { storage: 'disk' } });
+  const interrupted = new MidnightSubmitInterruptedError('hash');
+  const activityHash: string = interrupted.activityHash;
+  const errors: { code: MidnightErrorCode }[] = [
+    new MidnightWorkerUnsupportedError(),
+    new MidnightAttestedProverUnsupportedError(),
+    interrupted,
+    ...(account.accountId
+      ? [
+          new MidnightWorkerStartupError(account.accountId),
+          new MidnightWorkerStoppedError(account.accountId),
+          new MidnightWorkerSettingsConflictError(account.accountId),
+          new MidnightEngineResetError(account.accountId),
+        ]
+      : []),
+  ];
+  const interruptedCode: MidnightErrorCode = 'midnight-submit-interrupted';
+  void [activityHash, errors, interruptedCode];
 };

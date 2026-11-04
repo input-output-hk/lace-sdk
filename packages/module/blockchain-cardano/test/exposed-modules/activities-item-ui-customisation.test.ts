@@ -22,6 +22,14 @@ const config = {
 } as unknown as AppConfig;
 
 describe('activities-item-ui-customisation', () => {
+  describe('selectActivityStates', () => {
+    it('selects the live states of Hydra deposits', () => {
+      expect(activitiesListUiCustomisation().selectActivityStates).toBe(
+        CardanoContext.selectHydraDepositActivityStates,
+      );
+    });
+  });
+
   describe('uiCustomisationSelector', () => {
     it('should return true for Cardano blockchain', () => {
       const customisation = activitiesListUiCustomisation();

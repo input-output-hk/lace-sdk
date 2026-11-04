@@ -32,7 +32,7 @@ flowchart TB
         slice["slice: flow, account, devices"]
         gate["gate: exhaustMap, trigger / call / map"]
         flows["flows: plain async functions"]
-        binding["vendored ACC binding: hash-pinned artefacts, jubjub signer"]
+        binding["account bundles: the vendored ACC and registered builds, hash-pinned artefacts, jubjub signer"]
     end
     auth["PassportAuthoriser"]
     prover["PassportProver"]
@@ -66,20 +66,142 @@ each swapped in by whatever the caller passes to
 | `PassportEncryptionKey` | `createPasskeyEncryptionKey` (this device's X25519 reader key, a MIP-0015 secret over the passkey-derived wallet seed, which opens the random account secret from this device's envelopes in the inbox, production); `devEncryptionKey` (in-memory seed, development and tests) | The wallet layer's own MIP-0015 connector once Passport accounts join a wallet                                                                                   |
 | `FeeSponsor`            | `createDevSponsor` (funded localnet wallet pays every fee; local development only)                                                                                                                                                                                              | A hosted sponsor service, so no funded wallet is needed outside development                                                                                      |
 | `PassportProver`        | `createHttpProver` (HTTP proof server, wire-compatible with midnight-js)                                                                                                                                                                                                        | Same interface; a managed proof-server endpoint in production                                                                                                    |
-| `PassportNetworkConfig` | Plain network id plus indexer/node/artefact endpoints passed in by the caller                                                                                                                                                                                                   | Endpoint discovery/config owned by the consuming app                                                                                                             |
+| `PassportNetworkConfig` | Plain network id, indexer/node/artefact endpoints and the called contracts of the network, passed in by the caller                                                                                                                                                              | Endpoint discovery/config owned by the consuming app                                                                                                             |
+
+### Account bundles
+
+A Midnight contract can only call contracts it was compiled with, so an
+account that uses another contract needs that call in its own circuits:
+another build of the account contract. The module models a build as an
+account bundle (`AccountBundle` in `@lace-contract/passport`): its id, its
+binding version, its compiled module, loaded only when an account of that
+build is used, its manifest of integrity pins, its operation roster in
+installation order, the sha256 of every operation's verifier key, the
+constructor arguments it takes after the standard ones, and a descriptor
+for each circuit a caller may run on it, which names the circuit's
+arguments and witnesses, the pure circuit that builds its authorisation
+challenge and the order its arguments enter that challenge.
+
+The vendored Account Custody Contract is the default bundle, `account`,
+built from the generated module, `accManifest` and the deployed roster;
+its verifier key fingerprints are the generated module's `expectedVk`
+table. The SDK entry exposes the default without loading the generated
+module: `pinnedAccountBundle` holds its id, roster, constructor arguments
+and circuits, and `accManifest` its manifest; a bundle derived from the
+default takes those two as its base. A bundle is the vendored account
+plus circuits of its own: the module's flows call the default roster's
+circuits, build their challenges with the vendored pure circuits and read
+every ledger as the vendored one, so a bundle compiles `account.compact`
+unchanged, at the vendored commit and toolchain, and adds to it. Taking
+the live base ties a frozen compile to the SDK's vendored contract, so it
+holds only while that contract stays at the bundle's compile commit; a
+rebuild of the vendored contract means rebuilding every bundle derived
+from it. A host registers further bundles, and the contracts they call,
+in one registry built by `createPassportRegistry`, and passes that one
+value as `registry` to `createPassportAccountModule`, the authoriser, the
+encryption key, the prover and the dev deposit. One value removes the
+differences in shape between the seams, but every seam still needs it: a
+seam left without it knows only the default bundle and fails late (see
+#3053); the default is always present. `createPassportRegistry`
+refuses, before any seam is built, a bundle that breaks a rule, with `account-bundle-invalid` naming the bundle and
+the rule: ids are unique and made of lowercase letters, digits and
+hyphens; the roster and the pure circuits contain the default's; every
+operation of the roster has a verifier key pin; a
+constructor argument is never derived; an integer argument is bounded by
+a decimal string; a descriptor names a circuit of the roster, each of its
+challenge arguments is an argument or a witness of the circuit, and a
+derived address argument names a contract argument of the same circuit;
+and no descriptor names one of the module's own circuits, the deposits,
+the activation and the device, grant and encryption key circuits the
+module runs through its own flows and consent screens. A build's other
+circuits, its withdrawals included, may be described, since the module
+has no flow of its own for them; what such a descriptor lets a dApp ask
+for is the bundle author's to review.
+
+The build of an account is recognised from the chain alone, never from the
+record: the sha256 of each operation's verifier key the contract holds is
+compared with every bundle's fingerprints, and the bundle whose
+fingerprints match every on-chain operation is the account's. When several
+match, the one whose roster is exactly the on-chain set wins, else the one
+with the smallest roster, since an account whose install is unfinished is
+closer to the build with fewer circuits, and among rosters of one size the
+one registered first, the default ahead of the rest. An account no bundle covers, or
+one holding no operation at all, is refused with
+`account-bundle-unknown`. Sign-in and the startup restore resolve the
+bundle and publish its id as `account.bundleId`; creation publishes the
+id of the bundle it deployed, the default's when it named none. Every
+read of an account's ledger state then goes through its bundle's module:
+the compiler lays a build's ledger out in its own order, so a build that
+adds a ledger field moves the fields after it, and the default build's
+decoder reads such a state at the wrong paths.
+
+Which seams a host hands the same bundles to is under "Factory API". How
+the hosted signer pins them, and holds a call, a creation and an install
+to its own pins, is under "Key material". Why the build is a registered
+value, why the bundle of an account is read from the chain alone, and the
+alternatives set aside are recorded in
+[ADR 71](../../../docs/adr/71-passport-account-bundles-and-called-contracts.md).
+
+#### Called contracts
+
+A bundle's circuits call other contracts by the contract types they were
+compiled with, and the contract deployed under such a type lives at one
+address. A contract address is content-derived and names one deployment,
+so a host registers its called contracts in the registry beside the
+bundles, `calledContracts` of `createPassportRegistry`, one list for
+every network it serves and one `CalledContract` each: the label a consent screen shows, the address
+as 64 lowercase hex characters, the interface name a bundle declares for
+it, its generated module, loaded only when a call resolves to it, the URL
+its proving artefacts are served from and the integrity pins of every
+circuit a call into it may prove. `createPassportRegistry` checks each
+registration: the address is canonical and unique,
+the label and interface are non-empty, the artefact URL is `http(s)` and
+every pin carries its circuit name, key location and three sha256 digests, with a message naming the field.
+
+The providers every flow runs through carry a contract module provider
+built from the registrations: midnight-js hands it to the runtime with
+each call, and the runtime resolves the address a cross-contract call
+names to the registered module, comparing addresses in lowercase, and to
+nothing for any other address. The runtime then checks the module against
+the chain itself, its expected verifier key hashes against the deployed
+contract and its circuit signatures against the interface the caller
+declared, so a registration that drifts from the deployed contract fails
+before anything is proved.
+
+Key material is resolved by verifier key hash. Every contract call carries
+the canonical key location `contract:<address>/<circuit>?vk=<hash>`, where
+the hash is the sha256 of the verifier key the chain holds for that
+circuit, the same digest a bundle's manifest and a called contract's pins
+record. When the address is a registered called contract, the circuit
+resolves through that contract's pins and the hash must equal the pin.
+Any other address is an account, and the hash is looked up across every
+registered bundle's manifest under the circuit's name: the first
+registered bundle pinning it, the default ahead of the rest, supplies the
+artefacts, downloaded from that bundle's own artefact URL, the network's
+when it has none, and checked against that bundle's pins. Two bundles
+that share a circuit compile it to the same verifier key, so the join
+settles on one of them deterministically; two that pin different keys
+under one name each prove their own accounts. A location without a hash
+resolves by name in the first bundle that lists the circuit, and a hash
+no bundle listing the circuit pins is a drifted artefact, refused with
+`artefact-integrity`. A circuit nothing registered pins is refused with
+`unresolved-contract-circuit`, whose message names the registered bundles
+and called contracts. `createHttpProver` takes the same `registry` beside
+`artefactUrl`; with `artefactUrl` alone it resolves the default bundle's
+circuits as before.
 
 ### Flows and the gate
 
 Account creation, sign-in, device enrolment, device revocation, the three
-grant operations (issue, revoke, revoke all), the shielded holdings read
-and the operation install are each a plain async function under
-`src/flows/`. Through
+grant operations (issue, revoke, revoke all), the shielded holdings read,
+the operation install and the contract call are each a plain async
+function under `src/flows/`. Through
 `FlowContext` a host supplies nothing but the five seams above, a
 promise-based account-record seam, the relying party id a grant is bound
-to, and an `onProgress` callback that a flow calls as it enters each stage
-it reports; account creation, the grant flows and the operation install
-report stages, sign-in, the device flows and the holdings read settle with
-no intermediate stage.
+to, the registry of account bundles, and an `onProgress` callback that a
+flow calls as it enters each stage it reports; account creation, the grant
+flows, the operation install and the contract call report stages, sign-in,
+the device flows and the holdings read settle with no intermediate stage.
 Beyond that context, a flow drives the vendored binding and the network
 clients itself. A flow never imports rxjs, redux, `@reduxjs/toolkit`,
 redux-observable, `@lace-contract/module` or the store layer, so it is
@@ -99,8 +221,14 @@ The `exhaustMap` gate that makes every flow mutually exclusive and the
 settled-flow guard that decides whether a device or grant call runs at all
 also live there, because both are about coordinating dispatched actions
 rather than any one flow's logic. The directory's other resident,
-`restore-account.ts`, rehydrates the persisted record on startup and reads
-the grant roster back from chain for it.
+`restore-account.ts`, rehydrates the persisted record on startup through
+the `restoreAccount` flow, which reads the account's bundle and its grant
+roster from one read of the contract state. With the default bundle alone
+registered the build is known, so the account is published from the
+record at once and the roster follows; with more, the account is
+published once the chain names its bundle. A cold start without the
+indexer then shows no account until a sign-in, which reports what the
+chain refused.
 
 ### State and stored data
 
@@ -109,14 +237,16 @@ shielded holdings, the resolved use counter, the id of the last grant
 issued, and one flow value with its error. A roster changes only after a
 chain call is confirmed, and the holdings only once a walk has verified
 them: `addDevice`, `removeDevice`, `issueGrant`, `revokeGrant`,
-`revokeAllGrants`, `readShieldedHoldings` and `installOperations` are
-trigger actions that clear the previous error and touch nothing else, so
-a failed call never leaves state disagreeing with the contract.
+`revokeAllGrants`, `readShieldedHoldings`, `installOperations` and
+`callContract` are trigger actions that clear the previous error and touch
+nothing else, so a failed call never leaves state disagreeing with the
+contract. The last contract call that landed is kept as
+`lastContractCall`, which each accepted call replaces.
 
 | Location            | Contents                                                                                                                                                                                                                                 | Lifetime                   |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
 | Contract (on chain) | Device entry set, device epoch, device count, auth nonce, encryption key, inbox of sealed coin descriptions and of the account keys and grant bookkeeping sealed to the devices, maintenance authority, grants map, grant generation     | Permanent                  |
-| Slice (memory)      | `account`, `devices`, `grants`, `shieldedHoldings`, `lastIssuedGrantId`, `localUseCounter`, `flow`, `flowError`                                                                                                                          | Session                    |
+| Slice (memory)      | `account`, `devices`, `grants`, `shieldedHoldings`, `lastIssuedGrantId`, `lastContractCall`, `localUseCounter`, `flow`, `flowError`                                                                                                      | Session                    |
 | Account record      | `address`, `bindingVersion`, `localUseCounter`, sealed; plus the pending deployment until the account keys land, and the slot, scope salt, grantee key and origin of each grant this client issued                                       | Across sessions            |
 | Device signing key  | JubJub scalar derived from the passkey                                                                                                                                                                                                   | One operation, then zeroed |
 | Encryption key      | A random secret sealed in envelopes on chain to each device's reader key; the encryption key seam opens it for one call and hands back only public keys, ciphertexts and what the entries open to, so the secret never enters the module | One call                   |
@@ -228,6 +358,20 @@ root, entropy, or session mnemonic accessor. Cardano wallet callers use `withPas
 to consume words inside a callback. Each call makes a fresh assertion, even
 while a Passport session is open.
 
+The signing scalar signs one challenge per gated call, built by a pure
+circuit of the contract over the account address, the signature
+announcement, the device key, the call's own arguments, the auth nonce
+and a grind nonce. The module's own circuits each have a fixed builder;
+a circuit a registered bundle describes is signed over the challenge the
+bundle's own pure circuit builds, the one its descriptor names, from the
+arguments and witness values the descriptor's challenge arguments pick,
+so the device signs exactly what the contract of that build verifies.
+The request names the bundle. A circuit that is neither the module's own
+nor described by that bundle is refused with `circuit-not-registered`
+before any prompt; a descriptor naming a pure circuit the bundle module
+lacks is refused with the same code when the authorisation is built,
+inside the session and before anything is signed.
+
 Every step is one way: a leaked reader secret reveals neither the seed nor
 the root nor any sibling secret, and none of these derivations ever takes a
 device key as an input. A lost passkey loses only that device's copy of
@@ -299,7 +443,7 @@ is the maintenance authority the roster key derives.
 | Seed                          | `Mnemonic.toSeed(Mnemonic.deriveFrom(entropy))`                                                                                                                                        | One `deriveSecret` call; zeroed before the call returns                                                                                                                                                                                                                                                                                                                                                                             | The same as wallet entropy, since a conforming wallet built from the same words derives the same seed                                                                                                                                                                                                                                                   | Regenerable from the credential                                                                                                                                     |
 | Reader secret                 | `deriveSymmetricSecret(seed, { domain: 'lace-passport:reader:v1', context: '<networkId>' })`, one per network                                                                          | One call of the encryption key seam: derived, used to open this device's envelopes and grant records or to seal its grant records, and zeroed before the call returns, inside the key session when one is open                                                                                                                                                                                                                      | Every account secret and roster key this device was handed, and its grant bookkeeping; never device authority, but full custody of an unlocked account whose live roster key is among them, through its maintenance authority                                                                                                                           | Regenerable from the credential; nothing is stranded                                                                                                                |
 | Account secret and roster key | Random, drawn by `createKeys` at creation and at every rotation; the roster key drawn afresh only at creation, when a device is removed and at an enrolment while a read grant is live | Lives sealed on chain, one device envelope per enrolled device and secret; opened from this device's envelopes for one seam call, used to open or re-encrypt inbox entries, seal the next secret, or seal a grantee's view, and zeroed before the call returns; the module receives only public keys, ciphertexts, opened coin descriptions and bookkeeping, or the seal                                                            | The account secret: read access to the contract's inbox, so shielded holdings become visible, but never spend authority, matching the custody standard's own leak model; a read grant shares exactly the account secret, sealed, until the next rotation, never the roster key. The roster key: on an unlocked account, the maintenance authority below | A device that loses its passkey loses only its copy; any other enrolled device opens its own envelope, and a rotation hands a new secret to the devices that remain |
-| Maintenance authority         | HKDF-SHA256(roster key, empty salt, info `lace-passport:cma:v1`), a BIP-340 Schnorr key, on an unlocked account only                                                                   | Derived inside one encryption key seam call, to answer its verifying key or sign one maintenance update the seam built itself, and its 32-byte HKDF output zeroed before the call returns; the ledger signing key built from it holds the same secret as a hex string and in wasm memory, which the ledger API cannot zero, so both survive until collection; on chain only as the verifying key, which a fresh roster key replaces | Full custody: a maintenance update can replace any verifier key and the authority itself. Lace signs only pinned installs of the deployed roster and the move to a fresh roster key, but a holder of the roster key can sign anything outside Lace                                                                                                      | Regenerable from any device handed the account keys; with every such device lost, nothing more can be installed                                                     |
+| Maintenance authority         | HKDF-SHA256(roster key, empty salt, info `lace-passport:cma:v1`), a BIP-340 Schnorr key, on an unlocked account only                                                                   | Derived inside one encryption key seam call, to answer its verifying key or sign one maintenance update the seam built itself, and its 32-byte HKDF output zeroed before the call returns; the ledger signing key built from it holds the same secret as a hex string and in wasm memory, which the ledger API cannot zero, so both survive until collection; on chain only as the verifying key, which a fresh roster key replaces | Full custody: a maintenance update can replace any verifier key and the authority itself. Lace signs only pinned installs of the account's bundle roster and the move to a fresh roster key, but a holder of the roster key can sign anything outside Lace                                                                                              | Regenerable from any device handed the account keys; with every such device lost, nothing more can be installed                                                     |
 
 A flow calls the authoriser several times: for the public key, for entry
 commitments, and for the call signature. Each call on its own would mean one
@@ -379,19 +523,25 @@ whose key it rotates and the device entries, a revoke-all flow those
 alone and a holdings flow nothing, and an issue-grant flow the account,
 the grant id, the scope the user is asked to grant, the read key of a
 read grant inside it, the slot, the scope salt, the scope digest and, for
-a read grant, the device entries, and an install-operations flow the
-account and the operations it installs, each of the deployed roster and
-none twice.
+a read grant, the device entries, an install-operations flow the
+account, the operations it installs, none twice, and the bundle whose
+roster they are of when it is not the default, and a call-contract flow
+the account, the bundle, the circuit, the canonical strings of the
+circuit's arguments and the addresses of the called contracts they name.
 The authorisation is then held to the descriptor: a device or revoke-grant
 authorisation's single argument must be the bytes of that commitment or
-grant id, a revoke-all authorisation must carry none, and an issue-grant
+grant id, a revoke-all authorisation must carry none, an issue-grant
 authorisation must name the descriptor's account and read back, through
 the same parser the authoriser derives its challenge from, to the
-descriptor's grant id and scope digest, so an approval to enrol or revoke
-one device, or to issue or revoke one grant, cannot sign for another or
-over another scope. A request outside the flow's list, an authorisation
-for another circuit, or one for another argument, is refused with
-`flow-scope` before the key source is touched. An inbox request carries at
+descriptor's grant id and scope digest, and a call authorisation must
+name the descriptor's account and bundle and carry, value for value in
+declaration order, the compact arguments the signer decoded from the
+approved descriptor, so an approval to enrol or revoke one device, to
+issue or revoke one grant, or to make one call, cannot sign for another,
+over another scope or with other arguments. A request outside the flow's
+list, an authorisation for another circuit, or one for another argument,
+is refused with `flow-scope` before the key source is touched. An inbox
+request carries at
 most 4,096 entries and 4,096 envelopes; a device with more envelopes has
 them paged through `find-live-envelope`, which answers only where in the
 page the live one sits. The session also expires five
@@ -424,6 +574,42 @@ the one it re-derived, which the check has made the same. A dApp whose
 relying party id is not its hostname cannot issue grants through the
 signer, since its grant ids re-derive to another origin hash.
 
+A call-contract descriptor, and a creation or an install that names a
+build, is held before the ceremony to what the signer pins, never to a
+descriptor the dApp sends: `createPassportSignerHandlers` takes the
+`registry` of its bundles beside the default and its called contracts,
+the same value the module takes, and finds
+the bundle by the descriptor's `bundleId` and the callees by address, a
+contract address naming one deployment. A call naming a bundle the
+signer does not pin, a circuit that bundle describes no descriptor for,
+arguments that do not fit the descriptor's types and bounds, or callees
+that are not exactly the registered called contracts its contract
+arguments name, under the interface the descriptor declares, is refused
+with `flow-scope` naming the descriptor field, as is an install of an
+operation outside the roster of the pinned bundle its descriptor names,
+which the consent shows, and a creation whose constructor arguments do
+not fit its bundle's declared ones; whether that build is the account's
+own is the module flow's check, since the signer reads nothing from the
+chain, so an approved install of another pinned build's operations
+leaves the account refused with `account-bundle-unknown` at its next
+sign-in until the host registers a build covering them; a resumed creation must
+also name the bundle and the constructor arguments its pending deployment
+records, refused otherwise with `creation-artefact-mismatch`, and a
+creation's first pending record must carry them as the descriptor names
+them. A circuit that reads a witness is refused the same way, naming
+`witnesses`: the dApp chooses a witness value at call time and the
+descriptor carries none, so the signer could neither show nor bind the
+coin such a call spends. The session then serves the one circuit the
+descriptor names, signs it once per approval, so one approval cannot
+submit the call again under a fresh nonce, and the challenge it signs is
+built by the pinned bundle module's own pure circuit, the way the
+module's authoriser builds it for a local device. The signer page
+renders the consent of a call from the same pins: the circuit's label
+and build, each labelled argument with its value and each callee by the
+label it was registered under, so what the user approves is what the
+signer knows about the call, and a call the page does not pin is refused
+before any screen.
+
 | Flow                                      | Ceremonies                               |
 | ----------------------------------------- | ---------------------------------------- |
 | Create account, first account on a device | 2 (one creates the passkey, one uses it) |
@@ -433,6 +619,7 @@ signer, since its grant ids re-derive to another origin hash.
 | Issue grant, revoke grant, revoke all     | 1 each                                   |
 | Read shielded holdings                    | 1, or none over an empty inbox           |
 | Install operations                        | 1                                        |
+| Call a contract                           | 1                                        |
 
 Passkey creation returns no PRF output, so the first account on a device
 cannot be reduced below two. Over the signer, an issue-grant session is
@@ -443,8 +630,9 @@ check.
 ### One gate over all flows
 
 Account creation, sign-in, device enrolment, device revocation, the grant
-operations, the holdings read and the operation install run through a
-single `exhaustMap` rather than one each. They are mutually exclusive:
+operations, the holdings read, the operation install and the contract
+call run through a single `exhaustMap` rather than one each. They are
+mutually exclusive:
 every chain call among them
 resolves the same device's use counter and writes the same account record,
 so two in flight can authorise against the same counter and auth nonce,
@@ -518,40 +706,49 @@ is in state or the current flow has not settled, therefore passes through
 `ceremony` before settling on `error` with `no-account`; it opens no key
 session and touches no chain state on the way.
 
-| Condition                                                        | Reported as                      |
-| ---------------------------------------------------------------- | -------------------------------- |
-| User dismissed the passkey prompt                                | `ceremony-cancelled`             |
-| Authenticator has no PRF support                                 | `prf-unsupported`                |
-| Downloaded artefact does not match its pin                       | `artefact-integrity`             |
-| Sponsor could not cover the fee within its budget                | `sponsor-exhausted`              |
-| Create dispatched while a record already exists                  | `account-exists`                 |
-| No account record stored on this device                          | `account-not-found`              |
-| No live contract at the stored address                           | `account-contract-missing`       |
-| No envelope of this device opens the contract's `enc_key`        | `encryption-key-mismatch`        |
-| Joining device keys do not match the enrolled entry              | `device-reader-invalid`          |
-| Registrations landed during a rotation                           | `device-roster-invalid`          |
-| Sealed record found but the authoriser has no storage key        | `record-unreadable`              |
-| Authority retired before every verifier key wave landed          | `authority-retired`              |
-| Locked creation resumed over an activated, unretired authority   | `authority-not-retired`          |
-| Creation resumed under another lock choice than it started with  | `creation-lock-mismatch`         |
-| Creation resumed under other verifier key pins than recorded     | `creation-artefact-mismatch`     |
-| Sign-in found a record whose creation is unfinished on chain     | `account-creation-pending`       |
-| Stored record will not decrypt                                   | `record-corrupted`               |
-| Contract rejected the caller (signature or device key)           | `not-authorised`                 |
-| No device entry within the probed counter windows                | `device-entry-not-found`         |
-| Removal target entry no longer in the on-chain set               | `removal-target-not-found`       |
-| Removal would leave no device, or removes the caller             | `last-device`                    |
-| Device, grant or holdings flow attempted without a ready account | `no-account`                     |
-| Grant scope breaks a rule, or asks what the contract refuses     | `grant-scope-invalid`            |
-| Sixteen grants already active                                    | `grant-limit-reached`            |
-| Grant named for revocation is not on the ledger                  | `grant-not-found`                |
-| Grant named for revocation is already revoked                    | `grant-revoked`                  |
-| Contract refused an issue over an active grant id                | `grant-issue-rejected`           |
-| Issue dispatched by a host with no relying party id              | `grant-origin-missing`           |
-| Indexer never reflected the accepted grant call                  | `grant-roster-unsettled`         |
-| No roster key of this device derives the authority on chain      | `maintenance-authority-mismatch` |
-| Maintenance update asks for a change the key does not sign       | `maintenance-update-refused`     |
-| Install names an operation outside the roster, or none           | `operation-not-installable`      |
+| Condition                                                                                                                | Reported as                      |
+| ------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
+| User dismissed the passkey prompt                                                                                        | `ceremony-cancelled`             |
+| Authenticator has no PRF support                                                                                         | `prf-unsupported`                |
+| Downloaded artefact does not match its pin                                                                               | `artefact-integrity`             |
+| Sponsor could not cover the fee within its budget                                                                        | `sponsor-exhausted`              |
+| Create dispatched while a record already exists                                                                          | `account-exists`                 |
+| No account record stored on this device                                                                                  | `account-not-found`              |
+| No live contract at the stored address                                                                                   | `account-contract-missing`       |
+| Account holds verifier keys no registered bundle covers, or a request names a bundle id none has                         | `account-bundle-unknown`         |
+| Registered bundle breaks a registry rule; thrown when the module is built, not by a flow                                 | `account-bundle-invalid`         |
+| No envelope of this device opens the contract's `enc_key`                                                                | `encryption-key-mismatch`        |
+| Joining device keys do not match the enrolled entry                                                                      | `device-reader-invalid`          |
+| Registrations landed during a rotation                                                                                   | `device-roster-invalid`          |
+| Sealed record found but the authoriser has no storage key                                                                | `record-unreadable`              |
+| Authority retired before every verifier key wave landed                                                                  | `authority-retired`              |
+| Locked creation resumed over an activated, unretired authority                                                           | `authority-not-retired`          |
+| Creation resumed under another lock choice than it started with                                                          | `creation-lock-mismatch`         |
+| Creation resumed under other verifier key pins than recorded                                                             | `creation-artefact-mismatch`     |
+| Sign-in found a record whose creation is unfinished on chain                                                             | `account-creation-pending`       |
+| Stored record will not decrypt                                                                                           | `record-corrupted`               |
+| Contract rejected the caller (signature or device key)                                                                   | `not-authorised`                 |
+| Circuit called is neither the module's own nor described by its bundle                                                   | `circuit-not-registered`         |
+| Contract argument names an address no called contract of the network has under the declared interface                    | `called-contract-not-registered` |
+| Argument or witness of a call does not fit its descriptor                                                                | `call-argument-invalid`          |
+| No device entry within the probed counter windows                                                                        | `device-entry-not-found`         |
+| Removal target entry no longer in the on-chain set                                                                       | `removal-target-not-found`       |
+| Removal would leave no device, or removes the caller                                                                     | `last-device`                    |
+| Device, grant, holdings or contract call flow without a ready account                                                    | `no-account`                     |
+| Grant scope breaks a rule, or asks what the contract refuses                                                             | `grant-scope-invalid`            |
+| Sixteen grants already active                                                                                            | `grant-limit-reached`            |
+| Grant named for revocation is not on the ledger                                                                          | `grant-not-found`                |
+| Grant named for revocation is already revoked                                                                            | `grant-revoked`                  |
+| Contract refused an issue over an active grant id                                                                        | `grant-issue-rejected`           |
+| Issue dispatched by a host with no relying party id                                                                      | `grant-origin-missing`           |
+| Indexer never reflected the accepted grant call                                                                          | `grant-roster-unsettled`         |
+| Encryption key held here can neither re-encrypt nor seal, so no read grant, revocation of one or removal                 | `read-unavailable`               |
+| Hosted signer refused a seal to a read grant whose signed revocation never landed; listed in `revocationPendingGrantIds` | `grant-revocation-pending`       |
+| Policy export asked for a grant this client holds no opening of                                                          | `grant-opening-unavailable`      |
+| Agent-side spend preparation outside the grant's scope (SDK)                                                             | `grant-spend-refused`            |
+| No roster key of this device derives the authority on chain                                                              | `maintenance-authority-mismatch` |
+| Maintenance update asks for a change the key does not sign                                                               | `maintenance-update-refused`     |
+| Install names an operation outside the roster, or none                                                                   | `operation-not-installable`      |
 
 ## Flows
 
@@ -598,6 +795,28 @@ registration under the roster key. Both entries are recorded with the
 pending deployment and appended to the inbox once the device is active,
 so the account keys are on chain before the creation completes.
 
+A creation names the build it deploys: `bundleId`, one of the registered
+account bundles, the default when left out, and `constructorArgs`, the
+values of the arguments that bundle declares after the five standard
+ones, as strings in declaration order. Each value is decoded by its
+descriptor before any prompt: 32 bytes as hex, an integer as a decimal
+within the declared bound, a boolean as `true` or `false`, and a contract
+as the address of a registered called contract under the interface the
+argument declares, which the constructor receives as a
+contract address. A bundle no registry holds is refused with
+`account-bundle-unknown`, a value that does not fit its argument, or a
+count of values other than the declared arguments, with
+`call-argument-invalid` naming the argument, and an address no called
+contract has, or one registered under another interface, with
+`called-contract-not-registered`. The deploy compiles the bundle's
+module, installs the bundle's roster in waves against its own pins, and
+records the digest of that roster's verifier keys, the bundle's id and
+the arguments as their canonical strings (lowercase hex, decimals
+without leading zeros, `true` or `false`) in the pending deployment. The
+key session names the lock choice and, for a bundle other than the
+default, the bundle with those strings, so a consenting signer shows
+which build the account is created from and with what.
+
 The deploy and each wave expire a minute after they are built, which is
 before the sponsor balances them. A sponsor can need setup first, such as
 the development sponsor's first wallet sync, so the flow awaits the
@@ -613,16 +832,16 @@ sequenceDiagram
     participant St as Storage
 
     A->>K: ensureCredential (once per device)
-    A->>M: createAccount(lockAccount)
+    A->>M: createAccount(lockAccount, bundleId, constructorArgs)
     Note over M: flow: ceremony
     M->>K: open key session
     K-->>M: device public key, reader public key
     M->>K: draw the account keys
     K-->>M: enc_key, own envelope, own registration, handover authority
     Note over M: flow: deploying
-    M->>C: deploy: constructor(boot commitment, enc_key), first verifier keys
+    M->>C: deploy: constructor(boot commitment, enc_key, ..., bundle arguments), first verifier keys
     C-->>M: contract address
-    M->>St: seal and write the pending record (address, roster, salt, authority key, handover authority, key entries)
+    M->>St: seal and write the pending record (address, bundle, constructor arguments, roster, salt, authority key, handover authority, key entries)
     loop each remaining wave
         M->>C: read the authority counter
         M->>C: maintenance update inserts the next verifier keys
@@ -723,14 +942,19 @@ A resumed creation finishes exactly as it began, or is refused before
 any wave. A create request whose `lockAccount` is not the recorded one is
 refused with `creation-lock-mismatch`, whose message names the recorded
 choice, rather than finishing an account locked otherwise than asked; a
-retry with that choice resumes it. A build whose pinned verifier keys
-differ from the recorded digest, or a record that names none, is refused
-with `creation-artefact-mismatch`: finishing it would install verifier
-keys of two builds on one account, which no proof of either satisfies.
-Only a build pinning the recorded keys could resume it. The digest covers
-the operation roster as well as the keys, so a creation interrupted under
-the sixteen-operation roster that preceded secp256k1 grantees is refused
-this way by any build that installs nineteen.
+retry with that choice resumes it. A request naming another bundle than
+the recorded one, a record written before builds were registered naming
+the default, is refused with `creation-artefact-mismatch` before the
+chain is read, as is a build whose pinned verifier keys for that bundle
+differ from the recorded digest, or a record that names none: finishing
+it would install verifier keys of two builds on one account, which no
+proof of either satisfies. Only the recorded bundle, pinning the recorded
+keys, can resume it. The digest covers the operation roster as well as
+the keys, so a creation interrupted under the sixteen-operation roster
+that preceded secp256k1 grantees is refused this way by any build that
+installs nineteen. The constructor arguments a resume finishes under are
+the recorded ones, the deployed contract's; the ones the request gives
+are checked against the bundle and shown, but never replace them.
 
 Over the hosted signer a create request from another site than the one
 that started the creation is refused with `account-creation-pending`; it
@@ -771,11 +995,16 @@ is sealed under a key only a ceremony can produce, so nothing can be read
 without a user gesture. A missing record ends the flow with
 `account-not-found`, a record whose address holds no live contract with
 `account-contract-missing`, a record whose creation the chain shows
-unfinished with `account-creation-pending`, an inbox holding no envelope of
-this device that opens the contract's `enc_key` with
-`encryption-key-mismatch`, and a sealed record the configured authoriser
-cannot open with `record-unreadable`; there is no discovery by any other
-means.
+unfinished with `account-creation-pending`, an account whose verifier keys
+no registered bundle covers with `account-bundle-unknown`, an inbox
+holding no envelope of this device that opens the contract's `enc_key`
+with `encryption-key-mismatch`, and a sealed record the configured
+authoriser cannot open with `record-unreadable`; there is no discovery by
+any other means. The bundle the account resolves to is published with it,
+see "Account bundles". The startup restore resolves the bundle from the
+chain the same way when more than the default is registered, so such a
+host's cold start without the indexer shows no account until a sign-in,
+which reports what the chain refused.
 
 ```mermaid
 sequenceDiagram
@@ -937,8 +1166,13 @@ whose authority is the one on chain, and refuses with
 `maintenance-authority-mismatch` when none is. It signs only two
 changes, refusing anything else with `maintenance-update-refused`: a
 replace towards the authority the keyring's live roster key derives, and
-inserts of the pinned verifier keys of operations of the deployed roster.
-Nothing removes a verifier key or installs an empty committee.
+inserts of verifier keys under the account bundle the request names,
+each of an operation of that bundle's roster and the key the bundle pins
+for it. The key holds the same bundles the module registers
+(`createPasskeyEncryptionKey` and `devEncryptionKey` take them beside
+the key source or seed, the default alone otherwise), and refuses an
+insert naming a bundle it does not hold. Nothing removes a verifier key
+or installs an empty committee.
 
 A rotation that draws a fresh roster key, a removal or an enrolment while
 a read grant is live, moves the authority with it. Inside the key
@@ -959,27 +1193,32 @@ therefore loses its upgrade rights with its read access; until
 `remove_device` lands it still holds the roster key behind the live
 authority, which the threat model, section 3.11, weighs.
 
-`installOperations` takes the names of operations of the module's
-deployed roster that the account lacks, as read from chain, and
-installs their pinned verifier keys, so an unlocked account whose
-authority its devices hold gains the operations a later roster adds.
-Accounts created before the handover existed cannot, since their
-authority is retired or a deploy-time key Lace dropped. A name outside the roster,
-such as a recovery circuit or another device arm, or a request naming
-none, is refused with `operation-not-installable` before any prompt.
-Operations the account already holds are skipped, so an install
-interrupted after some of its waves landed is finished by running it
-again; when the account holds every operation named, the install
-resolves with nothing submitted and no prompt. Otherwise a locked
-account is refused with `authority-retired`, and an encryption key that
-signs no maintenance update with `maintenance-update-refused`, both
-before any prompt. The flow resolves with the operations it installed
-and those it skipped as already installed. The verifier
-keys are downloaded against their pins and packed into waves under the
-same budget as a deployment, each one maintenance update the seam signs
-in one key session; each waits for the chain to apply it, and none
-replaces the authority. No gated call is made, so the use counter and the
-record are left as they are.
+`installOperations` takes the names of operations of the account's
+bundle roster that the account lacks, as read from chain, and installs
+the verifier keys that bundle pins, so an unlocked account of any
+registered build, whose authority its devices hold, gains the operations
+a later roster of its build adds. The bundle is the one the account
+resolved to on chain (see "Account bundles"), so the artefacts come from
+that bundle and the pins are its own. Accounts created before the
+handover existed cannot, since their authority is retired or a
+deploy-time key Lace dropped. A name outside the roster, such as a
+recovery circuit, another device arm or an operation only another
+registered bundle adds, or a request naming none, is refused with
+`operation-not-installable` before any prompt. Operations the account
+already holds are skipped, so an install interrupted after some of its
+waves landed is finished by running it again; when the account holds
+every operation named, the install resolves with nothing submitted and
+no prompt. Otherwise a locked account is refused with
+`authority-retired`, and an encryption key that signs no maintenance
+update with `maintenance-update-refused`, both before any prompt. The
+flow resolves with the operations it installed and those it skipped as
+already installed. The verifier keys are downloaded against the bundle's
+pins and packed into waves under the same budget as a deployment, each
+one maintenance update naming the bundle, which the seam signs in one
+key session that names the bundle too when it is not the default; each
+waits for the chain to apply it, and none replaces the authority. No
+gated call is made, so the use counter and the record are left as they
+are.
 
 ### Grants
 
@@ -1158,20 +1397,99 @@ an entry towards an account is `sealInboxEntry`, which a depositor uses,
 and which the encryption key seam uses when a rotation re-encrypts the
 holdings, so the owner's client appends ciphertexts it never opened.
 
+### Calling a contract
+
+A Midnight contract reaches another only through a call compiled into its
+own circuits, so an account that uses another contract is an account of a
+build that declares the call (see "Account bundles"). `callContract` runs
+such a circuit: it names the circuit, the values of the circuit's declared
+arguments as strings in declaration order, and the witnesses the circuit
+reads, a held coin for a circuit that spends one. It is a gated call like
+a device change, authorised by the local device inside one key session
+and reported through the same flow state.
+
+Before any prompt the flow holds the call to what the account's bundle
+pins. The bundle must describe the circuit, else
+`circuit-not-registered`; each argument is decoded by its descriptor, 32
+bytes as hex, an integer as a decimal within the declared bound, a
+boolean as `true` or `false`, and a contract as the address of a
+registered called contract under the interface the argument declares, else `call-argument-invalid` naming the argument or
+`called-contract-not-registered`; a derived address argument is filled
+from the contract argument it names; a witness the descriptor lists and
+the input lacks, or a coin description that is not one, is
+`call-argument-invalid` naming the witness. The ledger is read last, so
+the signature binds the auth nonce the contract consumes.
+
+The challenge binds the callee only when the circuit hashes the contract
+argument itself: Compact has no cast or equality between a contract type
+and a `ContractAddress`, so a derived address cannot be tied to the
+callee inside the circuit, and a challenge over it alone would let an
+approved signature be submitted with the callee pointing at another
+registered contract of the same interface. The account-tally fixture
+hashes its `Tally` argument and lists it among its challenge arguments,
+and a bundle author must do the same; a derived address serves a circuit
+that needs the address as a separate value and binds nothing by itself.
+
+The key session names the account, the bundle, the circuit, the canonical
+strings of the arguments and the addresses of the called contracts they
+name, which is what a consent screen shows. Inside the session the device
+signs the challenge the descriptor names, built by the bundle module's
+own pure circuit over the arguments and witness values the descriptor's
+challenge arguments pick (see "Key material"), and the call runs through
+the bundle's compiled contract, the private state seeded with the coin a
+shielded leg spends and the providers carrying the module provider the
+runtime resolves the callee through and checks against the chain (see
+"Called contracts"). A rejected authorisation surfaces as
+`not-authorised`; the called circuit's own refusals pass through as the
+contract raises them. Over the hosted signer the call is held to the
+descriptor the signer pins for the circuit, never to one the dApp sends,
+and a circuit that reads a witness is refused there until consent can
+show and bind the witness values, so such a circuit runs only with a
+host's own passkey seams; the signer paragraphs under "Key material" state
+each check.
+
+An accepted call publishes the roster with this device's row on its
+successor entry, the advanced use counter, and the call itself under
+`selectLastContractCall`: the circuit, the id of the transaction that
+carried it and the circuit's return value as a string, a decimal for an
+integer, hex for bytes, JSON for a structure, absent for a circuit that
+returns nothing. The advanced counter is persisted to the account record
+before the result is returned. The holdings are left to the next read,
+and the transaction's proving and sponsoring stages are reported through
+the flow state.
+
 ## Factory API
 
 `createPassportAccountModule` builds the module from the five platform
-seams of the table above, the host's relying party id (`rpId`) and, when the
-host supplies one, its own account record store, and implements both
+seams of the table above, the host's relying party id (`rpId`), the
+registry of the account bundles it registers beside the default and the
+contracts they call (`registry`, see "Account bundles" and "Called
+contracts") and, when the host supplies one, its own account record store, and
+implements both
 `passport-store` and `passport-dependency` (`@lace-contract/passport`), so
-it can be passed straight to `createLaceWallet({ modules: [...] })`.
+it can be passed straight to `createLaceWallet({ modules: [...] })`. The
+host passes the same `registry` to `createPasskeyAuthoriser`, so the
+device signs the circuits its builds describe, to
+`createPasskeyEncryptionKey` (or `devEncryptionKey`), so the key signs
+the installs of those builds, and to `createHttpProver` and
+`createDevDeposit`: an encryption key built without it holds the default
+bundle alone and refuses every install on an account of another
+registered build. The prover proves for the default bundle and the
+registry's, and into its called contracts, so a call on an account of
+any registered build, and into any registered callee, resolves its key
+material by verifier key hash (see "Called contracts"). A host that
+registers nothing beside the default leaves `registry` out everywhere.
 
 ```typescript
 import { createLaceWallet, m } from '@laceio/sdk/experimental';
 
+const registry = m.createPassportRegistry({
+  bundles: [myAccountBundle], // see "Account bundles"
+  calledContracts: [myCalledContract], // see "Called contracts"
+});
 const keySource = m.createPasskeySessionKeySource({ rpName: 'Lace' });
-const authoriser = m.createPasskeyAuthoriser({ keySource });
-const encryptionKey = m.createPasskeyEncryptionKey(keySource);
+const authoriser = m.createPasskeyAuthoriser({ keySource, registry });
+const encryptionKey = m.createPasskeyEncryptionKey(keySource, registry);
 await authoriser.ensureCredential(); // one-time enrolment; see below
 
 const wallet = await createLaceWallet({
@@ -1179,6 +1497,7 @@ const wallet = await createLaceWallet({
     m.createPassportAccountModule({
       authoriser,
       encryptionKey,
+      registry,
       sponsor: m.createDevSponsor({
         seedHex: process.env.WALLET_SEED!,
         networkId: 'undeployed',
@@ -1189,6 +1508,7 @@ const wallet = await createLaceWallet({
       }),
       prover: m.createHttpProver('http://127.0.0.1:6300', {
         artefactUrl: 'https://artefacts.example.com/account',
+        registry,
       }),
       network: {
         networkId: 'undeployed',
@@ -1346,10 +1666,23 @@ a transaction through the indexer's `transactions` query by hash.
 
 ## Constraints
 
-- **One contract build.** The module vendors one compile of the reference
-  contract at commit `d3152081c35bb151d8fbf4fdfced0e23afa256a2`, built
-  with `compactc` 0.35.0 for the ledger 9 line, so it runs only on the
-  networks that run that line (see "Networks").
+- **Registered builds only.** The module vendors one compile of the
+  reference contract at commit `d3152081c35bb151d8fbf4fdfced0e23afa256a2`
+  as its default bundle, and deploys, recognises, proves and signs for
+  only the builds a host registers beside it (see "Account bundles"). Every
+  build must come from the toolchain the default pins, `compactc` 0.35.0
+  with `compact-runtime` 0.20.0, for the ledger 9 line, so the module runs
+  only on the networks that run that line (see "Networks"); a called
+  contract must be compiled with the communications commitment on and
+  registered for its network, and the caller compiled against its
+  artefacts. The hosted signer pins its own copy of the bundles and
+  callees and signs nothing it does not pin, so a build a host registers
+  reaches users of the signer only once the signer pins it too.
+- **Witness-bearing calls run with local seams only.** The hosted signer
+  refuses a call to a circuit whose descriptor declares a witness, such as
+  a held coin a shielded leg spends, until consent can show and bind the
+  witness values; a host's own passkey seams run it, with the host as the
+  consent surface.
 - **No recovery path.** The vendored contract's constructor takes a
   recovery public key, the wrap its secret is sealed under and a veto
   window, and this module publishes a throwaway: a fresh key whose secret
@@ -1506,10 +1839,13 @@ keys carries a version range (`@4.x`, `@2.x`) so the rule only matches the
 legacy line and this package's `5.0.0-rc.2` and `3.0.0-rc.0` pins resolve as
 its own nested copies. After `npm ci`,
 `npm ls @midnightntwrk/wallet-sdk-abstractions` shows `3.0.0-rc.0` under
-this package and the SDK example app and `2.1.0` at the root. Neither
-imports `@midnightntwrk/wallet-sdk-abstractions@3.0.0-rc.0`: it is a direct
-dependency of both only to pin that nested release candidate copy, so it must
-not be removed as unused. The remaining
+this package, the SDK example app and the account-tally fixture
+(`packages/fixture/passport-account-tally`, which pins the release
+candidate line for its generated modules and its deploy script) and
+`2.1.0` at the root. None of the three imports
+`@midnightntwrk/wallet-sdk-abstractions@3.0.0-rc.0`: it is a direct
+dependency of each only to pin that nested release candidate copy, so it
+must not be removed as unused. The remaining
 legacy `wallet-sdk-*` pins are not direct dependencies of this package; the
 release candidates it needs arrive through its nested `wallet-sdk-*` copies
 and sit beside the root copies.

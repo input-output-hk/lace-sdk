@@ -33,6 +33,11 @@
     "build": "node scripts/build.mjs"
   },
   "dependencies": {
+    "@lace-lib/cardano-core": "*",
+    "@lace-lib/cardano-crypto": "*",
+    "@lace-lib/cardano-hardware-trezor": "*",
+    "@lace-lib/cardano-key-management": "*",
+    "@lace-lib/cardano-util": "*",
     "@lace-lib/midnight-prover": "*"
   },
   "devDependencies": {
@@ -41,7 +46,6 @@
     "@cardano-sdk/core": "0.47.1",
     "@cardano-sdk/crypto": "0.4.7",
     "@cardano-sdk/hardware-ledger": "0.16.28",
-    "@cardano-sdk/hardware-trezor": "0.7.38",
     "@cardano-sdk/key-management": "0.29.18",
     "@cardano-sdk/util": "0.17.2",
     "@keystonehq/bc-ur-registry": "0.8.0",
@@ -75,6 +79,8 @@
     "libsodium-wrappers-sumo": "0.7.10",
     "process": "0.11.10",
     "qrcode": "1.5.4",
+    "rollup": "4.59.0",
+    "rollup-plugin-dts": "6.4.0",
     "stream-browserify": "3.0.0",
     "type-fest": "4.41.0",
     "zxcvbn": "4.4.2"

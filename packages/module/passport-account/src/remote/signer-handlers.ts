@@ -27,11 +27,15 @@ import {
 } from '../acc/grant-circuits';
 import { MAX_INBOX_ENTRIES_PER_REQUEST } from '../acc/inbox';
 import { isSameAuthority } from '../acc/maintenance-authority';
+import { ACCOUNT_BUNDLE_ID } from '../acc/manifest';
 import {
+  creationBuildMismatch,
   isPendingDeployment,
+  isSameCreationBuild,
   lockChoiceMismatch,
 } from '../acc/pending-deployment';
 import {
+  bundleRegistryLoader,
   loadDeviceEntryDerivation,
   loadGrantDerivation,
 } from '../acc/signing-loader';
@@ -52,6 +56,7 @@ import {
   decodeBigInt,
   decodeBigInts,
   decodeBoolean,
+  decodeBundleId,
   decodeBytes,
   decodeGrantBookkeeping,
   decodeGrantId,
@@ -79,14 +84,26 @@ import {
   SessionExpiredError,
 } from './errors';
 import { decodeSignerFlow } from './flow-descriptor';
+import {
+  pinCallContractFlow,
+  pinCreateAccountFlow,
+  pinInstallOperationsFlow,
+} from './pinned-descriptors';
 import { createRetiredEncKeys } from './retired-enc-keys';
 
-import type { DecodedSignerFlow, IssueGrantFlow } from './flow-descriptor';
+import type {
+  CallContractFlow,
+  CreateAccountFlow,
+  DecodedSignerFlow,
+  IssueGrantFlow,
+} from './flow-descriptor';
+import type { DescriptorPins, PinnedCall } from './pinned-descriptors';
 import type { IssueGrantBinding } from '../acc/challenges';
 import type {
   PendingCreationMarker,
   PendingDeployment,
 } from '../acc/pending-deployment';
+import type { PassportRegistry } from '../acc/registry';
 import type { GrantDerivation } from '../acc/signing-loader';
 import type { PassportAccountRecord, StoredGrants } from '../flows/types';
 import type { KeyValueStorageFactory } from '@lace-contract/module';
@@ -150,6 +167,13 @@ export type CreatePassportSignerHandlersProps = {
   onSessionExpired?: (flow: SignerFlow) => void;
   /** Timers the deadline runs on; injected so tests can drive them. */
   timers?: SessionTimers;
+  /**
+   * What this signer pins: the account bundles beside the default, whose
+   * described circuits it signs and whose descriptors it holds a call, a
+   * creation or an install to, and the called contracts a call may name a
+   * callee among. The default bundle alone when absent.
+   */
+  registry?: PassportRegistry;
 };
 
 /** The request kinds a held session serves to its flow. */
@@ -164,7 +188,12 @@ type FlowScope = {
 };
 
 /** The authorisation fields a flow binds beyond its circuit. */
-type AuthorisationBinding = { account: string; circuit: string; args: unknown };
+type AuthorisationBinding = {
+  account: string;
+  circuit: string;
+  args: unknown;
+  bundleId?: string;
+};
 
 const READ_KEY_LENGTH = 32;
 const ENC_KEY_LENGTH = 32;
@@ -204,12 +233,14 @@ type HeldKeySession = {
   };
   /** Whether the one revocation the approval covers was signed. */
   isRevocationSigned: boolean;
+  /** Whether the one contract call the approval covers was signed. */
+  isCallSigned: boolean;
   /** Whether the descriptor's grant issue was signed, which its seal needs. */
   isIssueSigned: boolean;
 };
 
 /** A create-account descriptor, with the lock choice the user approved. */
-type CreationFlow = Extract<DecodedSignerFlow, { kind: 'create-account' }>;
+type CreationFlow = CreateAccountFlow;
 
 const scope = (kinds: ScopedKind[], circuits: string[] = []): FlowScope => ({
   kinds: new Set(kinds),
@@ -289,9 +320,13 @@ const ROSTER_AUTHORITY_KINDS: ScopedKind[] = [
  * rotates and moves it to the new roster key after, see
  * {@link ROSTER_AUTHORITY_KINDS}. An install resolves this device's reader key,
  * finds its live envelope and signs the verifier key inserts of the
- * operations its descriptor names; it calls no circuit either. An enrolment
- * that delivers the account keys, and a grant flow that shares or
- * withdraws the viewing secret, widen their scope, see {@link flowScope}.
+ * operations its descriptor names; it calls no circuit either. A contract
+ * call is a gated call to the one circuit its descriptor names, served
+ * only once the descriptor is held to what the signer pins, see
+ * {@link bindFlow}; the circuit enters its scope from the descriptor,
+ * see {@link flowScope}. An enrolment that delivers the account keys,
+ * and a grant flow that shares or withdraws the viewing secret, widen
+ * their scope the same way.
  */
 const FLOW_SCOPES: Record<SignerFlowKind, FlowScope> = {
   'create-account': scope(
@@ -335,6 +370,7 @@ const FLOW_SCOPES: Record<SignerFlowKind, FlowScope> = {
     ...KEYRING_KINDS,
     ...MAINTENANCE_KINDS,
   ]),
+  'call-contract': scope(GATED_CALL_KINDS),
 };
 
 /** Whether a grant descriptor asks for a session that rotates the encryption key. */
@@ -346,12 +382,13 @@ const rotatesForGrant = (flow: DecodedSignerFlow): boolean =>
 
 /**
  * The account a session acts on as its descriptor names it: a device
- * flow's, an install's, an issue's and a revocation's. A creation, a
- * sign-in and a holdings read name none.
+ * flow's, an install's, a contract call's, an issue's and a revocation's.
+ * A creation, a sign-in and a holdings read name none.
  */
 const sessionAccount = (flow: DecodedSignerFlow): string | undefined => {
   switch (flow.kind) {
     case 'add-device':
+    case 'call-contract':
     case 'install-operations':
     case 'issue-grant':
     case 'remove-device':
@@ -378,10 +415,14 @@ const sessionAccount = (flow: DecodedSignerFlow): string | undefined => {
  * revocation that rotates the key by what the rotation sends, and for
  * one that seals the new secret again by the seal request. A grant
  * session whose descriptor does not read keeps its own circuits, so an
- * approval to grant a spend can never rotate the key.
+ * approval to grant a spend can never rotate the key. A contract call
+ * serves the one circuit its descriptor names and no other.
  */
 const flowScope = (flow: DecodedSignerFlow): FlowScope => {
   const base = FLOW_SCOPES[flow.kind];
+  if (flow.kind === 'call-contract') {
+    return scope([...base.kinds], [flow.circuit]);
+  }
   if (flow.kind === 'add-device' && flow.reader && flow.devices) {
     return scope(
       [
@@ -530,18 +571,74 @@ const accountArgumentCheck =
 
 const anyArgumentCheck: ArgumentCheck = () => undefined;
 
+/**
+ * Whether an authorisation argument is the compact value the pinned
+ * descriptor decoded from the approved descriptor: bytes by content, an
+ * integer by value, a boolean by value, and a contract address by the
+ * content of its bytes. Anything else is not the approved value.
+ */
+const isApprovedValue = (expected: unknown, actual: unknown): boolean => {
+  if (expected instanceof Uint8Array) {
+    return (
+      actual instanceof Uint8Array &&
+      encodeBytes(actual) === encodeBytes(expected)
+    );
+  }
+  if (typeof expected === 'bigint' || typeof expected === 'boolean') {
+    return actual === expected;
+  }
+  if (
+    typeof expected === 'object' &&
+    expected !== null &&
+    'bytes' in expected &&
+    expected.bytes instanceof Uint8Array
+  ) {
+    return (
+      typeof actual === 'object' &&
+      actual !== null &&
+      'bytes' in actual &&
+      actual.bytes instanceof Uint8Array &&
+      encodeBytes(actual.bytes) === encodeBytes(expected.bytes)
+    );
+  }
+  return false;
+};
+
+/**
+ * The check a call authorisation must pass: it must name the
+ * descriptor's account and bundle, and its arguments must be, value for
+ * value in declaration order, the ones the pinned descriptor decoded
+ * from the approved descriptor, so the signature binds exactly the call
+ * the user saw. Any difference names the argument.
+ */
+const callArgumentCheck =
+  (flow: CallContractFlow, { decoded }: PinnedCall): ArgumentCheck =>
+  ({ account, bundleId, args }) => {
+    if (account !== flow.account) return 'account';
+    if (bundleId !== flow.bundleId) return 'bundleId';
+    if (!Array.isArray(args) || args.length !== decoded.length) return 'args';
+    const index = decoded.findIndex(
+      (expected, position) => !isApprovedValue(expected, args[position]),
+    );
+    return index === -1 ? undefined : `args[${index}]`;
+  };
+
 const REVOCATION_CIRCUITS = [REVOKE_GRANT_CIRCUIT, REVOKE_ALL_GRANTS_CIRCUIT];
 
 /**
  * Binds a decoded flow before its session opens and returns the check
  * its authorisations must pass. An issue-grant flow loads the grant
  * derivation here, the first Midnight code the signer evaluates, and is
- * re-derived against the dApp origin; the other flows bind their one
+ * re-derived against the dApp origin; a contract call, an install and a
+ * creation naming a build or constructor arguments are held to the
+ * descriptors the signer pins, see {@link pinCallContractFlow}, which
+ * loads the bundle registry the same way; the other flows bind their one
  * argument, or none, from the descriptor alone.
  */
 const bindFlow = async (
   flow: DecodedSignerFlow,
   dappOrigin: string | undefined,
+  pins: () => Promise<DescriptorPins>,
 ): Promise<ArgumentCheck> => {
   switch (flow.kind) {
     case 'add-device':
@@ -556,14 +653,22 @@ const bindFlow = async (
         singleBytesArgumentCheck(flow.grantId),
       );
     case 'install-operations':
+      pinInstallOperationsFlow(flow, await pins());
+      return accountArgumentCheck(flow.account, noArgumentCheck);
     case 'revoke-all-grants':
       return accountArgumentCheck(flow.account, noArgumentCheck);
+    case 'call-contract':
+      return callArgumentCheck(flow, pinCallContractFlow(flow, await pins()));
     case 'issue-grant': {
       const derivation = await loadGrantDerivation();
       await assertGrantBinding(flow, dappOrigin, derivation);
       return issueArgumentCheck(flow, derivation);
     }
     case 'create-account':
+      if (flow.bundleId !== undefined || flow.constructorArgs !== undefined) {
+        pinCreateAccountFlow(flow, await pins());
+      }
+      return anyArgumentCheck;
     case 'read-holdings':
     case 'sign-in':
       return anyArgumentCheck;
@@ -612,6 +717,7 @@ const rotationDevices = (flow: DecodedSignerFlow): string[] | undefined => {
     case 'revoke-grant':
     case 'revoke-all-grants':
       return flow.devices;
+    case 'call-contract':
     case 'create-account':
     case 'install-operations':
     case 'read-holdings':
@@ -833,7 +939,8 @@ const derivesOwnGrantIds = async (
 
 /**
  * Names the field a maintenance update strays from its approval on. An
- * install signs only verifier key inserts, each of an operation its
+ * install signs only verifier key inserts under the bundle its descriptor
+ * names, the default when it names none, each of an operation the
  * descriptor names and none twice. A device flow signs only the replace
  * that follows the fresh-roster rotation it signed, over the keyring of
  * the key the session rotated to, on the same network, and only towards
@@ -842,7 +949,7 @@ const derivesOwnGrantIds = async (
  * secret with a roster key of a grantee's could otherwise pass as live,
  * and the authority the session drew is the only one the user approved
  * handing to the devices listed. Which verifier keys an insert may carry
- * the encryption key holds to itself.
+ * the encryption key holds to the named bundle itself.
  */
 const unboundMaintenance = (
   { flow, rotatedTo }: HeldKeySession,
@@ -851,6 +958,9 @@ const unboundMaintenance = (
 ): string | undefined => {
   if (flow.kind === 'install-operations') {
     if (changes.kind !== 'insert-verifier-keys') return 'changes';
+    if (changes.bundleId !== (flow.bundleId ?? ACCOUNT_BUNDLE_ID)) {
+      return 'changes.bundleId';
+    }
     const named = new Set(flow.operations);
     const signed = new Set<string>();
     for (const [index, { operation }] of changes.inserts.entries()) {
@@ -882,7 +992,10 @@ const isSameDeployment = (
   left.handoverAuthority.tag === right.handoverAuthority.tag &&
   left.handoverAuthority.value === right.handoverAuthority.value &&
   left.operations.join(',') === right.operations.join(',') &&
-  left.keyEntries.join(',') === right.keyEntries.join(',');
+  left.keyEntries.join(',') === right.keyEntries.join(',') &&
+  left.bundleId === right.bundleId &&
+  (left.constructorArgs ?? []).join(',') ===
+    (right.constructorArgs ?? []).join(',');
 
 /**
  * Builds the signer-side handlers for the Passport request kinds over the
@@ -948,6 +1061,25 @@ const isSameDeployment = (
  * before the session opens, so a malformed one is refused without a
  * ceremony.
  *
+ * A contract call, an install and a creation naming a build are held,
+ * before their session opens, to what this signer pins: the bundles of
+ * its `registry` beside the default and the registry's called contracts,
+ * never a descriptor the dApp sends. A call naming a
+ * bundle the signer does not pin, a circuit that bundle does not
+ * describe, a circuit that reads a witness, arguments that do not fit
+ * the descriptor or callees that are not the registered called contracts
+ * its contract arguments name is refused with FlowScopeError naming the
+ * descriptor field; so is an install of operations outside its bundle's
+ * roster and a creation whose constructor arguments do not fit its
+ * bundle's. The call session serves the one circuit the descriptor
+ * names, and its authorisation must name the descriptor's account and
+ * bundle and carry, value for value, the arguments the pinned descriptor
+ * decoded from the approved ones, so the signature binds exactly the
+ * call the user saw, and is signed once per approval, so one approval
+ * cannot submit the call again under a fresh nonce. The challenge is
+ * built by the bundle module's own pure circuit, which the authoriser
+ * loads from the registered bundle.
+ *
  * A keyring carries at most MAX_INBOX_ENTRIES_PER_REQUEST envelopes too.
  * A flow that opens the account keys may page more of this device's
  * envelopes through `find-live-envelope`, which answers only where in
@@ -959,14 +1091,15 @@ const isSameDeployment = (
  * the authority a roster key of the keyring derives when that authority
  * is the one the request says the chain holds, installs by a replace
  * only the authority the live roster key derives, and inserts only the
- * verifier keys the module pins for operations it deploys; it never
- * signs bytes it is sent. The session holds it to its approval too: a
- * removal, and an enrolment that rotates under a live read grant, sign
- * only a replace, only over the keyring of the fresh-roster key the
- * session rotated to, and only towards the authority the roster key that
- * session drew derives, since the dApp picks the keyring's envelopes and
- * so which roster key the encryption key takes as live; an install signs
- * only inserts of the operations its descriptor names. A keyring none of whose roster keys
+ * verifier keys a bundle it pins holds for operations of that bundle's
+ * roster, the bundle the request names; it never signs bytes it is sent.
+ * The session holds it to its approval too: a removal, and an enrolment
+ * that rotates under a live read grant, sign only a replace, only over
+ * the keyring of the fresh-roster key the session rotated to, and only
+ * towards the authority the roster key that session drew derives, since
+ * the dApp picks the keyring's envelopes and so which roster key the
+ * encryption key takes as live; an install signs only inserts under the
+ * bundle its descriptor names, of the operations it names. A keyring none of whose roster keys
  * derives the authority is answered null rather than refused, so the
  * dApp pages the envelopes older than the live one beside it, since
  * the roster key the authority was derived from may sit behind any
@@ -1025,9 +1158,15 @@ export const createPassportSignerHandlers = ({
   sessionTimeoutMs = DEFAULT_SESSION_TIMEOUT_MS,
   onSessionExpired,
   timers = defaultTimers,
+  registry,
 }: CreatePassportSignerHandlersProps): PassportSignerHandlers => {
-  const authoriser = createPasskeyAuthoriser({ keySource });
-  const encryptionKey = createPasskeyEncryptionKey(keySource);
+  const authoriser = createPasskeyAuthoriser({ keySource, registry });
+  const encryptionKey = createPasskeyEncryptionKey(keySource, registry);
+  const bundleRegistry = bundleRegistryLoader(registry);
+  const pins = async (): Promise<DescriptorPins> => {
+    const { bundles, calledContracts } = await bundleRegistry();
+    return { bundles, calledContracts };
+  };
   const findLiveEnvelope = createPasskeyLiveEnvelopeFinder(keySource);
   const records = toAccountRecords(
     createAccountRecordStore(createKeyValueStorage, authoriser.storageKey),
@@ -1076,6 +1215,7 @@ export const createPassportSignerHandlers = ({
       createdKeys: new Map(),
       producedEntries: new Set(),
       isRevocationSigned: false,
+      isCallSigned: false,
       isIssueSigned: false,
     };
     heldSession = held;
@@ -1124,7 +1264,7 @@ export const createPassportSignerHandlers = ({
     if (decoded.kind === 'create-account') {
       await assertCreationOpens(decoded, dappOrigin);
     }
-    await holdKeySession(decoded, await bindFlow(decoded, dappOrigin));
+    await holdKeySession(decoded, await bindFlow(decoded, dappOrigin, pins));
   };
 
   /**
@@ -1197,6 +1337,18 @@ export const createPassportSignerHandlers = ({
     if (!REVOCATION_CIRCUITS.includes(circuit)) return;
     if (held.isRevocationSigned) refuse(held, 'revocation');
     held.isRevocationSigned = true;
+  };
+
+  /**
+   * Refuses a second call under one approval: a call-contract approval
+   * signs its circuit once, since every signature with a fresh nonce
+   * would otherwise submit the approved call again. It is counted before
+   * the signature, so a ceremony that fails still spends the approval.
+   */
+  const assertSingleCall = (held: HeldKeySession): void => {
+    if (held.flow.kind !== 'call-contract') return;
+    if (held.isCallSigned) refuse(held, 'call');
+    held.isCallSigned = true;
   };
 
   /**
@@ -1404,12 +1556,14 @@ export const createPassportSignerHandlers = ({
 
   /**
    * Refuses a creation the stored unfinished creation it reads, unless
-   * the creation was started from the asking origin and with the lock
-   * choice this descriptor names, so the consent showed the choice that
-   * applies. Another lock choice is refused with
-   * CreationLockMismatchError naming the recorded one, as a local
-   * creation refuses it, which the asking origin may learn since it
-   * started the creation.
+   * the creation was started from the asking origin, with the lock
+   * choice this descriptor names and from the bundle and constructor
+   * arguments it names, so the consent showed the choice and the build
+   * that apply. Another lock choice is refused with
+   * CreationLockMismatchError naming the recorded one, and another build
+   * with CreationArtefactMismatchError naming the recorded bundle, as a
+   * local creation refuses them, which the asking origin may learn since
+   * it started the creation.
    */
   const assertResumable = async (
     held: HeldKeySession,
@@ -1431,18 +1585,22 @@ export const createPassportSignerHandlers = ({
     if (deployment.lockAccount !== flow.lockAccount) {
       throw lockChoiceMismatch(deployment.lockAccount);
     }
+    if (!isSameCreationBuild(deployment, flow)) {
+      throw creationBuildMismatch(deployment);
+    }
   };
 
   /**
    * The pending deployment a creation's write leaves stored. Over a
    * complete record nothing is written. Only the origin that drew the
    * creation's keys writes a pending record over empty storage, carrying
-   * the whole deployment with the lock choice the descriptor names and
-   * the handover authority of keys this session drew, so the authority
-   * an unlocked account is handed to is one its roster key derives, and
-   * only it writes over a pending one, under the lock choice that one
-   * was started with, keeping that deployment as it is or dropping it to
-   * complete the record.
+   * the whole deployment with the lock choice, the bundle and the
+   * constructor arguments the descriptor names and the handover
+   * authority of keys this session drew, so the authority an unlocked
+   * account is handed to is one its roster key derives, and only it
+   * writes over a pending one, under the lock choice and the build that
+   * one was started with, keeping that deployment as it is or dropping
+   * it to complete the record.
    */
   const writtenCreation = async (
     held: HeldKeySession,
@@ -1467,6 +1625,13 @@ export const createPassportSignerHandlers = ({
     ) {
       refuse(held, 'lockAccount');
     }
+    if (
+      stored?.deployment !== undefined &&
+      isPendingDeployment(stored.deployment) &&
+      !isSameCreationBuild(stored.deployment, flow)
+    ) {
+      refuse(held, 'bundleId');
+    }
     if (written === undefined) return undefined;
     if (!isPendingDeployment(written)) {
       return refuse(held, 'record.deployment');
@@ -1474,6 +1639,9 @@ export const createPassportSignerHandlers = ({
     if (stored?.deployment === undefined) {
       if (written.lockAccount !== flow.lockAccount) {
         return refuse(held, 'record.deployment.lockAccount');
+      }
+      if (!isSameCreationBuild(written, flow)) {
+        return refuse(held, 'record.deployment.bundleId');
       }
       return [...held.createdKeys.values()].some(({ authority }) =>
         isSameAuthority(authority, written.handoverAuthority),
@@ -1577,14 +1745,23 @@ export const createPassportSignerHandlers = ({
       );
     },
     authorise: async (
-      { account, circuit, args, witnessValues, authNonce, useCounter },
+      {
+        account,
+        circuit,
+        args,
+        witnessValues,
+        authNonce,
+        useCounter,
+        bundleId,
+      },
       dappOrigin,
     ) => {
-      const binding = { account, circuit, args };
+      const binding = { account, circuit, args, bundleId };
       const held = requireScopedRequest('authorise', binding);
       await assertRotationBound(held, binding, dappOrigin);
       assertRemovalRotated(held, circuit);
       assertSingleRevocation(held, circuit);
+      assertSingleCall(held);
       const authorisation = encodeAuthorisation(
         await authoriser.authorise({
           account: AccAddress(account),
@@ -1593,6 +1770,9 @@ export const createPassportSignerHandlers = ({
           witnessValues,
           authNonce: decodeBigInt(authNonce, 'authNonce'),
           useCounter: UseCounter(decodeBigInt(useCounter, 'useCounter')),
+          ...(bundleId === undefined
+            ? {}
+            : { bundleId: decodeBundleId(bundleId, 'bundleId') }),
         }),
       );
       await noteAuthorised(held, binding, dappOrigin);

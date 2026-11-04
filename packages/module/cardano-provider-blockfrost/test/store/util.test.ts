@@ -94,13 +94,41 @@ describe('blockfrost provider sideEffectDependencies utils', () => {
       },
       quantity: 1n,
       supply: 1n,
+      metadataSources: ['on-chain' as const],
     };
+
+    it.each([
+      undefined,
+      [],
+      ['on-chain'],
+      ['token-registry'],
+      ['on-chain', 'token-registry'],
+    ] as Array<CardanoTokenMetadata['metadataSources']>)(
+      'preserves explicit provenance %j independently of presentation metadata',
+      metadataSources => {
+        const result = toContractTokenMetadata({
+          ...assetInfo,
+          metadataSources,
+          tokenMetadata: {
+            assetId: assetInfo.assetId,
+            name: 'Registry name',
+            ticker: 'SAME',
+            decimals: 6,
+          },
+        });
+        expect(result.blockchainSpecific.metadataSources).toEqual(
+          metadataSources,
+        );
+        expect(result.blockchainSpecific).not.toHaveProperty('verified');
+      },
+    );
 
     it('maps AssetInfo into TokenMetadata<CardanoTokenMetadata>', () => {
       expect(toContractTokenMetadata(assetInfo)).toEqual<
         TokenMetadata<CardanoTokenMetadata>
       >({
         blockchainSpecific: {
+          metadataSources: ['on-chain'],
           metadataSchemaVersion: CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           updatedAt: expect.any(Number),
@@ -147,6 +175,7 @@ describe('blockfrost provider sideEffectDependencies utils', () => {
         TokenMetadata<CardanoTokenMetadata>
       >({
         blockchainSpecific: {
+          metadataSources: ['on-chain'],
           metadataSchemaVersion: CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           updatedAt: expect.any(Number),
@@ -193,6 +222,7 @@ describe('blockfrost provider sideEffectDependencies utils', () => {
         TokenMetadata<CardanoTokenMetadata>
       >({
         blockchainSpecific: {
+          metadataSources: ['on-chain'],
           metadataSchemaVersion: CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           updatedAt: expect.any(Number),

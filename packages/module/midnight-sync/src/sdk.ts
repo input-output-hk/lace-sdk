@@ -39,6 +39,7 @@ export type {
 export type {
   MidnightSyncAuth,
   MidnightSyncSdkOptions,
+  MidnightSyncWorkerOptions,
 } from './store/sdk-init';
 export type { MidnightNetworkConfigOverrides } from './store/side-effects/network-config';
 
@@ -90,13 +91,6 @@ export const createMidnightSyncModule = (options: MidnightSyncSdkOptions) =>
     },
   });
 
-export {
-  constructDustDesignationTransaction,
-  constructShieldedTransaction,
-  constructUnshieldedTransaction,
-  normalizeMidnightTransfers,
-  estimatePreparedMidnightFee,
-} from './store/prepare-midnight-tx';
 export { createTemenosAttestedProver } from '@lace-lib/vendor/temenos-attested-prover';
 export type {
   TemenosTrustRoots,
@@ -110,4 +104,48 @@ export {
   createProvingProviderFromTransport,
   createProvingProviderFromCircuits,
 } from './store/proof-server-transport';
-export { midnightDustBalances } from './store/side-effects/watch';
+export { MIDNIGHT_CHECKPOINT_COLLECTION } from './store/checkpoint-collection';
+export { dustBalancesOf, midnightStateOf$ } from './worker/state-accessors';
+export { strictCompletionOf } from './worker/state-accessors';
+export type {
+  OpaqueMidnightFinalizedTx,
+  OpaqueMidnightRecipe,
+} from './worker/codec';
+export {
+  createMidnightEngineHost,
+  MIDNIGHT_ENGINE_START_BOUND_MS,
+} from './worker/engine-host';
+export {
+  acrossMidnightEngineResets,
+  MidnightEngineClientError,
+  remoteEngineClientOf,
+} from './worker/engine-client';
+export type {
+  ConnectMidnightEngine,
+  MidnightEngineConnection,
+  MidnightEngineRuntimeStatus,
+  MidnightPendingRow,
+  MidnightRemoteEngineClient,
+} from './worker/engine-client';
+export {
+  buildConnectorTransaction,
+  buildTransaction,
+  discardRecipe,
+  estimateFee,
+  preparePendingActivity,
+  proveRecipe,
+  signRecipe,
+  submitTransaction,
+} from './worker/engine-operations';
+export {
+  checkCircuitThroughPort,
+  proveCircuitThroughPort,
+} from './worker/prover-port';
+export { MidnightWorkerError } from './worker/protocol';
+export type {
+  MidnightConnectorRequest,
+  MidnightEngineHost,
+  MidnightSessionStreams,
+  MidnightWorkerStorageKind,
+  MidnightWorkerTxRequest,
+} from './worker/protocol';

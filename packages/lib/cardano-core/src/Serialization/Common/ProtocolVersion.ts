@@ -1,9 +1,12 @@
-import { InvalidArgumentError, InvalidStateError } from '@lace-lib/util/common';
+import {
+  InvalidArgumentError,
+  InvalidStateError,
+} from '@lace-lib/cardano-util';
 
 import { CborReader, CborWriter } from '../CBOR';
 
 import type * as Cardano from '../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const PROTOCOL_VERSION_ARRAY_SIZE = 2;
 const MAX_MINOR_PROTOCOL_VERSION = 4_294_967_295;

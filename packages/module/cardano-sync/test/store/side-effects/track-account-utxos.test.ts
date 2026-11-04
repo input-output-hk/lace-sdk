@@ -8,6 +8,7 @@ import {
   CardanoUtxoFetchFailureId,
   UTXO_SYNC_CONFIRMATION_DEPTH,
   UtxoCacheKey,
+  toContractAddress,
 } from '@lace-contract/cardano-context';
 import {
   cardanoCustodyAccount,
@@ -22,16 +23,21 @@ import {
   chainId,
   threeAccountCardanoWalletAccounts,
 } from '@lace-contract/cardano-context/test/mocks';
+import { multiSigAccount } from '@lace-contract/cardano-context/test/multisig-mocks';
 import { failuresActions } from '@lace-contract/failures';
 import { Err, Ok, Timestamp } from '@lace-lib/util';
-import { testSideEffect } from '@lace-lib/util-dev';
-import { defer, of } from 'rxjs';
+import { testSideEffect as baseTestSideEffect } from '@lace-lib/util-dev';
+import { BehaviorSubject, defer, of } from 'rxjs';
+import { NEVER } from 'rxjs';
 import { dummyLogger } from 'ts-log';
 import { describe, expect, it, vi } from 'vitest';
 
+import moduleMap from '../../../src';
+import { getScriptAddress } from '../../../src/store/get-script-address';
 import { trackAccountUtxos } from '../../../src/store/side-effects/track-account-utxos';
 
 import type { CardanoSyncAction } from '../../../src';
+import type { Selectors, ActionCreators } from '../../../src/module';
 import type { Activity } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type {
@@ -41,6 +47,32 @@ import type {
 import type { Failure, FailureId } from '@lace-contract/failures';
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { AnyAccount, AccountId } from '@lace-contract/wallet-repo';
+
+const testSideEffect: typeof baseTestSideEffect<Selectors, ActionCreators> = (
+  effect,
+  setup,
+) => {
+  baseTestSideEffect(effect, helpers => {
+    const config = setup(helpers);
+    return {
+      ...config,
+      actionObservables: {
+        ...config.actionObservables,
+        sync: {
+          failSyncOperation$: NEVER,
+          clearPendingSyncsForAccounts$: NEVER,
+          ...config.actionObservables?.sync,
+        },
+        cardanoContext: {
+          resetWalletSyncState$: NEVER,
+          refetchAccountUtxos$: NEVER,
+          setWalletSyncResetResult$: NEVER,
+          ...config.actionObservables?.cardanoContext,
+        },
+      },
+    };
+  });
+};
 
 const actions = {
   ...cardanoContextActions,
@@ -375,6 +407,147 @@ const emptyFailures: Record<FailureId, Failure> = {};
 const undefinedTip: Cardano.Tip | undefined = undefined;
 
 describe('trackAccountUtxos', () => {
+  it('registers the receive-output guard in the legacy mobile sync module', async () => {
+    const mobileStore = moduleMap['lace-mobile']?.store;
+    expect(mobileStore).toBeDefined();
+    const loaded = await mobileStore!.load();
+    const initialized = await loaded.default(
+      {
+        runtime: { config: { cardanoProvider: { tipPollFrequency: 30_000 } } },
+      } as never,
+      {} as never,
+    );
+    expect(initialized.sideEffects).toContain(trackAccountUtxos);
+  });
+
+  it.each([
+    {
+      name: 'retries a legacy mobile receive until its complete output arrives',
+      persistedState: 'unsettled',
+    },
+    {
+      name: 'does not repair a legacy mobile receive whose persisted cache key already matches',
+      persistedState: 'already-settled',
+    },
+  ])('$name', ({ persistedState }) => {
+    const oldUtxo: Cardano.Utxo = [
+      legitimateUtxoForAddr1[0],
+      {
+        ...legitimateUtxoForAddr1[1],
+        value: { coins: 14_992_738n },
+      },
+    ];
+    const rise = Cardano.AssetId(`${'a'.repeat(56)}52495345`);
+    const received: Cardano.Utxo = [
+      receivedAddr1Utxo[0],
+      {
+        ...receivedAddr1Utxo[1],
+        value: {
+          coins: 2_000_000n,
+          assets: new Map([[rise, 80_546_248_034n]]),
+        },
+      },
+    ];
+    const persistedKeys$ = new BehaviorSubject<PersistedCacheKeys>({
+      [accountId]: persistedState === 'unsettled' ? cacheKeyFor1 : cacheKeyFor2,
+    });
+    const getAccountUtxos = vi
+      .fn()
+      .mockReturnValueOnce(of(Ok([oldUtxo])))
+      .mockReturnValueOnce(of(Ok([oldUtxo])))
+      .mockReturnValue(of(Ok([oldUtxo, received])));
+
+    testSideEffect(trackAccountUtxos, ({ cold, flush }) => ({
+      actionObservables: {
+        cardanoContext: { retrySyncRound$: cold('-') },
+      },
+      stateObservables: {
+        wallets: { selectActiveNetworkAccounts$: of([account]) },
+        addresses: { selectAllAddresses$: of([mockAddress1]) },
+        activities: {
+          selectAllMap$: of({
+            [accountId]: [
+              {
+                ...txActivity('tx-2', 100, {
+                  produced: [receivedAddr1Outpoint],
+                }),
+                type: ActivityType.Receive,
+              },
+            ],
+          }),
+        },
+        cardanoContext: {
+          selectLastFetchedUtxoCacheKeyByAccount$: persistedKeys$,
+          selectAccountUtxos$: of({ [accountId]: [oldUtxo] }),
+          selectTip$: cold('a---b---c---d', {
+            a: {
+              slot: Cardano.Slot(100 + UTXO_SYNC_CONFIRMATION_DEPTH + 1),
+            } as Cardano.Tip,
+            b: {
+              slot: Cardano.Slot(100 + UTXO_SYNC_CONFIRMATION_DEPTH + 2),
+            } as Cardano.Tip,
+            c: {
+              slot: Cardano.Slot(100 + UTXO_SYNC_CONFIRMATION_DEPTH + 3),
+            } as Cardano.Tip,
+            d: {
+              slot: Cardano.Slot(100 + UTXO_SYNC_CONFIRMATION_DEPTH + 4),
+            } as Cardano.Tip,
+          }),
+        },
+        failures: {
+          selectFailureById$: of(noFailureSelector),
+          selectAllFailures$: of(emptyFailures),
+        },
+      },
+      dependencies: {
+        cardanoProvider: {
+          getAccountUtxos,
+        } as unknown as CardanoProviderDependencies['cardanoProvider'],
+        actions,
+        logger: dummyLogger,
+      },
+      assertion: sideEffect$ => {
+        const emitted: CardanoSyncAction[] = [];
+        sideEffect$.subscribe(action => {
+          emitted.push(action);
+          if (actions.cardanoContext.setLastFetchedUtxoCacheKey.match(action)) {
+            persistedKeys$.next({ [accountId]: action.payload.cacheKey });
+          }
+        });
+        flush();
+
+        if (persistedState === 'already-settled') {
+          expect(getAccountUtxos).not.toHaveBeenCalled();
+          expect(emitted).toEqual([]);
+          return;
+        }
+        expect(getAccountUtxos).toHaveBeenCalledTimes(3);
+        expect(emitted).toEqual([
+          actions.cardanoContext.setAccountUtxos({
+            accountId,
+            utxos: [oldUtxo],
+          }),
+          actions.cardanoContext.setAccountUtxos({
+            accountId,
+            utxos: [oldUtxo],
+          }),
+          actions.cardanoContext.setAccountUtxos({
+            accountId,
+            utxos: [oldUtxo, received],
+          }),
+          actions.cardanoContext.setLastFetchedUtxoCacheKey({
+            accountId,
+            cacheKey: cacheKeyFor2,
+          }),
+        ]);
+        expect(getAccountUtxos).toHaveBeenCalledWith(
+          { rewardAccount: rewardAccount1 },
+          { chainId },
+        );
+      },
+    }));
+  });
+
   it('fetches UTxOs on initial emission when account has a most recent transaction', () => {
     testSideEffect(trackAccountUtxos, ({ cold, expectObservable }) => {
       const accounts$ = cold<AnyAccount[]>('a', { a: [account] });
@@ -3377,4 +3550,231 @@ describe('trackAccountUtxos', () => {
       });
     });
   });
+});
+
+describe('wallet reset UTXO refresh', () => {
+  it.each(['empty', 'funded', 'failed'])(
+    'refetches only the multisig script address (%s)',
+    scenario => {
+      const isFunded = scenario === 'funded';
+      const hasFailed = scenario === 'failed';
+      const {
+        paymentScript,
+        stakingScript,
+        chainId: scriptChainId,
+      } = multiSigAccount.blockchainSpecific;
+      const grouped = getScriptAddress(
+        paymentScript,
+        stakingScript,
+        scriptChainId.networkId,
+      );
+      const scriptAddress: AnyAddress = {
+        ...toContractAddress(grouped, scriptChainId.networkMagic),
+        accountId: multiSigAccount.accountId,
+        blockchainName: 'Cardano',
+      };
+      const owned: Cardano.Utxo = [
+        { ...freshUtxoForAddr1[0], address: grouped.address },
+        { ...freshUtxoForAddr1[1], address: grouped.address },
+      ];
+      const foreignScriptAddress = getScriptAddress(
+        stakingScript,
+        stakingScript,
+        scriptChainId.networkId,
+      ).address;
+      const foreign: Cardano.Utxo = [
+        { ...legitimateUtxoForAddr1[0], address: foreignScriptAddress },
+        { ...legitimateUtxoForAddr1[1], address: foreignScriptAddress },
+      ];
+      const scriptCacheKey = UtxoCacheKey({
+        topOnChainActivityId: 'no-activity',
+        stakeKeys: [CardanoRewardAccount(grouped.rewardAccount)],
+        accountAddressCount: 1,
+      });
+      testSideEffect(trackAccountUtxos, ({ hot, flush }) => {
+        const getUtxosAtAddress = vi
+          .fn()
+          .mockReturnValue(
+            of(
+              hasFailed
+                ? Err(nonRetriableError)
+                : Ok(isFunded ? [owned, foreign] : []),
+            ),
+          );
+        const getAccountUtxos = vi.fn();
+        const emitted: CardanoSyncAction[] = [];
+        return {
+          actionObservables: {
+            cardanoContext: {
+              retrySyncRound$: hot('-'),
+              resetWalletSyncState$: hot('-a', {
+                a: actions.cardanoContext.resetWalletSyncState({
+                  accountId: multiSigAccount.accountId,
+                }),
+              }),
+              refetchAccountUtxos$: hot('--a', {
+                a: actions.cardanoContext.refetchAccountUtxos({
+                  accountId: multiSigAccount.accountId,
+                }),
+              }),
+            },
+          },
+          stateObservables: {
+            wallets: {
+              selectActiveNetworkAccounts$: hot<AnyAccount[]>('a', {
+                a: [account, multiSigAccount],
+              }),
+            },
+            addresses: {
+              selectAllAddresses$: hot('a', {
+                a: [mockAddress1, scriptAddress],
+              }),
+            },
+            activities: { selectAllMap$: hot('a', { a: {} }) },
+            cardanoContext: {
+              selectLastFetchedUtxoCacheKeyByAccount$: of({
+                [accountId]: cacheKeyNoActivity,
+                [multiSigAccount.accountId]: scriptCacheKey,
+              }),
+              selectAccountUtxos$: of({}),
+              selectTip$: hot('a', { a: undefined }),
+            },
+            failures: {
+              selectFailureById$: hot('a', { a: noFailureSelector }),
+              selectAllFailures$: hot('a', { a: emptyFailures }),
+            },
+          },
+          dependencies: {
+            actions,
+            logger: dummyLogger,
+            cardanoProvider: {
+              getAccountUtxos,
+              getUtxosAtAddress,
+              getTip: vi.fn(),
+              discoverAddresses: vi.fn(),
+              getTokens: vi.fn(),
+              getTokenMetadata: vi.fn(),
+              getAddressTransactionHistory: vi.fn(),
+              getAssetTransactionHistory: vi.fn(),
+              getAccountRewards: vi.fn(),
+              getAccountDelegations: vi.fn(),
+              getAccountRegistrations: vi.fn(),
+              getAccountWithdrawals: vi.fn(),
+              getRewardAccountInfo: vi.fn(),
+              getTransactionDetails: vi.fn(),
+              getProtocolParameters: vi.fn(),
+              getEraSummaries: vi.fn(),
+              resolveInput: vi.fn(),
+              submitTx: vi.fn(),
+              evaluateTx: vi.fn(),
+              getDReps: vi.fn(),
+            },
+          },
+          assertion: source => {
+            source.subscribe(action => emitted.push(action));
+            flush();
+            expect(getUtxosAtAddress).toHaveBeenCalledExactlyOnceWith(
+              { address: grouped.address },
+              { chainId: scriptChainId },
+            );
+            expect(getAccountUtxos).not.toHaveBeenCalled();
+            if (hasFailed) {
+              expect(emitted).toEqual([
+                actions.failures.addFailure({
+                  failureId: CardanoUtxoFetchFailureId(
+                    multiSigAccount.accountId,
+                  ),
+                  message: 'sync.error.cardano-utxo-fetch-failed',
+                }),
+              ]);
+              return;
+            }
+            expect(
+              emitted.filter(actions.cardanoContext.setAccountUtxos.match),
+            ).toEqual([
+              actions.cardanoContext.setAccountUtxos({
+                accountId: multiSigAccount.accountId,
+                utxos: isFunded ? [owned] : [],
+              }),
+            ]);
+          },
+        };
+      });
+    },
+  );
+
+  it.each([false, true])(
+    'forces a fresh account fetch without a tip or ownership change (cancel stale fetch: %s)',
+    cancelStale => {
+      testSideEffect(trackAccountUtxos, ({ cold, hot, flush }) => {
+        const getAccountUtxos = vi
+          .fn()
+          .mockImplementationOnce(() =>
+            cancelStale
+              ? cold('-----a|', { a: Ok([legitimateUtxoForAddr1]) })
+              : cold('(a|)', { a: Ok([freshUtxoForAddr1]) }),
+          )
+          .mockImplementation(() =>
+            cold('(a|)', { a: Ok([freshUtxoForAddr1]) }),
+          );
+        const emitted: CardanoSyncAction[] = [];
+        return {
+          actionObservables: {
+            cardanoContext: {
+              retrySyncRound$: cold('-'),
+              refetchAccountUtxos$: hot('--ab', {
+                a: actions.cardanoContext.refetchAccountUtxos({ accountId }),
+                b: actions.cardanoContext.refetchAccountUtxos({
+                  accountId: otherAccountId,
+                }),
+              }),
+              resetWalletSyncState$: hot('-a', {
+                a: actions.cardanoContext.resetWalletSyncState({ accountId }),
+              }),
+            },
+          },
+          stateObservables: {
+            wallets: {
+              selectActiveNetworkAccounts$: cold('a', { a: [account] }),
+            },
+            addresses: {
+              selectAllAddresses$: cold('a', { a: [mockAddress1] }),
+            },
+            activities: { selectAllMap$: cold('a', { a: {} }) },
+            cardanoContext: {
+              selectLastFetchedUtxoCacheKeyByAccount$: cold('a', {
+                a: cancelStale ? {} : { [accountId]: cacheKeyNoActivity },
+              }),
+              selectAccountUtxos$: cold('a', { a: {} }),
+              selectTip$: cold('a', { a: undefined }),
+            },
+            failures: {
+              selectFailureById$: cold('a', { a: noFailureSelector }),
+              selectAllFailures$: cold('a', { a: emptyFailures }),
+            },
+          },
+          dependencies: {
+            actions,
+            logger: dummyLogger,
+            cardanoProvider: {
+              getAccountUtxos,
+            } as unknown as CardanoProviderDependencies['cardanoProvider'],
+          },
+          assertion: sideEffect$ => {
+            sideEffect$.subscribe(action => emitted.push(action));
+            flush();
+            expect(getAccountUtxos).toHaveBeenCalledTimes(cancelStale ? 2 : 1);
+            expect(
+              emitted.filter(actions.cardanoContext.setAccountUtxos.match),
+            ).toEqual([
+              actions.cardanoContext.setAccountUtxos({
+                accountId,
+                utxos: [freshUtxoForAddr1],
+              }),
+            ]);
+          },
+        };
+      });
+    },
+  );
 });

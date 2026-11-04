@@ -14,6 +14,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { estimateMidnightFee } from '../src/estimate-midnight-fee';
 
+import { pageModeEngineAccess } from './midnight-engine-access-fake';
+
 import type { MidnightFeeRequest } from '../src/estimate-midnight-fee';
 import type { WalletWithMidnight } from '../src/midnight-wallet';
 import type { MidnightWallet } from '@lace-contract/midnight-context';
@@ -117,7 +119,9 @@ const setup = ({
       network: network as WalletWithMidnight['stateObservables']['network'],
     },
     _loadModules: (async () => [
-      of({ [accountId]: engine as unknown as MidnightWallet }),
+      pageModeEngineAccess(
+        of({ [accountId]: engine as unknown as MidnightWallet }),
+      ),
     ]) as unknown as WalletWithMidnight['_loadModules'],
   };
   return { wallet, engine };

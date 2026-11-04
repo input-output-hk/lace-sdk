@@ -25,6 +25,7 @@ const recognised: RecognisedAccount = {
   account: {
     address: accountAddress,
     bindingVersion: '0.1.0-lace.1',
+    bundleId: 'account',
     status: 'ready',
     networkId: 'undeployed',
   },
@@ -90,6 +91,7 @@ const runFlowTest = ({ signIn = 's', flows, assertion }: FlowTest) => {
           issueGrant$: NEVER,
           installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
+          callContract$: NEVER,
           removeDevice$: NEVER,
           revokeAllGrants$: NEVER,
           revokeGrant$: NEVER,

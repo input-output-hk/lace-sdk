@@ -1,4 +1,4 @@
-import { HexBlob, InvalidArgumentError } from '@lace-lib/util/common';
+import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { PlutusLanguageVersion, ScriptType } from '../../Cardano/types/Script';
 import { SerializationError, SerializationFailure } from '../../errors';

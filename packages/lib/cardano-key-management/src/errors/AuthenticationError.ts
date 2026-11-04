@@ -1,4 +1,4 @@
-import { ComposableError } from '@lace-lib/util/common';
+import { ComposableError } from '@lace-lib/cardano-util';
 
 const formatMessage = (detail?: string) => {
   const messageDetail = detail ? `: ${detail}` : '';

@@ -1,6 +1,6 @@
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { util } from '@lace-lib/cardano-key-management';
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 import * as Trezor from '@trezor/connect';
 
 import { mapTokenMap } from './assets';
@@ -10,7 +10,7 @@ import type {
   TrezorTxTransformerContext,
 } from '../types';
 import type { GroupedAddress } from '@lace-lib/cardano-key-management';
-import type { HexBlob, Transform } from '@lace-lib/util/common';
+import type { HexBlob, Transform } from '@lace-lib/cardano-util';
 
 const toDestination: Transform<
   Cardano.TxOut,

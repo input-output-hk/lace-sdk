@@ -1,6 +1,7 @@
 import { createJubjubAuthoriser } from './jubjub-authoriser';
 import { JubjubDevice } from './signer';
 
+import type { PassportRegistry } from './registry';
 import type { PassportAuthoriser } from '@lace-contract/passport';
 
 /**
@@ -9,11 +10,15 @@ import type { PassportAuthoriser } from '@lace-contract/passport';
  * this one holds it directly, generating a fresh one when none is given.
  * It exposes no storage key, so account records persist unsealed with it,
  * and no key session, because nothing prompts the user: callers run each
- * flow directly.
+ * flow directly. `registry` is what the host registers beside the default
+ * bundle, whose described circuits it signs as the module calls them.
  */
-export const devJubjubAuthoriser = (scalar?: bigint): PassportAuthoriser => {
+export const devJubjubAuthoriser = (
+  scalar?: bigint,
+  registry?: PassportRegistry,
+): PassportAuthoriser => {
   const device =
     scalar === undefined ? JubjubDevice.generate() : new JubjubDevice(scalar);
 
-  return createJubjubAuthoriser(async operation => operation(device));
+  return createJubjubAuthoriser(async operation => operation(device), registry);
 };

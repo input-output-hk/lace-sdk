@@ -5,6 +5,7 @@ import { testSideEffect } from '@lace-lib/util-dev';
 import { EMPTY, of } from 'rxjs';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import { FEATURE_FLAG_HYDRA_HEADS } from '../../../src/hydra-heads-feature-flag';
 import { mapTransactionToActivityDetails } from '../../../src/store/helpers/map-transaction-to-activity-details';
 import { extractAccountInfo } from '../../../src/store/helpers/transformers';
 import { createTrackTransactionDetails } from '../../../src/store/side-effects/track-transaction-details';
@@ -34,6 +35,8 @@ vi.mock(
     mapTransactionToActivityDetails: vi.fn(),
   }),
 );
+
+const emptyLoadedFeatures = { modules: [], featureFlags: [] };
 
 const actions = {
   ...activitiesActions,
@@ -134,6 +137,9 @@ describe('createTrackTransactionDetails', () => {
                 selectChainId$: cold('a', { a: chainId }),
                 selectProtocolParameters$: cold('a', { a: protocolParameters }),
               },
+              features: {
+                selectLoadedFeatures$: cold('a', { a: emptyLoadedFeatures }),
+              },
             },
             dependencies: {
               cardanoProvider: {
@@ -225,6 +231,9 @@ describe('createTrackTransactionDetails', () => {
                 a: protocolParameters,
               }),
             },
+            features: {
+              selectLoadedFeatures$: cold('a', { a: emptyLoadedFeatures }),
+            },
           },
           dependencies: {
             cardanoProvider: {
@@ -253,6 +262,78 @@ describe('createTrackTransactionDetails', () => {
             } else {
               expect(mapTransactionToActivityDetails).not.toHaveBeenCalled();
             }
+          },
+        }),
+      );
+    },
+  );
+
+  it.each([
+    { name: 'on', featureFlags: [{ key: FEATURE_FLAG_HYDRA_HEADS }] },
+    { name: 'off', featureFlags: [] },
+  ])(
+    'passes the Hydra feature flag state to the details mapping when it is $name',
+    ({ featureFlags }) => {
+      vi.mocked(extractAccountInfo).mockReturnValue(mockAccountInfo);
+      vi.mocked(mapTransactionToActivityDetails).mockReturnValue(
+        of(Ok(mockActivityDetails as ActivityDetail<CardanoTransaction>)),
+      );
+
+      testSideEffect(
+        trackTransactionDetails,
+        ({ cold, expectObservable, flush }) => ({
+          actionObservables: {
+            activities: {
+              loadActivityDetails$: cold('a', {
+                a: {
+                  payload: {
+                    activity: baseActivity,
+                    blockchainName: 'Cardano' as const,
+                  },
+                  type: 'activities/loadActivityDetails',
+                },
+              }),
+            },
+          },
+          stateObservables: {
+            activities: {},
+            addresses: {
+              selectAllAddresses$: cold('a', { a: [cardanoAccount0Addr] }),
+            },
+            cardanoContext: {
+              selectChainId$: cold('a', { a: chainId }),
+              selectProtocolParameters$: cold('a', {
+                a: protocolParameters,
+              }),
+            },
+            features: {
+              selectLoadedFeatures$: cold('a', {
+                a: { modules: [], featureFlags },
+              }),
+            },
+          },
+          dependencies: {
+            cardanoProvider: {
+              getTransactionDetails: vi
+                .fn()
+                .mockReturnValue(of(Ok(mockTxDetails))),
+              resolveInput: vi.fn(),
+              getTokenMetadata: vi.fn(),
+            } as unknown as CardanoProvider,
+            actions,
+          },
+          assertion: sideEffect$ => {
+            expectObservable(sideEffect$).toBe('a', {
+              a: actions.activities.setActivityDetails({
+                activityDetails: mockActivityDetails,
+              }),
+            });
+            flush();
+
+            expect(
+              vi.mocked(mapTransactionToActivityDetails).mock.calls[0][0]
+                .enabledExtensionActivities,
+            ).toMatchObject({ hydra: featureFlags.length > 0 });
           },
         }),
       );

@@ -3,6 +3,7 @@
 // the names the variant declares on stable-omits lines; the SDK's stable
 // variant parity check enforces it.
 import {
+  fixPreviewChainId,
   normalizeHardwareWalletIds,
   setBlockchainNetworkId,
   updateMidnightAccountIds,
@@ -15,4 +16,5 @@ export const walletsMigrations: MigrationManifest = {
   3: setBlockchainNetworkId,
   4: updateMidnightAccountIds,
   5: normalizeHardwareWalletIds,
+  6: fixPreviewChainId,
 };

@@ -2,10 +2,10 @@ import { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import {
   InvalidStringError,
   assertIsBech32WithPrefix,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 import * as BaseEncoding from '@scure/base';
 
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 const MAX_BECH32_LENGTH_LIMIT = 1023;
 const bip32PublicKeyPrefix = 'acct_shared_xvk';

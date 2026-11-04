@@ -62,9 +62,6 @@ const ROOT_TOOLS = [
   'tsdown',
   'typescript',
   'vitest',
-  // The release notes read the changelog fragments (release-scope.ts), which
-  // the tests cover.
-  'yaml',
 ];
 
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));

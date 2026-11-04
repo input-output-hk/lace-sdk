@@ -1,6 +1,7 @@
 import {
   AccountCreationPendingError,
   CeremonyCancelledError,
+  CreationArtefactMismatchError,
   CreationLockMismatchError,
   DeviceReaderInvalidError,
   DeviceRosterInvalidError,
@@ -27,6 +28,8 @@ const PASSPORT_ERRORS: Record<
   'account-creation-pending': ({ message }) =>
     new AccountCreationPendingError(message),
   'ceremony-cancelled': () => new CeremonyCancelledError(),
+  'creation-artefact-mismatch': ({ message }) =>
+    new CreationArtefactMismatchError(message),
   'creation-lock-mismatch': ({ message }) =>
     new CreationLockMismatchError(message),
   'prf-unsupported': () => new PrfUnsupportedError(),

@@ -1,6 +1,8 @@
 import {
   AccAddress,
+  AccBindingVersion,
   CeremonyCancelledError,
+  CircuitNotRegisteredError,
   DeviceEpoch,
   UseCounter,
 } from '@lace-contract/passport';
@@ -13,13 +15,19 @@ import {
 import { HexBytes } from '@lace-lib/util';
 import { describe, expect, it, vi } from 'vitest';
 
-import { UnknownCircuitError } from '../../src/acc/artefact-loader';
+import { expectedVk } from '../../src/acc/acc-module';
 import { jubjubChallenges } from '../../src/acc/challenges';
+import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
+import { accManifest } from '../../src/acc/manifest';
+import { createPassportRegistry } from '../../src/acc/registry';
 import { bytesToBigIntLE, JUBJUB_R, JubjubDevice } from '../../src/acc/signer';
 import { loadJubjubSigning } from '../../src/acc/signing-loader';
 import { createPasskeyAuthoriser } from '../../src/ceremony/passkey';
 
-import type { AuthorisationRequest } from '@lace-contract/passport';
+import type {
+  AccountBundle,
+  AuthorisationRequest,
+} from '@lace-contract/passport';
 import type { PasskeySessionKeySource } from '@lace-lib/passkey';
 
 vi.mock(import('../../src/acc/signing-loader'), async importOriginal => {
@@ -99,7 +107,59 @@ const sealAndOpen = async (sealing: CryptoKey, opening: CryptoKey) => {
   return new TextDecoder().decode(plaintext);
 };
 
-const fakeKeySource = () => {
+const TALLY_CIRCUIT = 'tally_set_with_jubjub';
+const TALLY_ADDRESS = { bytes: new Uint8Array(32).fill(0x21) };
+
+const tallySetRequest: AuthorisationRequest = {
+  ...addDeviceRequest,
+  circuit: TALLY_CIRCUIT,
+  args: [TALLY_ADDRESS, TALLY_ADDRESS, 5n],
+  bundleId: 'account-tally',
+};
+
+/**
+ * A build of the account with one circuit calling a tally, whose module
+ * exports the pure circuits given and no other.
+ */
+const tallyBundle = (circuits: Record<string, unknown>): AccountBundle => ({
+  id: 'account-tally',
+  bindingVersion: AccBindingVersion('0.1.0-tally.1'),
+  module: async () => ({
+    Contract: class {},
+    ledger: () => ({}),
+    pureCircuits: circuits,
+    expectedVk: { ...expectedVk, [TALLY_CIRCUIT]: 'aa'.repeat(32) },
+    circuitSignatures: {},
+    declaredInterfaces: {},
+  }),
+  manifest: {
+    ...accManifest,
+    bindingVersion: AccBindingVersion('0.1.0-tally.1'),
+  },
+  operations: [...DEPLOYED_OPERATIONS, TALLY_CIRCUIT],
+  verifierKeys: { ...expectedVk, [TALLY_CIRCUIT]: 'aa'.repeat(32) },
+  constructorArgs: [],
+  circuits: {
+    [TALLY_CIRCUIT]: {
+      label: 'Set the tally',
+      args: [
+        { name: 'tally', label: 'Tally', type: 'contract', interface: 'Tally' },
+        { name: 'tally_addr', type: 'contract-address', of: 'tally' },
+        {
+          name: 'value',
+          label: 'Value',
+          type: 'uint',
+          maxval: '18446744073709551615',
+        },
+      ],
+      challenge: 'challenge_tally_set_with_jubjub',
+      challengeArgs: ['tally_addr', 'value'],
+      witnesses: [],
+    },
+  },
+});
+
+const fakeKeySource = (bundles?: readonly AccountBundle[]) => {
   const handed: Uint8Array[] = [];
   const recordKey = importAesKey(rootOutput());
   const keySource = {
@@ -116,6 +176,7 @@ const fakeKeySource = () => {
   };
   const authoriser = createPasskeyAuthoriser({
     keySource: keySource as unknown as PasskeySessionKeySource,
+    registry: createPassportRegistry({ bundles }),
   });
   return { authoriser, keySource, handed };
 };
@@ -196,11 +257,20 @@ describe('createPasskeyAuthoriser', () => {
       ).toBeLessThan(JUBJUB_R);
     });
 
-    it('rejects circuits without a challenge builder', async () => {
-      const { authoriser } = fakeKeySource();
+    it('rejects a circuit without a challenge builder before asking for the device secret', async () => {
+      const { authoriser, keySource } = fakeKeySource();
       await expect(
         authoriser.authorise({ ...addDeviceRequest, circuit: 'withdraw' }),
-      ).rejects.toThrow(UnknownCircuitError);
+      ).rejects.toThrow(CircuitNotRegisteredError);
+      expect(keySource.deviceSecret).not.toHaveBeenCalled();
+    });
+
+    it('rejects a descriptor circuit whose bundle module lacks the named pure circuit before asking for the device secret', async () => {
+      const { authoriser, keySource } = fakeKeySource([tallyBundle({})]);
+      await expect(authoriser.authorise(tallySetRequest)).rejects.toThrow(
+        CircuitNotRegisteredError,
+      );
+      expect(keySource.deviceSecret).not.toHaveBeenCalled();
     });
 
     it('asks the key source for the device secret on every authoriser call', async () => {
@@ -270,8 +340,8 @@ describe('createPasskeyAuthoriser', () => {
     it('zeroes the device secret copy when the operation fails', async () => {
       const { authoriser, handed } = fakeKeySource();
       await expect(
-        authoriser.authorise({ ...addDeviceRequest, circuit: 'withdraw' }),
-      ).rejects.toThrow(UnknownCircuitError);
+        authoriser.authorise({ ...addDeviceRequest, args: ['5a5a'] }),
+      ).rejects.toThrow(/byte-array entry/);
 
       expect(handed).toHaveLength(1);
       expect(handed[0]).toEqual(zeroed());

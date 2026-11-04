@@ -1,18 +1,28 @@
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
 import {
   CardanoKeyConst,
   CommunicationType,
   KeyPurpose,
+  KeyRole,
+  TxInId,
   util,
 } from '@lace-lib/cardano-key-management';
 import * as Trezor from '@trezor/connect';
+import { dummyLogger } from 'ts-log';
 
 import { TrezorKeyAgent } from '../src';
 
-import { knownAddressKeyPath, knownAddressStakeKeyPath } from './testData';
+import {
+  knownAddress,
+  knownAddressKeyPath,
+  knownAddressStakeKeyPath,
+  minValidTxBody,
+  stakeKeyHash,
+  txIn as coreTxIn,
+} from './testData';
 
-import type { Cardano } from '@lace-lib/cardano-core';
 import type { Bip32Ed25519 } from '@lace-lib/cardano-crypto';
-import type * as Crypto from '@lace-lib/cardano-crypto';
 import type { Logger } from 'ts-log';
 import type { Mock } from 'vitest';
 
@@ -220,6 +230,64 @@ describe('TrezorKeyAgent', () => {
           Trezor.PROTO.CardanoTxSigningMode.PLUTUS_TRANSACTION,
         );
       });
+    });
+  });
+
+  describe('signTransaction', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('asks the device for the stake witness a native script in the context requires', async () => {
+      const cardanoSignTransaction = vi
+        .spyOn(Trezor.default, 'cardanoSignTransaction')
+        .mockResolvedValue({ payload: { error: 'rejected' }, success: false });
+      const keyAgent = new TrezorKeyAgent(
+        {
+          accountIndex: 0,
+          chainId: Cardano.ChainIds.Preview,
+          extendedAccountPublicKey: Crypto.Bip32PublicKeyHex(
+            'fc5ab25e830b67c47d0a17411bf7fdabf711a597fb6cf04102734b0a2934ceaaa65ff5e7c52498d52c07b8ddfcd436fc2b4d2775e2984a49d0c79f65ceee4779',
+          ),
+          isTrezorInitialized: true,
+          purpose: KeyPurpose.STANDARD,
+          trezorConfig: {
+            communicationType: CommunicationType.Node,
+            manifest: { appUrl: 'https://test.com', email: 'test@test.com' },
+          },
+        },
+        {
+          bip32Ed25519: await Crypto.SodiumBip32Ed25519.create(),
+          logger: dummyLogger,
+        },
+      );
+
+      await expect(
+        keyAgent.signTransaction(
+          Serialization.TransactionBody.fromCore(minValidTxBody),
+          {
+            knownAddresses: [knownAddress],
+            scripts: [
+              {
+                __type: Cardano.ScriptType.Native,
+                keyHash: Crypto.Ed25519KeyHashHex(stakeKeyHash),
+                kind: Cardano.NativeScriptKind.RequireSignature,
+              },
+            ],
+            txInKeyPathMap: {
+              [TxInId(coreTxIn)]: { index: 0, role: KeyRole.Internal },
+            },
+          },
+        ),
+      ).rejects.toThrow();
+      expect(cardanoSignTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          additionalWitnessRequests: [
+            knownAddressKeyPath,
+            knownAddressStakeKeyPath,
+          ],
+        }),
+      );
     });
   });
 

@@ -1,4 +1,4 @@
-import { InvalidStateError } from '@lace-lib/util/common';
+import { InvalidStateError } from '@lace-lib/cardano-util';
 
 import { CertificateType } from '../../Cardano/types/Certificate';
 import { CborReader } from '../CBOR';
@@ -25,7 +25,7 @@ import { VoteDelegation } from './VoteDelegation';
 import { VoteRegistrationDelegation } from './VoteRegistrationDelegation';
 
 import type * as Cardano from '../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * Certificates are a means to encode various essential operations related to stake

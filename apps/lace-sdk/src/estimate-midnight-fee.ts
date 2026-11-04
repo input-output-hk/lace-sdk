@@ -1,19 +1,14 @@
-import {
-  constructDustDesignationTransaction,
-  constructShieldedTransaction,
-  constructUnshieldedTransaction,
-  estimatePreparedMidnightFee,
-  normalizeMidnightTransfers,
-} from '@lace-module/midnight-sync/sdk';
-import { combineLatest, defer, map, switchMap, take } from 'rxjs';
+import { defer } from 'rxjs';
 
+import { midnightOperationsOf } from './midnight-engine-operations';
 import { withMidnightWallet } from './midnight-wallet';
-import { prepareMidnightDustRegistration } from './register-midnight-dust';
+import { assertNoRegistrationTtl } from './register-midnight-dust';
 
 import type { MidnightTransferBatch } from './build-midnight-transfers';
 import type { WalletWithMidnight } from './midnight-wallet';
 import type { RegisterMidnightDustProps } from './register-midnight-dust';
 import type { Result } from '@lace-lib/util';
+import type { MidnightWorkerTxRequest } from '@lace-module/midnight-sync/sdk';
 
 /** An unsigned operation to estimate before requesting consumer consent. */
 export type MidnightFeeRequest =
@@ -35,75 +30,18 @@ export const estimateMidnightFee = async (
     request.kind === 'transfer' ? request.transfer : request.registration;
   return withMidnightWallet(wallet, props, engine =>
     defer(() => {
-      const prepared$ =
-        request.kind === 'transfer'
-          ? engine.state().pipe(
-              take(1),
-              map(state => {
-                const { kind, outputs, ttl } = request.transfer;
-                const transfers = normalizeMidnightTransfers(
-                  engine.networkId,
-                  kind,
-                  outputs,
-                );
-                const construct =
-                  kind === 'shielded'
-                    ? constructShieldedTransaction
-                    : constructUnshieldedTransaction;
-                return {
-                  state,
-                  tx: construct({
-                    networkId: engine.networkId,
-                    transfers,
-                    ttl,
-                  }),
-                  isFirstDesignation: false,
-                };
-              }),
-            )
-          : prepareMidnightDustRegistration(engine, request.registration).pipe(
-              map(
-                ({ state, nightCoins, destination, isRepeatRegistration }) => ({
-                  state,
-                  // The engine's validity window: registration accepts no ttl.
-                  tx: constructDustDesignationTransaction({
-                    networkId: engine.networkId,
-                    address: destination,
-                    nightUtxos: nightCoins,
-                    nightVerifyingKey: engine.nightVerifyingKey,
-                    // The engine builds a registration of already registered
-                    // NIGHT with no fee allowance and balances it with DUST;
-                    // pricing it with the default allowance (the whole NIGHT
-                    // value, which the ledger credits as DUST) would hide that
-                    // fee. With some NIGHT unregistered the engine may allow a
-                    // little, so zero gives an upper bound.
-                    allowFeePayment: isRepeatRegistration ? 0n : undefined,
-                  }),
-                  // A repeat registration is balanced with DUST, so only a
-                  // first one takes the designation's zero-fee exception.
-                  isFirstDesignation: !isRepeatRegistration,
-                }),
-              ),
-            );
-      return combineLatest([
-        prepared$,
-        engine.areKeysAvailable$.pipe(take(1)),
-      ]).pipe(
-        switchMap(([{ state, tx, isFirstDesignation }, areKeysAvailable]) => {
-          const availableDust = state.dust.balance(new Date());
-          return estimatePreparedMidnightFee(engine, tx, {
-            isDustDesignation: isFirstDesignation,
-            dustBalance: availableDust,
-            areKeysAvailable,
-          }).pipe(
-            map(dustFee => {
-              if (dustFee > availableDust)
-                throw new Error('Insufficient spendable DUST');
-              return { dustFee, availableDust };
-            }),
-          );
-        }),
-      );
+      let tx: MidnightWorkerTxRequest;
+      if (request.kind === 'transfer') {
+        const { kind, outputs, ttl } = request.transfer;
+        tx = { kind: 'transfer', transfer: { kind, outputs, ttl } };
+      } else {
+        assertNoRegistrationTtl(request.registration.ttl);
+        tx = {
+          kind: 'dust-registration',
+          dustAddress: request.registration.dustAddress,
+        };
+      }
+      return midnightOperationsOf(engine).estimate(tx);
     }),
   );
 };

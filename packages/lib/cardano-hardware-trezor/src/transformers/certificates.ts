@@ -4,14 +4,14 @@ import {
   InvalidArgumentError,
   areNumbersEqualInConstantTime,
   areStringsEqualInConstantTime,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 import * as Trezor from '@trezor/connect';
 
 import type { TrezorTxTransformerContext } from '../types';
 import type { BIP32Path } from '@lace-lib/cardano-crypto';
 import type * as Crypto from '@lace-lib/cardano-crypto';
 import type { GroupedAddress } from '@lace-lib/cardano-key-management';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 
 type CertCredentialsType = {
   scriptHash?: Crypto.Ed25519KeyHashHex;

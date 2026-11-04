@@ -12,6 +12,7 @@ import { maintenanceUpdateOf } from '../acc/maintenance-authority';
 import { createMidnightProviders } from '../infra/providers';
 
 import type { FlowProgress } from './types';
+import type { BundleRegistry } from '../acc/bundle';
 import type { AccProviders } from '../acc/deploy';
 import type { IndexerClient } from '../infra/indexer';
 import type {
@@ -19,6 +20,7 @@ import type {
   MaintenanceChanges,
   MaintenanceVerifierKey,
   MaintenanceVerifyingKey,
+  PassportAccountInfo,
   PassportDependencies,
   PassportEncryptionKey,
 } from '@lace-contract/passport';
@@ -212,8 +214,10 @@ const signAndSubmit = async ({
 
 /** What {@link followRosterAuthority} moves the authority with. */
 type FollowRosterAuthorityProps = {
-  address: string;
+  account: PassportAccountInfo;
   seams: PassportDependencies;
+  /** The registered bundles, among which the account's names the artefacts the update is built with. */
+  bundles: BundleRegistry;
   /**
    * This device's keyring over the ledger the rotation left: the live
    * secret with the new roster key, and the earlier secrets, the previous
@@ -242,8 +246,9 @@ type FollowRosterAuthorityProps = {
  * is not one key some roster key of the keyring derives.
  */
 export const followRosterAuthority = async ({
-  address,
+  account: { address, bundleId },
   seams,
+  bundles,
   keyring,
   authority,
   onProgress,
@@ -253,6 +258,9 @@ export const followRosterAuthority = async ({
     network: seams.passportNetwork,
     prover: seams.passportProver,
     sponsor: seams.passportSponsor,
+    bundle: bundles.get(bundleId),
+    bundles: bundles.bundles,
+    calledContracts: bundles.calledContracts,
     onStage: onProgress,
   });
   const onChain = await authorityOnChain(
@@ -306,6 +314,8 @@ type InstallVerifierKeysProps = {
   providers: AccProviders;
   /** This device's keyring, whose roster keys derive the account's authority. */
   keyring: AccountKeyring;
+  /** The account's bundle, whose roster the operations are of and whose pins the encryption key holds each key to. */
+  bundleId: string;
   /** The verifier keys of each wave, one maintenance update each, in order. */
   waves: readonly (readonly MaintenanceVerifierKey[])[];
 };
@@ -313,11 +323,13 @@ type InstallVerifierKeysProps = {
 /**
  * Installs verifier keys on an unlocked account, one maintenance update
  * per wave, each signed by the encryption key with the roster key whose
- * authority the chain holds. The authority is read from chain before
- * every wave, because each applied update advances its counter, and
- * every wave resolves only once the chain shows the advanced counter, so
- * this resolves once the chain holds every key. The authority stays the
- * one that signs: no wave replaces it.
+ * authority the chain holds. Every update names the account's bundle, so
+ * the key signs each insert only for an operation of that bundle's roster
+ * with the key it pins. The authority is read from chain before every
+ * wave, because each applied update advances its counter, and every wave
+ * resolves only once the chain shows the advanced counter, so this
+ * resolves once the chain holds every key. The authority stays the one
+ * that signs: no wave replaces it.
  *
  * @throws {@link MaintenanceUpdateRefusedError} when the key cannot sign
  * maintenance updates, or refuses a verifier key.
@@ -330,6 +342,7 @@ export const installVerifierKeys = async ({
   seams,
   providers,
   keyring,
+  bundleId,
   waves,
 }: InstallVerifierKeysProps): Promise<void> => {
   const [ledger, networkId] = await importLedgerModules();
@@ -352,7 +365,7 @@ export const installVerifierKeys = async ({
       keyring,
       authority: soleMember(address, committee),
       counter,
-      changes: { kind: 'insert-verifier-keys', inserts },
+      changes: { kind: 'insert-verifier-keys', bundleId, inserts },
       label: `Operation install ${index + 1} of ${waves.length}`,
     });
   }

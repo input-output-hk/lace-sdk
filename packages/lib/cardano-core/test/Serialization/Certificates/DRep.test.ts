@@ -1,5 +1,5 @@
 import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import * as Cardano from '../../../src/Cardano';
 import { DRep } from '../../../src/Serialization';

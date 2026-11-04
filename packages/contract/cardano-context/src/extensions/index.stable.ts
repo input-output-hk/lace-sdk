@@ -1,11 +1,12 @@
 // The stable SDK build resolves this file in place of index.ts: the stable SDK
 // carries none of the features the canary build adds, so every hook is empty.
 // The exports and their types match index.ts.
-import type { CardanoPaymentAddress } from '../types';
+import type { CardanoPaymentAddress, ExtensionActivityTx } from '../types';
 import type { CardanoWalletAccount } from '../util';
 import type { Cardano } from '@cardano-sdk/core';
 import type { ActivityType } from '@lace-contract/activities';
 import type { FeatureFlag } from '@lace-contract/feature';
+import type { LacePersistConfigMap } from '@lace-contract/module';
 import type { TokenId } from '@lace-contract/tokens';
 
 /** The account data of the account kinds the features add: none. */
@@ -34,19 +35,35 @@ export const isAccountTokenOf =
   (_assetId: Cardano.AssetId): boolean =>
     false;
 
-/** Whether the activities the features classify apply: never, as there are none. */
-export const isExtensionActivityFeatureEnabled = (
-  _featureFlags: readonly FeatureFlag[],
-): boolean => false;
+/** Which of the activity classifications the features add are turned on: none exist. */
+export type EnabledExtensionActivities = Record<never, never>;
 
-/** The activity a feature classifies from the transaction body: none. */
+/** Which activity classifications apply: none, as there are none. */
+export const getEnabledExtensionActivities = (
+  _featureFlags: readonly FeatureFlag[],
+): EnabledExtensionActivities => ({});
+
+/** The activity a feature classifies from the transaction: none. */
 export const classifyExtensionActivity = (
-  _body: Pick<Cardano.HydratedTxBody, 'inputs' | 'mint' | 'outputs'>,
-): { type: ActivityType; metadata: ActivityExtensionMetadata } | undefined =>
+  _tx: ExtensionActivityTx,
+  _enabled: EnabledExtensionActivities,
+): { type?: ActivityType; metadata: ActivityExtensionMetadata } | undefined =>
   undefined;
+
+/** The Cardano transaction details the features add: none. */
+export type TransactionExtensionMetadata = Record<never, never>;
+
+/** The details metadata the features add to a transaction: none. */
+export const classifyExtensionTransaction = (
+  _tx: ExtensionActivityTx,
+  _enabled: EnabledExtensionActivities,
+): TransactionExtensionMetadata => ({});
 
 /** The reducers the features add to the store: none. */
 export const extensionReducers = {};
+
+/** The persist configurations of the slices the features add: none. */
+export const extensionPersistConfig: LacePersistConfigMap = {};
 
 /** The action creators the features add to the store: none. */
 export const extensionActions = {};

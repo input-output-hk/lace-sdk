@@ -10,8 +10,8 @@ import {
   InMemoryKeyAgent,
   util,
 } from '@lace-lib/cardano-key-management';
+import { BigIntMath, HexBlob } from '@lace-lib/cardano-util';
 import { AssetId, mockProviders as mocks } from '@lace-lib/cardano-util-dev';
-import { BigIntMath, HexBlob } from '@lace-lib/util/common';
 import { dummyLogger } from 'ts-log';
 
 import {

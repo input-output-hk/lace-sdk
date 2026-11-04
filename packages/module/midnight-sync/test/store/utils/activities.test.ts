@@ -318,14 +318,14 @@ describe('formatFee', () => {
     expect(formatFee(100n)).toBe('100');
   });
 
-  it('returns "0" when fees is null', () => {
-    expect(formatFee(null)).toBe('0');
+  it('returns an empty string when fees is null', () => {
+    expect(formatFee(null)).toBe('');
   });
 
-  it('returns "0" when fees is undefined', () => {
+  it('returns an empty string when fees is undefined', () => {
     expect(
       formatFee(undefined as unknown as Parameters<typeof formatFee>[0]),
-    ).toBe('0');
+    ).toBe('');
   });
 });
 

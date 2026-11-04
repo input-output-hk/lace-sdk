@@ -11,6 +11,8 @@ import Animated, {
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
+  useReducedMotion,
+  useAnimatedReaction,
   type SharedValue,
 } from 'react-native-reanimated';
 
@@ -30,6 +32,8 @@ const BACKGROUND_HEIGHT_NATIVE = {
   WITH_SUBTITLE: 120,
   WITHOUT_SUBTITLE: 88,
 };
+const HEADER_CONTENT_MIN_HEIGHT = 40;
+const INLINE_COMPACT_TITLE_SCALE = 20 / 24;
 
 export const getPageHeaderBackgroundHeights = (hasSubtitleSpace: boolean) => {
   const backgroundHeights = isWeb
@@ -64,6 +68,10 @@ export interface PageHeaderProps {
   collapseScrollYProp?: SharedValue<number>;
   stickyInScrollParent?: boolean;
   stableCollapseLayout?: boolean;
+  /** Scales a title/subtitle-only header in layout; compact/search headers retain their existing behavior. */
+  collapseTitleOnScroll?: boolean;
+  /** Shares one inline layout snapshot with a stable scroll viewport. */
+  collapseLayout?: SharedValue<{ expandedHeight: number; height: number }>;
 }
 
 const SubtitleComponent = ({
@@ -90,17 +98,38 @@ export const PageHeader = ({
   collapseScrollYProp,
   stickyInScrollParent = false,
   stableCollapseLayout = false,
+  collapseTitleOnScroll: shouldCollapseTitleOnScroll = false,
+  collapseLayout,
 }: PageHeaderProps) => {
+  const isTitleCollapseEnabled =
+    shouldCollapseTitleOnScroll && !showSearch && !compact;
   const { theme } = useTheme();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const hasSubtitleSpace = Boolean(subtitle) || reserveSubtitleSpace;
   const fallbackScrollY = useSharedValue(0);
   const collapseScrollY = collapseScrollYProp ?? fallbackScrollY;
+  const isMotionReduced = useReducedMotion();
+  const contentHeight = useSharedValue(52);
+  const titleHeight = useSharedValue(29);
+  const measureContent = useCallback(
+    (event: LayoutChangeEvent) => {
+      const { height } = event.nativeEvent.layout;
+      if (height > 0) contentHeight.value = height;
+    },
+    [contentHeight],
+  );
+  const measureTitle = useCallback(
+    (event: LayoutChangeEvent) => {
+      const { height } = event.nativeEvent.layout;
+      if (height > 0) titleHeight.value = height;
+    },
+    [titleHeight],
+  );
 
   const { fullBackground, collapsedBackground } =
     getPageHeaderBackgroundHeights(hasSubtitleSpace);
   const shouldUseStableCollapseLayout =
-    stableCollapseLayout || stickyInScrollParent;
+    !isTitleCollapseEnabled && (stableCollapseLayout || stickyInScrollParent);
   const [stickyMeasuredHeight, setStickyMeasuredHeight] = useState<
     number | null
   >(null);
@@ -117,13 +146,49 @@ export const PageHeader = ({
   }, []);
 
   const collapseProgress = useDerivedValue(() =>
-    interpolate(
-      collapseScrollY.value,
-      [0, PAGE_HEADER_COLLAPSE_SCROLL_RANGE],
-      [0, 1],
-      Extrapolation.CLAMP,
-    ),
+    isMotionReduced
+      ? 0
+      : interpolate(
+          collapseScrollY.value,
+          [0, PAGE_HEADER_COLLAPSE_SCROLL_RANGE],
+          [0, 1],
+          Extrapolation.CLAMP,
+        ),
   );
+
+  const expandedHeight = useDerivedValue(() =>
+    isTitleCollapseEnabled
+      ? Math.max(fullBackground, contentHeight.value + spacing.M * 2)
+      : fullBackground,
+  );
+  const referenceCollapsedHeight =
+    getPageHeaderBackgroundHeights(true).collapsedBackground;
+  const compactTitleTop = useDerivedValue(() => {
+    // Match the title-only, reserved-subtitle legacy header used by DApp
+    // Explorer. Clamp its visual top so large text cannot move above the block.
+    const legacyScale = isWeb ? 1 : 0.94;
+    return Math.max(
+      0,
+      (referenceCollapsedHeight -
+        Math.max(HEADER_CONTENT_MIN_HEIGHT, titleHeight.value)) /
+        2 -
+        spacing.M +
+        (titleHeight.value * (1 - legacyScale)) / 2,
+    );
+  });
+  const compactTitleTranslation = useDerivedValue(
+    () =>
+      compactTitleTop.value -
+      (titleHeight.value * (1 - INLINE_COMPACT_TITLE_SCALE)) / 2 -
+      (expandedHeight.value - contentHeight.value) / 2,
+  );
+  const fixedOverlayStyle = useAnimatedStyle(() => ({
+    height: expandedHeight.value,
+    bottom: undefined,
+  }));
+  const subtitleFadeStyle = useAnimatedStyle(() => ({
+    opacity: 1 - collapseProgress.value,
+  }));
 
   const compactBgAnimated = useAnimatedStyle(() => {
     const progress = collapseProgress.value;
@@ -134,17 +199,6 @@ export const PageHeader = ({
         [spacing.M, spacing.S],
         Extrapolation.CLAMP,
       ),
-    };
-  }, [collapseProgress]);
-
-  const compactTitleScaleStyle = useAnimatedStyle(() => {
-    const progress = collapseProgress.value;
-    return {
-      transform: [
-        {
-          scale: interpolate(progress, [0, 1], [1, 0.92], Extrapolation.CLAMP),
-        },
-      ],
     };
   }, [collapseProgress]);
 
@@ -160,17 +214,35 @@ export const PageHeader = ({
     };
   }, [collapseProgress]);
 
-  const headerFrameAnimated = useAnimatedStyle(() => {
-    const progress = collapseProgress.value;
-    return {
-      height: interpolate(
-        progress,
-        [0, 1],
-        [fullBackground, collapsedBackground],
-        Extrapolation.CLAMP,
-      ),
-    };
-  }, [collapseProgress, fullBackground, collapsedBackground]);
+  const frameHeight = useDerivedValue(() => {
+    const compactHeight =
+      compactTitleTop.value +
+      titleHeight.value * INLINE_COMPACT_TITLE_SCALE +
+      spacing.M;
+    return interpolate(
+      collapseProgress.value,
+      [0, 1],
+      isTitleCollapseEnabled
+        ? [expandedHeight.value, compactHeight]
+        : [fullBackground, collapsedBackground],
+      Extrapolation.CLAMP,
+    );
+  });
+  useAnimatedReaction(
+    () =>
+      isTitleCollapseEnabled
+        ? { expandedHeight: expandedHeight.value, height: frameHeight.value }
+        : null,
+    value => {
+      if (collapseLayout && value) collapseLayout.value = value;
+    },
+  );
+  const headerFrameAnimated = useAnimatedStyle(() => ({
+    height:
+      isTitleCollapseEnabled && collapseLayout
+        ? collapseLayout.value.height
+        : frameHeight.value,
+  }));
 
   const controlsAnimated = useAnimatedStyle(() => {
     const progress = collapseProgress.value;
@@ -196,7 +268,7 @@ export const PageHeader = ({
           scale: interpolate(
             progress,
             [0, 1],
-            [1, isWeb ? 1 : 0.94],
+            [1, INLINE_COMPACT_TITLE_SCALE],
             Extrapolation.CLAMP,
           ),
         },
@@ -207,8 +279,21 @@ export const PageHeader = ({
   const headerContentAnimated = useAnimatedStyle(() => {
     const progress = collapseProgress.value;
 
-    const collapsedTranslateY =
-      !showSearch && hasSubtitleSpace ? -spacing.M : -spacing.S;
+    // Preserve the legacy title-only anchor when changing its center-based scale.
+    const legacyScale = isWeb ? 1 : 0.94;
+    const scaleInset =
+      (titleHeight.value * (legacyScale - INLINE_COMPACT_TITLE_SCALE)) / 2;
+    const subtitleSpace =
+      !showSearch && hasSubtitleSpace
+        ? (contentHeight.value -
+            Math.max(HEADER_CONTENT_MIN_HEIGHT, titleHeight.value)) /
+          2
+        : 0;
+    const collapsedTranslateY = isTitleCollapseEnabled
+      ? compactTitleTranslation.value
+      : (!showSearch && hasSubtitleSpace ? -spacing.M : -spacing.S) -
+        scaleInset +
+        subtitleSpace;
 
     return {
       transform: [
@@ -222,7 +307,15 @@ export const PageHeader = ({
         },
       ],
     };
-  }, [collapseProgress, hasSubtitleSpace, showSearch]);
+  }, [
+    collapseProgress,
+    hasSubtitleSpace,
+    showSearch,
+    isTitleCollapseEnabled,
+    compactTitleTranslation,
+    contentHeight,
+    titleHeight,
+  ]);
 
   const searchBarAnimated = useAnimatedStyle(() => {
     const progress = collapseProgress.value;
@@ -241,7 +334,7 @@ export const PageHeader = ({
   }, [collapseProgress]);
 
   const wrapSticky = (node: React.ReactElement) => {
-    if (!stickyInScrollParent) {
+    if (!stickyInScrollParent || isTitleCollapseEnabled) {
       return node;
     }
 
@@ -271,14 +364,18 @@ export const PageHeader = ({
               testID={`${testID}-back-button`}
             />
           )}
-          <Animated.View
-            style={[styles.compactTextContainer, compactTitleScaleStyle]}>
+          <Animated.View style={styles.compactTextContainer}>
             <Column style={styles.compactTextInner}>
-              <Text.M numberOfLines={2} testID={`${testID}-title`}>
-                {title}
-              </Text.M>
+              <Animated.View
+                style={[styles.compactTitleOrigin, titleScaleStyle]}>
+                <Text.M numberOfLines={2} testID={`${testID}-title`}>
+                  {title}
+                </Text.M>
+              </Animated.View>
               {!!subtitle && (
-                <SubtitleComponent testID={testID} subtitle={subtitle} />
+                <Animated.View style={subtitleFadeStyle}>
+                  <SubtitleComponent testID={testID} subtitle={subtitle} />
+                </Animated.View>
               )}
             </Column>
           </Animated.View>
@@ -324,7 +421,20 @@ export const PageHeader = ({
             styles.overlay,
             !hasSubtitleSpace ? styles.overlayWithoutSubtitle : undefined,
             showSearch ? styles.overlayWithSearch : undefined,
+            isTitleCollapseEnabled ? fixedOverlayStyle : undefined,
           ]}>
+          {isTitleCollapseEnabled && (
+            <Column
+              pointerEvents="none"
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              aria-hidden
+              onLayout={measureContent}
+              style={[styles.headerContent, styles.motionMeasurement]}>
+              <Text.L onLayout={measureTitle}>{title}</Text.L>
+              {!!subtitle && <Text.M align="center">{subtitle}</Text.M>}
+            </Column>
+          )}
           <Animated.View style={[styles.controlsRow, controlsAnimated]}>
             {onBackPress ? (
               <IconButton.Static
@@ -355,17 +465,24 @@ export const PageHeader = ({
               headerContentAnimated,
             ]}>
             <Column
+              onLayout={isTitleCollapseEnabled ? undefined : measureContent}
               style={[
                 styles.headerContent,
                 !subtitle ? styles.headerContentWithoutSubtitle : undefined,
               ]}>
               <Animated.View style={titleScaleStyle}>
-                <Text.L testID={`${testID}-title`}>{title}</Text.L>
+                <Text.L
+                  onLayout={isTitleCollapseEnabled ? undefined : measureTitle}
+                  testID={`${testID}-title`}>
+                  {title}
+                </Text.L>
               </Animated.View>
               {!!subtitle && (
-                <Text.M align="center" testID={`${testID}-subtitle`}>
-                  {subtitle}
-                </Text.M>
+                <Animated.View style={subtitleFadeStyle}>
+                  <Text.M align="center" testID={`${testID}-subtitle`}>
+                    {subtitle}
+                  </Text.M>
+                </Animated.View>
               )}
             </Column>
           </Animated.View>
@@ -390,6 +507,7 @@ export const PageHeader = ({
 
 const getStyles = (theme: Theme) =>
   StyleSheet.create({
+    motionMeasurement: { position: 'absolute', left: 0, right: 0, opacity: 0 },
     stickyContainer: {
       position: 'relative',
     },
@@ -415,6 +533,7 @@ const getStyles = (theme: Theme) =>
       alignItems: 'center',
       gap: spacing.XS,
     },
+    compactTitleOrigin: { transformOrigin: 'left top' },
     compactTextContainer: {
       flex: 1,
       paddingStart: spacing.S,
@@ -455,7 +574,7 @@ const getStyles = (theme: Theme) =>
     headerContent: {
       alignItems: 'center',
       gap: spacing.XS,
-      minHeight: 40,
+      minHeight: HEADER_CONTENT_MIN_HEIGHT,
     },
     headerContentWithoutSubtitle: {
       paddingBottom: 0,

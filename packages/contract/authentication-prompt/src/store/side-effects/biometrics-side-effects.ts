@@ -4,8 +4,14 @@ import {
   switchMap,
   catchError,
   from,
-  firstValueFrom,
-  mergeMap,
+  defer,
+  defaultIfEmpty,
+  filter,
+  finalize,
+  map,
+  shareReplay,
+  take,
+  takeUntil,
 } from 'rxjs';
 
 import { createSecureStorePasswordManager } from '../../authenticators/password/secure-store-password-manager';
@@ -190,7 +196,7 @@ const createRetryStateManager = (): RetryStateManager => {
  * 2. The OS can only show one biometric prompt at a time
  * 3. Concurrent attempts would fail with confusing errors
  *
- * Note: This is properly managed with try/finally in androidBiometricPreAuth.
+ * The guard lasts until the native result, even if the prompt is preempted.
  * For testing, use resetPreAuthState() to reset between tests.
  */
 const preAuthState = { isInProgress: false };
@@ -350,44 +356,51 @@ const discriminateSecureStoreError = (
  *
  * @see https://issuetracker.google.com/issues/147374428
  */
-const androidBiometricPreAuth = async (
+const androidBiometricPreAuth = (
   localAuth: LocalAuthenticationDependency,
   options: PreAuthOptions,
-): Promise<PreAuthResult> => {
-  // Prevent concurrent calls
-  if (preAuthState.isInProgress) {
-    return { success: false, reason: 'cancelled' };
-  }
+): Observable<PreAuthResult> =>
+  defer(() => {
+    if (preAuthState.isInProgress) {
+      return of<PreAuthResult>({ success: false, reason: 'cancelled' });
+    }
 
-  preAuthState.isInProgress = true;
-  try {
-    const result = await firstValueFrom(
+    preAuthState.isInProgress = true;
+    return defer(() =>
       localAuth.authenticate({
         promptMessage: options.promptMessage,
-        disableDeviceFallback: true, // ← Critical: No PIN option
+        disableDeviceFallback: true,
         cancelLabel: options.cancelLabel,
       }),
+    ).pipe(
+      take(1),
+      map((result): PreAuthResult => {
+        if (result.success) return { success: true };
+        if (result.error === 'lockout') {
+          return { success: false, reason: 'lockout' };
+        }
+        if (
+          result.error === 'user_cancel' ||
+          result.error === 'system_cancel'
+        ) {
+          return { success: false, reason: 'cancelled' };
+        }
+        return { success: false, reason: 'failed' };
+      }),
+      defaultIfEmpty<PreAuthResult, PreAuthResult>({
+        success: false,
+        reason: 'failed',
+      }),
+      catchError(() => of<PreAuthResult>({ success: false, reason: 'failed' })),
+      finalize(() => {
+        preAuthState.isInProgress = false;
+      }),
     );
-
-    if (result.success) {
-      return { success: true };
-    }
-
-    if (result.error === 'lockout') {
-      return { success: false, reason: 'lockout' };
-    }
-
-    if (result.error === 'user_cancel' || result.error === 'system_cancel') {
-      return { success: false, reason: 'cancelled' };
-    }
-
-    return { success: false, reason: 'failed' };
-  } catch {
-    return { success: false, reason: 'failed' };
-  } finally {
-    preAuthState.isInProgress = false;
-  }
-};
+  }).pipe(
+    // Unsubscribing cannot dismiss the native dialog. Observe only its result
+    // until it settles to preserve exclusivity; retrieval remains cancellable.
+    shareReplay({ bufferSize: 1, refCount: false }),
+  );
 
 /**
  * Attempts to retrieve the biometric-protected password from secure storage.
@@ -422,7 +435,7 @@ const handleSuccessfulRetrieval = (
   context: PasswordRetrievalContext,
 ): Observable<unknown> => {
   context.retryState.reset();
-  return context.sendAuthSecretInternally(password).pipe(
+  return defer(() => context.sendAuthSecretInternally(password)).pipe(
     switchMap(() =>
       context.verifyAndPropagateAuthSecret({
         selectAuthenticationPromptState$: context.selectState$,
@@ -438,6 +451,8 @@ const handleSuccessfulRetrieval = (
         }),
       );
     }),
+    // The accessor has not cloned this buffer while delivery is still pending.
+    finalize(() => password.fill(0)),
   );
 };
 
@@ -605,9 +620,9 @@ const handlePreAuthFailure = (
  * This ensures users get 3 chances to authenticate with biometrics before
  * the wallet recovery flow is triggered.
  */
-const handleAndroidKeystoreBugRetry = async (
+const handleAndroidKeystoreBugRetry = (
   context: PasswordRetrievalContext,
-): Promise<Observable<unknown>> => {
+): Observable<unknown> => {
   const retryCount = context.retryState.increment();
 
   // After max retries, fall back to password prompt
@@ -618,33 +633,26 @@ const handleAndroidKeystoreBugRetry = async (
   }
 
   // Show biometrics-only prompt (no PIN fallback option)
-  const preAuthResult = await androidBiometricPreAuth(context.localAuth, {
+  return androidBiometricPreAuth(context.localAuth, {
     promptMessage: 'Please verify with biometrics to continue',
     cancelLabel: 'Cancel',
-  });
+  }).pipe(
+    switchMap(preAuthResult => {
+      if (!preAuthResult.success) {
+        return handlePreAuthFailure(preAuthResult.reason, context);
+      }
 
-  if (!preAuthResult.success) {
-    return handlePreAuthFailure(preAuthResult.reason, context);
-  }
-
-  // Pre-auth succeeded - retry Keystore retrieval
-  // The Keystore will show another prompt (with PIN fallback), but since user
-  // just succeeded with biometrics, they're likely to use biometrics again
-  const result = retrievePasswordWithOSAuth(
-    context.secureStore,
-    context.platform,
-    context.purpose,
+      const result = retrievePasswordWithOSAuth(
+        context.secureStore,
+        context.platform,
+        context.purpose,
+      );
+      if (result.success) {
+        return handleSuccessfulRetrieval(result.password, context);
+      }
+      return handlePasswordRetrievalResult(result, context);
+    }),
   );
-
-  if (result.success) {
-    context.retryState.reset();
-    return handleSuccessfulRetrieval(result.password, context);
-  }
-
-  // Handle errors from Keystore retrieval normally
-  // Don't immediately go to recovery - user might have cancelled or failed
-  // for recoverable reasons
-  return handlePasswordRetrievalResult(result, context);
 };
 
 /**
@@ -678,51 +686,58 @@ export const makeAuthenticationBiometricVerifying =
     const retryState = createRetryStateManager();
 
     return firstStateOfStatus(selectState$, 'VerifyingBiometric').pipe(
-      switchMap(({ config: { purpose } }) => {
-        // Try direct Keystore/Keychain retrieval first (1 prompt)
-        // This is the happy path for both Android and iOS
-        const result = retrievePasswordWithOSAuth(
-          secureStore,
-          platform,
-          purpose,
-        );
-
-        // Context object groups related dependencies for cleaner function signatures
-        const context: PasswordRetrievalContext = {
-          secureStore,
-          sendAuthSecretInternally,
-          selectState$,
-          authenticationPrompt,
-          verifyAndPropagateAuthSecret,
-          retryState,
-          platform,
-          localAuth,
-          purpose,
-        };
-
-        if (result.success) {
-          return handleSuccessfulRetrieval(result.password, context);
-        }
-
-        // Check for Android Keystore PIN fallback bug
-        const isKeystoreBug =
-          platform === 'android' &&
-          result.errorType === 'unknown' &&
-          isAndroidKeystorePinFallbackBug(result.error, platform);
-
-        if (isKeystoreBug) {
-          // Bug detected: User failed biometrics and used PIN
-          // Use pre-auth to ensure biometrics-only for retry
-          // `handleAndroidKeystoreBugRetry` is async and returns Observables; flatten
-          // so the outer stream emits action values, not nested Observable instances.
-          return from(handleAndroidKeystoreBugRetry(context)).pipe(
-            mergeMap(observable => observable),
+      switchMap(({ config: { purpose } }) =>
+        defer(() => {
+          // Try direct Keystore/Keychain retrieval first (1 prompt)
+          // This is the happy path for both Android and iOS
+          const result = retrievePasswordWithOSAuth(
+            secureStore,
+            platform,
+            purpose,
           );
-        }
 
-        // Handle other errors normally
-        return handlePasswordRetrievalResult(result, context);
-      }),
+          // Context object groups related dependencies for cleaner function signatures
+          const context: PasswordRetrievalContext = {
+            secureStore,
+            sendAuthSecretInternally,
+            selectState$,
+            authenticationPrompt,
+            verifyAndPropagateAuthSecret,
+            retryState,
+            platform,
+            localAuth,
+            purpose,
+          };
+
+          if (result.success) {
+            return handleSuccessfulRetrieval(result.password, context);
+          }
+
+          // Check for Android Keystore PIN fallback bug
+          const isKeystoreBug =
+            platform === 'android' &&
+            result.errorType === 'unknown' &&
+            isAndroidKeystorePinFallbackBug(result.error, platform);
+
+          if (isKeystoreBug) {
+            // Bug detected: User failed biometrics and used PIN
+            // Use pre-auth to ensure biometrics-only for retry
+            return handleAndroidKeystoreBugRetry(context);
+          }
+
+          // Handle other errors normally
+          return handlePasswordRetrievalResult(result, context);
+        }).pipe(
+          // Arm before retrieval, not just verification: a late native result
+          // must not create a verifier owned by a prompt that has already ended.
+          takeUntil(
+            firstStateOfStatus(selectState$, 'Completing').pipe(
+              take(1),
+              filter(state => !state.success),
+            ),
+          ),
+        ),
+      ),
     ) as ReturnType<SideEffect>;
   };
 

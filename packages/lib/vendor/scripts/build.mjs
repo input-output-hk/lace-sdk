@@ -35,13 +35,22 @@
 // swapping SodiumBip32Ed25519 for a pure-JS derivation, a separate
 // behaviour-sensitive change in @lace-lib/core (ADR 37's slimming lever).
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import esbuild from 'esbuild';
+import { rollup } from 'rollup';
+import { dts } from 'rollup-plugin-dts';
 
 import { wasmBindgenPlugin } from './wasm-plugin.mjs';
 
@@ -78,11 +87,13 @@ mkdirSync(dist, { recursive: true });
 //     (pairing + signing, both chains) — a LIGHT group kept off the Cardano
 //     signing tree by the LIGHT_ENTRY_EXCLUSIONS row below (ADR 37). The
 //     content-script bridge it uses is the SEPARATE trezor-bridge IIFE pass.
-//   - trezor-cardano: the HEAVY Trezor Cardano signing tree
-//     (@cardano-sdk/hardware-trezor + the crypto/key-management interop). Shares
-//     one @cardano-sdk copy with /index + /ledger-cardano-key-agent via the
-//     split chunks; its internal @trezor/connect-web import is aliased to the
-//     same webextension copy /trezor-connect resolves (trezorConnectWebAlias).
+//   - trezor-cardano: the HEAVY Trezor Cardano signing tree — our own port
+//     (@lace-lib/cardano-hardware-trezor) + the crypto/key-management interop.
+//     Its ported domain-layer imports resolve to the @cardano-sdk copies /index
+//     carries (portedDomainOverSdk), so it shares one domain-layer copy with
+//     /index + /ledger-cardano-key-agent via the split chunks; its internal
+//     @trezor/connect-web import is aliased to the same webextension copy
+//     /trezor-connect resolves (trezorConnectWebAlias).
 const entryPoints = {
   index: 'src/index.ts',
   midnight: 'src/midnight.ts',
@@ -110,9 +121,9 @@ const entryPoints = {
 //     structural split ADR 37 pins (pairing uses the ledgerjs app directly, not
 //     LedgerKeyAgent) — nor the Midnight engine.
 //   - trezor-connect: the chain-agnostic Connect runtime must never pull the
-//     Cardano Trezor signing tree (@cardano-sdk/hardware-trezor) — the entry is
-//     chain-agnostic by definition, so the split is structural (ADR 37) — nor
-//     the Midnight engine.
+//     Cardano Trezor signing tree (@lace-lib/cardano-hardware-trezor) — the
+//     entry is chain-agnostic by definition, so the split is structural
+//     (ADR 37) — nor the Midnight engine.
 //   - qr: the render/scan surface (qrcode + jsqr) is pure JS — the air-gapped
 //     exchange loads it in its own light document, so it must never pull the
 //     @cardano-sdk surface, the Ledger signing tree, or the Midnight engine
@@ -134,7 +145,7 @@ const LIGHT_ENTRY_EXCLUSIONS = {
     '@midnightntwrk/wallet-sdk',
   ],
   'trezor-connect': [
-    '@cardano-sdk/hardware-trezor',
+    '@lace-lib/cardano-hardware-trezor',
     '@midnight-ntwrk/ledger-v8',
     '@midnightntwrk/wallet-sdk',
   ],
@@ -320,7 +331,7 @@ module.exports = proxy;
 // Exact-specifier `@trezor/connect-web` → `@trezor/connect-webextension` alias
 // (/ ADR 37 — the seam-side move of the monolith's webpack `$`-alias,
 // apps/lace-extension/webpack/base/common.webpack.config.js). The trezor-cardano
-// entry's @cardano-sdk/hardware-trezor hard-codes `import '@trezor/connect-web'`
+// entry's Trezor key agent hard-codes `import '@trezor/connect-web'`
 // (the DOM-required CoreInIframe target — SW-impossible, abandoned by the
 // monolith); this redirects it to the DOM-free MV3 webextension variant's
 // prebuilt, self-contained bundle (its `main`), so the aliased-away connect-web
@@ -341,6 +352,18 @@ const trezorConnectWebAlias = {
   },
 };
 
+// The ported domain layer (@lace-lib/cardano-*) is a port of the @cardano-sdk
+// versions /index admits. Our Trezor port imports it; resolving those imports
+// to the @cardano-sdk copies keeps ONE domain-layer copy per document (ADR 37),
+// so the transaction body and addresses every other entry builds are the
+// port's own classes at runtime. Resolved from this package's root — the copies
+// /index bundles. Retired when the seam moves to the ported layer wholesale.
+const PORTED_TO_SDK = {
+  '@lace-lib/cardano-core': '@cardano-sdk/core',
+  '@lace-lib/cardano-crypto': '@cardano-sdk/crypto',
+  '@lace-lib/cardano-key-management': '@cardano-sdk/key-management',
+  '@lace-lib/cardano-util': '@cardano-sdk/util',
+};
 const result = await esbuild.build({
   absWorkingDir: root,
   entryPoints,
@@ -368,6 +391,8 @@ const result = await esbuild.build({
     'process.env.NODE_ENV': JSON.stringify('production'),
   },
   alias: {
+    // Native aliases preserve module-format metadata as well as sideEffects.
+    ...PORTED_TO_SDK,
     // Node built-ins reached by the sdk's CJS deps (pbkdf2/chacha streams).
     stream: 'stream-browserify',
     events: 'events',
@@ -421,11 +446,16 @@ const { outputs } = result.metafile;
 // below stays on the split build's `outputs` (the bridge is not a split entry).
 const allOutputs = { ...outputs, ...bridge.metafile.outputs };
 
+// A sibling workspace package bundled from source (our Trezor port) sits beside
+// this one, outside node_modules: name it from its own manifest.
+const workspacePackageName = dir =>
+  JSON.parse(readFileSync(join(root, '..', dir, 'package.json'), 'utf8')).name;
+
 // The top-level input package an input path belongs to: 'src' for this lib's
-// own source, else the package name after the LAST `node_modules/` (@scope
-// kept as two segments). Anything else (esbuild virtual namespaces, e.g. the
-// emurgo / ledger-transport stubs) is reported verbatim — honest and
-// deterministic.
+// own source, a sibling workspace package's name, else the package name after
+// the LAST `node_modules/` (@scope kept as two segments). Anything else
+// (esbuild virtual namespaces, e.g. the emurgo / ledger-transport stubs) is
+// reported verbatim — honest and deterministic.
 const topLevelPackage = input => {
   const marker = 'node_modules/';
   const cut = input.lastIndexOf(marker);
@@ -434,6 +464,8 @@ const topLevelPackage = input => {
     return rest[0].startsWith('@') ? `${rest[0]}/${rest[1]}` : rest[0];
   }
   if (input === 'src' || input.startsWith('src/')) return 'src';
+  const sibling = /^\.\.\/([^/]+)\//.exec(input);
+  if (sibling) return workspacePackageName(sibling[1]);
   return input;
 };
 
@@ -503,6 +535,50 @@ execFileSync('npx', ['tsc', '-p', 'tsconfig.build.json'], {
   cwd: root,
   stdio: 'inherit',
 });
+
+// The /trezor-cardano entry is typed in the ported domain layer, whose packages
+// ship TypeScript source rather than declarations. Its .d.ts therefore inlines
+// their declarations (tsconfig.build.json leaves the entry out), so the host
+// type-checks against the committed copy alone, never a live workspace path
+// (ADR 37); every other package stays an import the host resolves as before.
+// tsc emits first, then rollup only concatenates: emitting while bundling
+// orders inferred unions by whichever file was checked first, which breaks
+// the byte-identical rebuild vendor-check.yml demands.
+const declarationWork = mkdtempSync(join(tmpdir(), 'lace-vendor-dts-'));
+try {
+  execFileSync(
+    'npx',
+    ['tsc', '-p', 'tsconfig.dts.json', '--outDir', declarationWork],
+    { cwd: root, stdio: 'inherit' },
+  );
+  const repoRoot = resolve(root, '..', '..', '..');
+  const emitted = file =>
+    join(declarationWork, file.slice(repoRoot.length + 1));
+  const portedDeclaration = id => {
+    const match = /^@lace-lib\/(cardano-[a-z-]+)$/.exec(id);
+    return match
+      ? emitted(join(root, '..', match[1], 'src', 'index.d.ts'))
+      : null;
+  };
+  const declarations = await rollup({
+    input: emitted(join(root, 'src', 'trezor-cardano.d.ts')),
+    external: id => /^[^./]/.test(id) && portedDeclaration(id) === null,
+    plugins: [
+      { name: 'ported-declarations', resolveId: portedDeclaration },
+      dts({ respectExternal: true }),
+    ],
+    onwarn: warning => {
+      throw new Error(`[vendor] trezor-cardano.d.ts: ${warning.message}`);
+    },
+  });
+  await declarations.write({
+    file: join(dist, 'trezor-cardano.d.ts'),
+    format: 'es',
+  });
+  await declarations.close();
+} finally {
+  rmSync(declarationWork, { recursive: true, force: true });
+}
 
 for (const [file, output] of Object.entries(allOutputs)) {
   if (!file.endsWith('.js')) continue;

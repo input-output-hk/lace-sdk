@@ -1,4 +1,4 @@
-import { InvalidStateError } from '@lace-lib/util/common';
+import { InvalidStateError } from '@lace-lib/cardano-util';
 
 import { PlutusLanguageVersion } from '../../../Cardano/types/Script';
 import { CborReader, CborReaderState, CborWriter } from '../../CBOR';
@@ -6,7 +6,7 @@ import { CborReader, CborReaderState, CborWriter } from '../../CBOR';
 import { CostModel } from './CostModel';
 
 import type * as Cardano from '../../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** Map of PlutusLanguageVersion to CostModel. */
 export class Costmdls {

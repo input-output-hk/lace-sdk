@@ -9,9 +9,11 @@ import {
   CardanoKeyConst,
   CommunicationType,
   KeyPurpose,
+  errors,
   util,
 } from '@lace-lib/cardano-key-management';
 import Transport from '@ledgerhq/hw-transport';
+import _TransportWebUSB from '@ledgerhq/hw-transport-webusb/lib/TransportWebUSB';
 import { dummyLogger } from 'ts-log';
 
 import { LedgerKeyAgent } from '../src';
@@ -120,6 +122,36 @@ describe('LedgerKeyAgent', () => {
       });
       expect(createDeviceConnectionSpy).not.toHaveBeenCalled();
       expect(close).toHaveBeenCalled();
+    });
+  });
+
+  describe('createWithDevice', () => {
+    // The same CommonJS interop the agent applies to its transports
+    const TransportWebUSB = (_TransportWebUSB as any).default
+      ? ((_TransportWebUSB as any).default as typeof _TransportWebUSB)
+      : _TransportWebUSB;
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('rejects with a TransportError when listing devices fails', async () => {
+      const listError = new Error('WebUSB is not supported');
+      vi.spyOn(TransportWebUSB, 'list').mockRejectedValue(listError);
+
+      const creation = LedgerKeyAgent.createWithDevice(
+        {
+          chainId: Cardano.ChainIds.Preview,
+          communicationType: CommunicationType.Web,
+        },
+        {
+          bip32Ed25519: await Crypto.SodiumBip32Ed25519.create(),
+          logger: dummyLogger,
+        },
+      );
+
+      await expect(creation).rejects.toBeInstanceOf(errors.TransportError);
+      await expect(creation).rejects.toMatchObject({ innerError: listError });
     });
   });
 

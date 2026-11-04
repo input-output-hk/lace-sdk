@@ -1,12 +1,12 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { InvalidStringError, typedBech32 } from '@lace-lib/util/common';
+import { InvalidStringError, typedBech32 } from '@lace-lib/cardano-util';
 import * as BaseEncoding from '@scure/base';
 
 import { PoolId } from './StakePool/primitives';
 
 import type { OnChainTx } from './Transaction';
 import type { Lovelace } from './Value';
-import type { OpaqueNumber, OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueNumber, OpaqueString } from '@lace-lib/cardano-util';
 
 /** The block size in bytes */
 export type BlockSize = OpaqueNumber<'BlockSize'>;

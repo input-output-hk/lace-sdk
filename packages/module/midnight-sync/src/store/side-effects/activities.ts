@@ -1,3 +1,4 @@
+import { isRemoteMidnightEngine } from '@lace-contract/midnight-context';
 import { Timestamp } from '@lace-lib/util';
 import {
   EMPTY,
@@ -10,9 +11,14 @@ import {
   scan,
   switchMap,
   takeUntil,
+  throwError,
 } from 'rxjs';
 
 import { FEATURE_FLAG_MIDNIGHT_SHIELDED_ACTIVITY_ROWS } from '../../const';
+import {
+  acrossMidnightEngineResets,
+  MidnightEngineClientError,
+} from '../../worker/engine-client';
 import {
   deriveUnshieldedActivity,
   entryHasUnshieldedActivity,
@@ -20,13 +26,14 @@ import {
   getAddressFromUtxos,
 } from '../utils/activities';
 
-import type { SideEffect } from '../../context';
+import type { ActionCreators, SideEffect } from '../../context';
 import type { Activity, ActivityDetail } from '@lace-contract/activities';
 import type {
   MidnightSDKNetworkId,
-  MidnightWallet,
-  MidnightWalletsByAccountId,
+  MidnightEngine,
+  MidnightEnginesByAccountId,
 } from '@lace-contract/midnight-context';
+import type { ActionType } from '@lace-contract/module';
 import type { AccountId } from '@lace-contract/wallet-repo';
 import type { WalletEntry } from '@midnightntwrk/wallet-sdk';
 import type { Observable } from 'rxjs';
@@ -83,8 +90,8 @@ const mapTxHistoryEntryToActivityDetail = ({
 };
 
 type WalletsDiff = {
-  current: MidnightWalletsByAccountId;
-  added: MidnightWallet[];
+  current: MidnightEnginesByAccountId;
+  added: MidnightEngine[];
 };
 
 /**
@@ -108,10 +115,10 @@ const showShieldedOnlyRows$ = (
 export const updateActivities: SideEffect = (
   _,
   stateObservables,
-  { actions, midnightWallets$ },
+  { actions, logger, midnightEngines$ },
 ) =>
-  midnightWallets$.pipe(
-    scan<MidnightWalletsByAccountId, WalletsDiff>(
+  midnightEngines$.pipe(
+    scan<MidnightEnginesByAccountId, WalletsDiff>(
       (accumulator, wallets) => ({
         current: wallets,
         added: Object.values(wallets).filter(
@@ -122,60 +129,81 @@ export const updateActivities: SideEffect = (
     ),
     mergeMap(({ added }) => added),
     mergeMap(wallet =>
-      // Read per wallet, not once for the effect: flipping the flag must
-      // re-evaluate every wallet's history, not only the newest one.
-      combineLatest([
-        wallet.transactionHistory$,
-        showShieldedOnlyRows$(stateObservables),
-      ]).pipe(
-        map(([transactionHistory, showShieldedOnlyRows]) => ({
-          activities: transactionHistory
-            .filter(
-              entry =>
-                showShieldedOnlyRows || entryHasUnshieldedActivity(entry),
-            )
-            .map(txHistoryEntry =>
-              mapTxHistoryEntryToActivity({
+      acrossMidnightEngineResets<ActionType<ActionCreators>>(
+        wallet,
+        () => [],
+        () =>
+          // Read per wallet, not once for the effect: flipping the flag must
+          // re-evaluate every wallet's history, not only the newest one.
+          combineLatest([
+            wallet.transactionHistory$,
+            showShieldedOnlyRows$(stateObservables),
+          ]).pipe(
+            map(([transactionHistory, showShieldedOnlyRows]) => ({
+              activities: transactionHistory
+                .filter(
+                  entry =>
+                    showShieldedOnlyRows || entryHasUnshieldedActivity(entry),
+                )
+                .map(txHistoryEntry =>
+                  mapTxHistoryEntryToActivity({
+                    accountId: wallet.accountId,
+                    txHistoryEntry,
+                    networkId: wallet.networkId,
+                  }),
+                ),
+              // No shipped build has ever suppressed these rows, so every upgrading
+              // user has them persisted by hash; upsert never removes, so purge them
+              // explicitly once their entry reappears in the history.
+              suppressedActivityIds: showShieldedOnlyRows
+                ? []
+                : transactionHistory
+                    .filter(entry => !entryHasUnshieldedActivity(entry))
+                    .map(entry => entry.hash),
+            })),
+            mergeMap(({ activities, suppressedActivityIds }) => [
+              actions.activities.upsertActivities({
                 accountId: wallet.accountId,
-                txHistoryEntry,
-                networkId: wallet.networkId,
+                activities,
               }),
-            ),
-          // No shipped build has ever suppressed these rows, so every upgrading
-          // user has them persisted by hash; upsert never removes, so purge them
-          // explicitly once their entry reappears in the history.
-          suppressedActivityIds: showShieldedOnlyRows
-            ? []
-            : transactionHistory
-                .filter(entry => !entryHasUnshieldedActivity(entry))
-                .map(entry => entry.hash),
-        })),
-        mergeMap(({ activities, suppressedActivityIds }) => [
-          actions.activities.upsertActivities({
-            accountId: wallet.accountId,
-            activities,
-          }),
-          // Skipped when nothing is suppressed (always, with the flag on) so a
-          // steady sync does not dispatch a no-op on every history emission.
-          ...(suppressedActivityIds.length > 0
-            ? [
-                actions.activities.removeActivities({
-                  accountId: wallet.accountId,
-                  activityIds: suppressedActivityIds,
-                }),
-              ]
-            : []),
-          actions.activities.setHasLoadedOldestEntry({
-            accountId: wallet.accountId,
-            hasLoadedOldestEntry: true,
-          }),
-          actions.activities.setDesiredLoadedActivitiesCount({
-            accountId: wallet.accountId,
-            desiredLoadedActivitiesCount: activities.length,
-          }),
-        ]),
+              // Skipped when nothing is suppressed (always, with the flag on) so a
+              // steady sync does not dispatch a no-op on every history emission.
+              ...(suppressedActivityIds.length > 0
+                ? [
+                    actions.activities.removeActivities({
+                      accountId: wallet.accountId,
+                      activityIds: suppressedActivityIds,
+                    }),
+                  ]
+                : []),
+              actions.activities.setHasLoadedOldestEntry({
+                accountId: wallet.accountId,
+                hasLoadedOldestEntry: true,
+              }),
+              actions.activities.setDesiredLoadedActivitiesCount({
+                accountId: wallet.accountId,
+                desiredLoadedActivitiesCount: activities.length,
+              }),
+            ]),
+          ),
+      ).pipe(
+        // A worker engine's failure errors its streams and the account watcher retries or surfaces it. Any error ends
+        // only this reader, as it would otherwise end every side effect, the watcher's retry included; an error the
+        // watcher never sees is this reader's own, so it is logged.
+        catchError((error: unknown) => {
+          if (!isRemoteMidnightEngine(wallet)) return throwError(() => error);
+          if (
+            !(error instanceof MidnightEngineClientError) ||
+            error.reason !== 'engine-failed'
+          )
+            logger.error(
+              `Midnight activities of account ${wallet.accountId} stopped updating`,
+              error,
+            );
+          return EMPTY;
+        }),
         takeUntil(
-          midnightWallets$.pipe(
+          midnightEngines$.pipe(
             filter(wallets => !(wallet.accountId in wallets)),
           ),
         ),

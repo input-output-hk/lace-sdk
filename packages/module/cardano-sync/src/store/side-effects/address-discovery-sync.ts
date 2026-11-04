@@ -1,5 +1,5 @@
 import {
-  CardanoPaymentAddress,
+  toContractAddress,
   isAddressDiscoveryOperation,
   isCardanoAccount,
   isThoroughAddressDiscoveryOperation,
@@ -55,7 +55,7 @@ const handleMultiSigAccount = (params: {
   const groupedAddress = getScriptAddress(
     account.blockchainSpecific.paymentScript,
     account.blockchainSpecific.stakingScript,
-    account.blockchainSpecific.chainId.networkMagic,
+    account.blockchainSpecific.chainId.networkId,
   );
 
   return of(
@@ -70,10 +70,10 @@ const handleMultiSigAccount = (params: {
     actions.addresses.upsertAddresses({
       blockchainName: 'Cardano',
       addresses: [
-        {
-          ...groupedAddress,
-          address: CardanoPaymentAddress(groupedAddress.address),
-        },
+        toContractAddress(
+          groupedAddress,
+          account.blockchainSpecific.chainId.networkMagic,
+        ),
       ],
       accountId,
     }),
@@ -101,7 +101,13 @@ const handleMultiSigAccount = (params: {
  * - Marks operation as completed or failed
  */
 export const addressDiscoverySync: SideEffect = (
-  { sync: { addSyncOperation$ } },
+  {
+    sync: {
+      addSyncOperation$,
+      failSyncOperation$,
+      clearPendingSyncsForAccounts$,
+    },
+  },
   { wallets: { selectActiveNetworkAccounts$ } },
   { actions, cardanoProvider: { discoverAddresses }, logger },
 ) =>
@@ -232,6 +238,16 @@ export const addressDiscoverySync: SideEffect = (
           );
         }),
         takeUntil(accountLeftActiveNetwork$),
+        takeUntil(
+          clearPendingSyncsForAccounts$.pipe(
+            filter(a => a.payload.accountIds.includes(accountId)),
+          ),
+        ),
+        takeUntil(
+          failSyncOperation$.pipe(
+            filter(a => a.payload.operationId === operationId),
+          ),
+        ),
       );
     }),
   );

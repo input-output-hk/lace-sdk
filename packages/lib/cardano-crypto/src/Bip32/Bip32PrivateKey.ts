@@ -1,4 +1,4 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 import sodium from 'libsodium-wrappers-sumo';
 import { pbkdf2Sync } from 'pbkdf2';
 

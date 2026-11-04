@@ -1,4 +1,4 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { GovernanceActionType } from '../../../Cardano/types/Governance';
 import { CborReader, CborWriter } from '../../CBOR';
@@ -6,7 +6,7 @@ import { CborReader, CborWriter } from '../../CBOR';
 import { GovernanceActionKind } from './GovernanceActionKind';
 
 import type * as Cardano from '../../../Cardano';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const EMBEDDED_GROUP_SIZE = 1;
 

@@ -1,23 +1,27 @@
 import { ActivityType } from '@lace-contract/activities';
+import { isRemoteMidnightEngine } from '@lace-contract/midnight-context';
 import { derivePendingActivityFromMidnightTx } from '@lace-module/dapp-connector-midnight/sdk';
-import { addressFromKey } from '@midnight-ntwrk/ledger-v8';
+import {
+  preparePendingActivity,
+  remoteEngineClientOf,
+  submitTransaction,
+} from '@lace-module/midnight-sync/sdk';
 import {
   catchError,
-  defaultIfEmpty,
   defer,
-  map,
   of,
   ReplaySubject,
   share,
-  startWith,
   switchMap,
   take,
   throwError,
   timeout,
-  withLatestFrom,
 } from 'rxjs';
 
-import { MidnightSubmitTimeoutError } from './midnight-errors';
+import {
+  MidnightSubmitTimeoutError,
+  toMidnightSdkError,
+} from './midnight-errors';
 import { resolveTimeoutMs } from './midnight-timeouts';
 import { withMidnightWallet } from './midnight-wallet';
 
@@ -30,6 +34,7 @@ import type { Activity } from '@lace-contract/activities';
 import type { MidnightWallet } from '@lace-contract/midnight-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
 import type { Result } from '@lace-lib/util';
+import type { MidnightPendingRow } from '@lace-module/midnight-sync/sdk';
 import type { Observable } from 'rxjs';
 
 const DEFAULT_SUBMIT_TIMEOUT_MS = 5 * 60_000;
@@ -52,53 +57,151 @@ export interface SubmitMidnightTxProps extends MidnightAccountProps {
 }
 
 type ActivitiesByAccount = Record<AccountId, Activity[]>;
-type Dispatch = NonNullable<WalletWithMidnight['dispatch']>;
-type NightUtxos = Parameters<
-  typeof derivePendingActivityFromMidnightTx
->[0]['nightUtxos'];
 
-/** Records the Pending activity unless the account already has a confirmed row for the transaction. */
-const recordPendingActivity = ({
-  dispatch,
-  activities,
-  midnightWallet,
-  transaction,
-  utxos,
-}: {
-  dispatch: Dispatch;
-  activities: ActivitiesByAccount;
-  midnightWallet: MidnightWallet;
-  transaction: MidnightFinalizedTx;
-  utxos: NightUtxos;
-}): Activity | undefined => {
-  try {
-    const activity = derivePendingActivityFromMidnightTx({
-      deserializedTx: transaction,
-      accountId: midnightWallet.accountId,
-      ownUserAddressHex: addressFromKey(midnightWallet.nightVerifyingKey),
-      nightUtxos: utxos,
-      networkId: midnightWallet.networkId,
-    });
-    if (!activity) return undefined;
-    const current = activities[activity.accountId]?.find(
+// The latest value the store holds now, if it holds one: read once, as the store replays it to a new subscriber.
+const latestOf = (
+  activities$: Observable<ActivitiesByAccount>,
+): ActivitiesByAccount | undefined => {
+  let latest: ActivitiesByAccount | undefined;
+  activities$
+    .pipe(
+      take(1),
+      catchError(() => of(undefined)),
+    )
+    .subscribe(value => {
+      latest = value;
+    })
+    .unsubscribe();
+  return latest;
+};
+
+/**
+ * The instance's activity tracking of a submission, if it tracks activities: `record` writes the Pending row unless
+ * the history sync has confirmed the transaction already, and `remove` takes it away after a failure unless the
+ * sync has confirmed it meanwhile. Tracking is best effort: neither ever fails a submission.
+ */
+const pendingRowOf = (
+  wallet: WalletWithMidnight,
+):
+  | (MidnightPendingRow & { record: (activity: Activity) => boolean })
+  | undefined => {
+  const { dispatch } = wallet;
+  const activities$ = dispatch
+    ? wallet.stateObservables.activities?.selectAllMap$
+    : undefined;
+  if (!dispatch || !activities$) return undefined;
+  const rowOf = (
+    activities: ActivitiesByAccount | undefined,
+    activity: Activity,
+  ) =>
+    activities?.[activity.accountId]?.find(
       row => row.activityId === activity.activityId,
     );
-    if (current && current.type !== ActivityType.Pending) return undefined;
-    dispatch('activities.upsertActivities', {
-      accountId: activity.accountId,
-      activities: [activity],
-    });
-    return activity;
-  } catch {
-    // Tracking is best effort: a submission proceeds without its Pending row.
-    return undefined;
-  }
+  return {
+    record: activity => {
+      try {
+        const activities = latestOf(activities$);
+        const current = rowOf(activities, activity);
+        if (!activities || (current && current.type !== ActivityType.Pending))
+          return false;
+        dispatch('activities.upsertActivities', {
+          accountId: activity.accountId,
+          activities: [activity],
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    remove: activity => {
+      if (rowOf(latestOf(activities$), activity)?.type !== ActivityType.Pending)
+        return;
+      try {
+        dispatch('activities.removeActivities', {
+          accountId: activity.accountId,
+          activityIds: [activity.activityId],
+        });
+      } catch {
+        // The engine's error, not a tracking failure, is the result.
+      }
+    },
+  };
 };
+
+// Bounds the wait for finality; the submission itself runs on.
+const waitForFinality = (
+  outcome$: Observable<{ txId: string }>,
+  transaction: MidnightFinalizedTx,
+  submitTimeout: number,
+): Observable<{ txId: string }> =>
+  outcome$.pipe(
+    timeout({
+      first: submitTimeout,
+      with: () =>
+        throwError(
+          () =>
+            new MidnightSubmitTimeoutError(
+              transaction.activityHash,
+              submitTimeout,
+            ),
+        ),
+    }),
+  );
+
+// The engine settles a submission only at finality, so the call is issued first, then the Pending row is recorded
+// (a row the history sync confirmed meanwhile is never overwritten), then the caller waits. The submission is
+// subscribed once and its outcome replayed: a later failure removes the row even after the caller stopped waiting,
+// and a cold engine observable is never submitted twice.
+const submitOnPage = ({
+  engine,
+  transaction,
+  pendingRow,
+  pendingRowTimeout,
+  submitTimeout,
+}: {
+  engine: MidnightWallet;
+  transaction: MidnightFinalizedTx;
+  pendingRow: ReturnType<typeof pendingRowOf>;
+  pendingRowTimeout: number;
+  submitTimeout: number;
+}): Observable<{ txId: string }> =>
+  (pendingRow
+    ? preparePendingActivity(
+        engine,
+        transaction,
+        derivePendingActivityFromMidnightTx,
+      ).pipe(
+        timeout({
+          first: pendingRowTimeout,
+          with: () => of(undefined),
+        }),
+      )
+    : of(undefined)
+  ).pipe(
+    switchMap(activity => {
+      const outcome$ = submitTransaction(engine, transaction).pipe(
+        share({
+          connector: () => new ReplaySubject<{ txId: string }>(1),
+          resetOnError: false,
+          resetOnComplete: false,
+          resetOnRefCountZero: false,
+        }),
+      );
+      outcome$.subscribe({ error: () => undefined });
+      if (activity && pendingRow?.record(activity))
+        outcome$.subscribe({
+          error: () => {
+            pendingRow.remove(activity);
+          },
+        });
+      return waitForFinality(outcome$, transaction, submitTimeout);
+    }),
+  );
 
 /**
  * Submits a proved transaction after consumer authorization and resolves once the node reports it final: the
  * engine submits at its `Finalized` stage, so `Ok` means the transaction is on chain. `txId` is the engine's
- * identifier, which is not the activity hash; the activity hash is `transaction.transactionHash()`.
+ * identifier, which is not the activity hash; the activity hash is `transaction.activityHash`.
  *
  * On an instance that tracks activities, the transaction's Pending activity, keyed by the activity hash, is
  * recorded when the submission is handed to the engine, before finality; the history sync then replaces it with
@@ -113,9 +216,20 @@ const recordPendingActivity = ({
  * timeout, for as long as that submission runs in this process: a failure it reports later removes the row, a
  * confirmation reaches the history sync. A row whose outcome this process never learns (it ends first) stays
  * until the history sync confirms it or the consumer removes it. The account-resolution errors
- * (`MidnightAccountNotFoundError`, `MidnightWalletNotReadyError`) precede the call and so precede any broadcast;
- * any other error is the engine's, and may also arrive after broadcast. Before retrying, check the account's
- * activities for the activity hash.
+ * (`MidnightAccountNotFoundError`, `MidnightWalletNotReadyError`) precede the call and so precede any broadcast,
+ * as do the refusals of a transaction of another account and of one proved before the account's engine restarted or
+ * was reset (`MidnightStaleTxError`); any other error is the engine's, and may also arrive after broadcast.
+ * Before retrying, check the account's activities for the activity hash.
+ *
+ * In Worker mode the worker derives the Pending row, within the same bound as on the page, and the page records it
+ * before the submission is posted; the wait for finality is timed from the post, as on the page. A
+ * `MidnightStaleTxError` also comes when no running engine of the account took the submission (none ran, as while
+ * the engine restarts, or the one that ran had failed): nothing was broadcast and the row is removed.
+ * {@link MidnightSubmitInterruptedError} (`code`
+ * `midnight-submit-interrupted`) means the worker ended after the submission was handed to it and before it reported
+ * the outcome: the transaction may still reach the chain, its Pending row stays, and the SDK never submits it again.
+ * A worker that ended before the submission was handed to it returns `MidnightWorkerStoppedError` and removes the
+ * row; `MidnightEngineResetError` means a reset of the account refused the submission before anything was broadcast.
  */
 export const submitMidnightTx = async (
   wallet: WalletWithMidnight,
@@ -125,128 +239,43 @@ export const submitMidnightTx = async (
     ...account
   }: SubmitMidnightTxProps,
 ): Promise<Result<{ txId: string }, Error>> =>
-  withMidnightWallet(wallet, account, midnightWallet =>
+  withMidnightWallet(wallet, account, engine =>
     defer(() => {
       const submitTimeout = resolveTimeoutMs(
         'submitTimeout',
         requestedSubmitTimeout,
         DEFAULT_SUBMIT_TIMEOUT_MS,
       );
-      const { dispatch } = wallet;
-      const activities$ = dispatch
-        ? wallet.stateObservables.activities?.selectAllMap$
-        : undefined;
-      // Missing tracking state must not delay or discard a submission.
-      const latestActivities$ = activities$
-        ? activities$.pipe(
-            startWith(undefined),
-            catchError(() => of(undefined)),
-          )
-        : of(undefined);
-      // Read before submitting: submission can remove consumed coins at once. The wallet library moves a
-      // transaction's own inputs from availableCoins to pendingCoins when it builds the transaction, so both
-      // indexes are needed to recognise them.
-      const utxos$ = activities$
-        ? defer(() => midnightWallet.state()).pipe(
-            take(1),
-            map(state => [
-              ...state.unshielded.availableCoins,
-              ...state.unshielded.pendingCoins,
-            ]),
-            defaultIfEmpty(undefined),
-            catchError(() => of(undefined)),
-          )
-        : of(undefined);
-
-      // Removes the Pending row an engine failure makes stale, as the engine releases the transaction's
-      // coins, unless the history sync has confirmed the transaction meanwhile.
-      const removePendingRow = (pending: Activity) => {
-        if (!dispatch || !activities$) return;
-        activities$
-          .pipe(
-            take(1),
-            catchError(() => of(undefined)),
-          )
-          .subscribe(latest => {
-            const current = latest?.[pending.accountId]?.find(
-              row => row.activityId === pending.activityId,
-            );
-            if (current?.type !== ActivityType.Pending) return;
-            try {
-              dispatch('activities.removeActivities', {
-                accountId: pending.accountId,
-                activityIds: [pending.activityId],
-              });
-            } catch {
-              // The engine's error, not a tracking failure, is the result.
-            }
-          });
-      };
-
-      // Waits for finality. A timeout keeps the Pending row and stops waiting, but the engine's outcome is
-      // still watched for as long as the submission runs, so a failure reported after the timeout removes
-      // the row as a failure before it would. The source is subscribed once and its outcome replayed, so a
-      // cold engine observable is not submitted twice.
-      const settle = (
-        finality$: Observable<string>,
-        pending: Activity | undefined,
-      ) => {
-        const outcome$ = finality$.pipe(
-          share({
-            connector: () => new ReplaySubject<string>(1),
-            resetOnError: false,
-            resetOnComplete: false,
-          }),
-        );
-        if (pending)
-          outcome$.subscribe({
-            next: () => undefined,
-            error: () => {
-              removePendingRow(pending);
-            },
-          });
-        return outcome$.pipe(
-          timeout({
-            first: submitTimeout,
-            with: () =>
-              throwError(
-                () =>
-                  new MidnightSubmitTimeoutError(
-                    transaction.transactionHash(),
-                    submitTimeout,
-                  ),
-              ),
-          }),
-          map(txId => ({ txId })),
-        );
-      };
-
-      return utxos$.pipe(
-        timeout({
-          first: Math.min(PENDING_ROW_STATE_TIMEOUT_MS, submitTimeout),
-          with: () => of(undefined),
-        }),
-        switchMap(utxos => {
-          // The engine settles a submission only at finality, so the Pending row is recorded once the call is
-          // issued and before the timeout can fire.
-          const finality$ = midnightWallet.submitTransaction(transaction);
-          return of(utxos).pipe(
-            // Sampled after the call, so a row the history sync confirmed meanwhile is never overwritten.
-            withLatestFrom(latestActivities$),
-            map(([coins, activities]) =>
-              dispatch && activities && coins
-                ? recordPendingActivity({
-                    dispatch,
-                    activities,
-                    midnightWallet,
-                    transaction,
-                    utxos: coins,
-                  })
-                : undefined,
-            ),
-            switchMap(pending => settle(finality$, pending)),
-          );
-        }),
+      const pendingRow = pendingRowOf(wallet);
+      const pendingRowTimeout = Math.min(
+        PENDING_ROW_STATE_TIMEOUT_MS,
+        submitTimeout,
       );
+      // In Worker mode the engine client derives and records the row, posts the submission and hands over its
+      // outcome as it posts, so the wait for finality starts there, as on the page. The client removes the row itself
+      // when the live worker fails the submission, also after a timeout here.
+      return isRemoteMidnightEngine(engine)
+        ? remoteEngineClientOf(engine)
+            .submit(transaction, { pendingRow, pendingRowTimeout })
+            .pipe(
+              switchMap(outcome$ =>
+                waitForFinality(outcome$, transaction, submitTimeout),
+              ),
+              catchError((error: unknown) =>
+                throwError(() =>
+                  toMidnightSdkError(error, {
+                    accountId: engine.accountId,
+                    activityHash: transaction.activityHash,
+                  }),
+                ),
+              ),
+            )
+        : submitOnPage({
+            engine,
+            transaction,
+            pendingRow,
+            pendingRowTimeout,
+            submitTimeout,
+          });
     }),
   );

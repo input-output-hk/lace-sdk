@@ -1,4 +1,4 @@
-import { HexBlob, InvalidStateError } from '@lace-lib/util/common';
+import { HexBlob, InvalidStateError } from '@lace-lib/cardano-util';
 
 import {
   PlutusLanguageVersion,

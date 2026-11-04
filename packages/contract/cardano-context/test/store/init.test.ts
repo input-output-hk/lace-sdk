@@ -1,9 +1,48 @@
+import { Cardano } from '@cardano-sdk/core';
+import { AccountId } from '@lace-contract/wallet-repo';
+import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';
 
-import {
+import initializeStore, {
   accountTransactionHistoryTransform,
   MAX_TRANSACTIONS_PER_ACCOUNT,
 } from '../../src/store/init';
+import { UtxoCacheKey } from '../../src/value-objects';
+import { utxo1 } from '../mocks';
+
+describe('legacy mobile upgrade with an already-settled UTxO cache key', () => {
+  it('does not invalidate a cache key already persisted at version 5', async () => {
+    const initialized = await initializeStore(
+      {
+        runtime: {
+          config: { defaultTestnetChainId: Cardano.ChainIds.Preprod },
+        },
+      } as never,
+      { reduxPersistStorage: { getItem: async () => null } } as never,
+    );
+    const persistence = initialized.persistConfig?.cardanoContext;
+    if (!persistence?.migrate || persistence.version === undefined) {
+      throw new Error('Missing Cardano persistence migration configuration');
+    }
+    const accountId = AccountId('legacy-mobile-account');
+    const cacheKey = UtxoCacheKey({
+      topOnChainActivityId: 'b'.repeat(64),
+      stakeKeys: [],
+      accountAddressCount: 1,
+    });
+    const state = {
+      _persist: { rehydrated: true, version: 5 },
+      accountUtxos: {
+        [accountId]: { cacheKey, utxos: Serializable.to([utxo1]) },
+      },
+    };
+
+    const migrated = await persistence.migrate(state, persistence.version);
+
+    expect(migrated).toBe(state);
+    expect(state.accountUtxos[accountId].cacheKey).toBe(cacheKey);
+  });
+});
 
 describe('accountTransactionHistoryTransform', () => {
   it('should return the same state if the key is not accountTransactionHistory', () => {
@@ -75,6 +114,22 @@ describe('accountTransactionHistoryTransform', () => {
           hasLoadedOldestEntry: true,
         },
       },
+    });
+  });
+});
+
+describe('cardano-context store init', () => {
+  it('persists the deposited head ids and tagged accounts of the Hydra Head index', async () => {
+    const result = (await initializeStore(
+      { runtime: { config: {} } } as never,
+      { reduxPersistStorage: { getItem: async () => null } } as never,
+    )) as {
+      persistConfig: Record<string, { whitelist?: string[] }>;
+    };
+
+    expect(result.persistConfig.hydraHeadsIndex).toEqual({
+      version: 1,
+      whitelist: ['depositedHeadIdsByAccount', 'activitiesTaggedByAccount'],
     });
   });
 });

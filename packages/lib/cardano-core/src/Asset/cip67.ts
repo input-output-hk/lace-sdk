@@ -1,10 +1,10 @@
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { AssetName } from '../Cardano/types/Asset';
 
 import crc8 from './crc8';
 
-import type { OpaqueNumber } from '@lace-lib/util/common';
+import type { OpaqueNumber } from '@lace-lib/cardano-util';
 
 const ASSET_LABEL_LENGTH = 8;
 const ASSET_LABEL_BRACKET = '0';

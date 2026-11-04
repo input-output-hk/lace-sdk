@@ -1,12 +1,18 @@
-import { isReduxPersistState } from '@lace-contract/module';
-import { createTransform } from 'redux-persist';
+import {
+  isReduxPersistState,
+  type LaceInit,
+  type LaceModuleStoreInit,
+  type PersistedStateProperty,
+} from '@lace-contract/module';
+import { readMisroutedPreviewAccountIds } from '@lace-contract/wallet-repo';
+import { createMigrate, createTransform } from 'redux-persist';
 
+import { clearPreviewSyncStatus } from './migrations/2-clear-preview-sync-status';
 import { syncReducers } from './slice';
 
 import type { SyncSliceState } from '../types';
-import type { LaceInit, LaceModuleStoreInit } from '@lace-contract/module';
-import type { PersistedStateProperty } from '@lace-contract/module';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Storage } from 'redux-persist';
 
 /**
  * Transform that excludes pendingSync from being persisted.
@@ -41,15 +47,26 @@ const ExcludePendingSyncTransform = createTransform<
   },
 );
 
-const store: LaceInit<LaceModuleStoreInit> = () => ({
-  reducers: syncReducers,
-  persistConfig: {
-    sync: {
-      version: 1,
-      whitelist: ['syncStatusByAccount'],
-      transforms: [ExcludePendingSyncTransform],
+const store: LaceInit<LaceModuleStoreInit> = async (_props, dependencies) => {
+  const { reduxPersistStorage } = dependencies as typeof dependencies & {
+    reduxPersistStorage: Storage;
+  };
+  const misroutedAccountIds = await readMisroutedPreviewAccountIds(
+    reduxPersistStorage,
+  );
+  return {
+    reducers: syncReducers,
+    persistConfig: {
+      sync: {
+        version: 2,
+        migrate: createMigrate({
+          2: state => clearPreviewSyncStatus(state, misroutedAccountIds),
+        }),
+        whitelist: ['syncStatusByAccount'],
+        transforms: [ExcludePendingSyncTransform],
+      },
     },
-  },
-});
+  };
+};
 
 export default store;

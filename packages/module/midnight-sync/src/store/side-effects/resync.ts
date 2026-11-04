@@ -17,10 +17,13 @@ import {
   forkJoin,
   from,
   groupBy,
+  ignoreElements,
   map,
   merge,
   mergeMap,
   of,
+  pairwise,
+  startWith,
   switchMap,
   take,
   throwError,
@@ -29,6 +32,7 @@ import {
 } from 'rxjs';
 
 import type { ActionCreators, SideEffect } from '../../context';
+import type { MidnightEngineClient } from '../../worker/engine-client';
 import type {
   MidnightAccountId,
   MidnightAccountProps,
@@ -37,7 +41,9 @@ import type {
 import type { CollectionStorage } from '@lace-contract/storage';
 import type {
   AccountId,
+  AnyWallet,
   InMemoryWalletAccount,
+  WalletId,
 } from '@lace-contract/wallet-repo';
 import type { Observable } from 'rxjs';
 
@@ -53,6 +59,90 @@ const withMidnightAccounts =
       stateObservables,
       dependencies,
     );
+
+// Every derived store an account's checkpoint feeds.
+const accountCacheResets = (actions: ActionCreators, accountId: AccountId) => [
+  actions.addresses.resetAddresses({ accountId }),
+  actions.tokens.resetAccountTokens({ accountId }),
+  actions.activities.resetActivities({ accountId }),
+  // Callers pass accounts from midnightAccounts$ or the engine, so the id is a MidnightAccountId (the dust caches'
+  // key type).
+  actions.midnightContext.resetAccountDust({
+    accountId: accountId as MidnightAccountId,
+  }),
+];
+
+const midnightResyncOperation = (
+  actions: ActionCreators,
+  accountId: AccountId,
+  status: 'Failed' | 'Pending',
+) => {
+  const at = Timestamp(Date.now());
+  return actions.sync.addSyncOperation({
+    accountId,
+    operation:
+      status === 'Pending'
+        ? {
+            operationId: `${accountId}-midnight-sync`,
+            status,
+            description: 'sync.operation.midnight-resync',
+            startedAt: at,
+          }
+        : {
+            operationId: `${accountId}-midnight-sync`,
+            status,
+            description: 'sync.operation.midnight-resync',
+            error: 'sync.error.midnight-sync-failed',
+            startedAt: at,
+            failedAt: at,
+          },
+  });
+};
+
+// What a worker reset of an account's checkpoint leaves stale on a page: the caches its engine fed, and the sync,
+// shown Pending again until the replacement engine reports progress.
+const midnightEngineResetActions = (
+  actions: ActionCreators,
+  accountId: AccountId,
+) => [
+  actions.addresses.resetAddresses({ accountId }),
+  actions.tokens.resetAccountTokens({ accountId }),
+  actions.midnightContext.resetAccountDust({
+    accountId: accountId as MidnightAccountId,
+  }),
+  actions.sync.resetAccountSyncStatus({ accountId }),
+  midnightResyncOperation(actions, accountId, 'Pending'),
+  actions.activities.resetActivities({ accountId }),
+];
+
+// The removed wallet and its in-memory Midnight accounts, from the first wallet list that still holds it.
+const removedMidnightWallet = (
+  payload: WalletId | { readonly walletId: WalletId },
+  walletLists: readonly AnyWallet[][],
+) => {
+  const walletId = typeof payload === 'string' ? payload : payload.walletId;
+  for (const wallets of walletLists) {
+    const targetWallet = wallets
+      .filter(hasMidnightAccount)
+      .find(w => w.walletId === walletId);
+    if (targetWallet)
+      return {
+        walletId,
+        accounts: targetWallet.accounts.filter(isInMemoryMidnightAccount),
+      };
+  }
+  return undefined;
+};
+
+// The wallet list the removal was dispatched against.
+const removedMidnightWallets = (
+  removeWallet$: Parameters<SideEffect>[0]['wallets']['removeWallet$'],
+  selectAll$: Observable<AnyWallet[]>,
+) =>
+  removeWallet$.pipe(
+    withLatestFrom(selectAll$),
+    map(([{ payload }, wallets]) => removedMidnightWallet(payload, [wallets])),
+  );
 
 export const requestResyncWallet = withMidnightAccounts(
   midnightAccount$ =>
@@ -123,14 +213,9 @@ export const createClearWalletStateOnResync = (
                 // registers a Pending operation immediately before dispatching
                 // resync, and clearing it here would drop the very marker that
                 // shows the resync running.
-                ...midnightAccounts.flatMap(({ accountId }) => [
-                  actions.addresses.resetAddresses({ accountId }),
-                  actions.tokens.resetAccountTokens({ accountId }),
-                  actions.activities.resetActivities({ accountId }),
-                  actions.midnightContext.resetAccountDust({
-                    accountId: accountId as MidnightAccountId,
-                  }),
-                ]),
+                ...midnightAccounts.flatMap(({ accountId }) =>
+                  accountCacheResets(actions, accountId),
+                ),
                 actions.midnightSync.restartWalletWatch(),
               ]),
             ),
@@ -193,20 +278,10 @@ export const createDeleteWalletSideEffect =
     { wallets: { selectAll$ } },
     { stopMidnightWallet, actions, logger },
   ) =>
-    removeWallet$.pipe(
-      withLatestFrom(
-        selectAll$.pipe(map(wallets => wallets.filter(hasMidnightAccount))),
-      ),
-      switchMap(([{ payload }, midnightWallets]) => {
-        const walletId =
-          typeof payload === 'string' ? payload : payload.walletId;
-
-        const targetWallet = midnightWallets.find(w => w.walletId === walletId);
-        if (!targetWallet) return EMPTY;
-
-        const allMidnightAccounts = targetWallet.accounts.filter(
-          isInMemoryMidnightAccount,
-        );
+    removedMidnightWallets(removeWallet$, selectAll$).pipe(
+      switchMap(removed => {
+        if (!removed) return EMPTY;
+        const { walletId, accounts: allMidnightAccounts } = removed;
 
         const stopWallets$ =
           allMidnightAccounts.length > 0
@@ -305,14 +380,7 @@ export const stopAndWipeAccountState$ = ({
         ),
     ),
     mergeMap(() => [
-      actions.addresses.resetAddresses({ accountId }),
-      actions.tokens.resetAccountTokens({ accountId }),
-      actions.activities.resetActivities({ accountId }),
-      // Callers pass accounts from midnightAccounts$, so the id is a
-      // MidnightAccountId (the dust caches' key type).
-      actions.midnightContext.resetAccountDust({
-        accountId: accountId as MidnightAccountId,
-      }),
+      ...accountCacheResets(actions, accountId),
       actions.sync.resetAccountSyncStatus({ accountId }),
     ]),
   );
@@ -477,3 +545,141 @@ export const createHeadlessResetSyncStateSideEffect = (
           ),
         ),
   );
+
+/**
+ * Worker mode's per-account "reset sync state". The worker stops, wipes and restarts the account's engine for every
+ * tab that uses it. Each tab clears its caches on the account's `reset` notice
+ * ({@link showMidnightEngineResets}), which this tab gets also when it runs no engine of the account. The account's
+ * sync operation reads Pending meanwhile, and Failed if the worker refuses the reset. A held reset whose wipe then
+ * fails reads Failed only in tabs with the account's engine attached as it settles; elsewhere it completes.
+ */
+export const createWorkerResetSyncStateSideEffect = (
+  client: Pick<MidnightEngineClient, 'resetAccount'>,
+): SideEffect =>
+  withMidnightAccounts(
+    midnightAccounts$ =>
+      ({ midnightContext: { resetSyncState$ } }, _, { actions, logger }) =>
+        resetSyncState$.pipe(
+          withLatestFrom(midnightAccounts$),
+          groupBy(([{ payload }]) => payload.accountId),
+          mergeMap(requests$ =>
+            requests$.pipe(
+              // exhaustMap: the worker bounds a hung stop itself, so a repeat request has nothing to rescue.
+              exhaustMap(([{ payload }, midnightAccounts]) => {
+                const account = midnightAccounts.find(
+                  ({ accountId }) => accountId === payload.accountId,
+                );
+                if (!account) return EMPTY;
+                const { accountId } = account;
+                return concat(
+                  of(midnightResyncOperation(actions, accountId, 'Pending')),
+                  client.resetAccount(account).pipe(
+                    ignoreElements(),
+                    catchError((error: unknown) => {
+                      logger.error('Midnight account resync failed', error);
+                      return of(
+                        midnightResyncOperation(actions, accountId, 'Failed'),
+                      );
+                    }),
+                  ),
+                );
+              }),
+            ),
+          ),
+        ),
+  );
+
+/**
+ * Worker mode's bulk resync. The worker clears every checkpoint and restarts every engine some tab uses; each tab
+ * clears its caches of an account on that account's `reset` notice ({@link showMidnightEngineResets}), and this tab
+ * gets one for each of its selected accounts. It restarts no watch, as the worker already restarted the engines.
+ * When the worker fails the resync, this tab resets the caches of all its selected accounts, shows their resync as
+ * Failed and restarts the watch, which reads every engine again.
+ */
+export const createWorkerClearWalletStateOnResync = (
+  client: Pick<MidnightEngineClient, 'resyncAll'>,
+): SideEffect =>
+  withMidnightAccounts(
+    midnightAccounts$ =>
+      ({ midnightSync: { resync$ } }, _, { actions, logger }) =>
+        resync$.pipe(
+          withLatestFrom(midnightAccounts$),
+          // switchMap, as in page mode: the worker queues resyncs, so the newest settles last and its outcome holds.
+          switchMap(([_, midnightAccounts]) =>
+            client.resyncAll(midnightAccounts).pipe(
+              ignoreElements(),
+              catchError((error: unknown) => {
+                logger.error('Midnight resync failed in the worker', error);
+                return [
+                  ...midnightAccounts.flatMap(({ accountId }) => [
+                    ...accountCacheResets(actions, accountId),
+                    midnightResyncOperation(actions, accountId, 'Failed'),
+                  ]),
+                  actions.midnightSync.restartWalletWatch(),
+                ];
+              }),
+            ),
+          ),
+        ),
+  );
+
+/**
+ * Worker mode's wallet deletion. The worker detaches this tab from the wallet's engines and, once no tab uses them,
+ * stops them and wipes their checkpoints. This tab resets the wallet accounts' caches as page mode does, even when
+ * the worker failed the deletion: the wallet is already gone from the repository.
+ */
+export const createWorkerDeleteWalletSideEffect =
+  (client: Pick<MidnightEngineClient, 'deleteWallet'>): SideEffect =>
+  (
+    { wallets: { removeWallet$ } },
+    { wallets: { selectAll$ } },
+    { actions, logger },
+  ) =>
+    removeWallet$.pipe(
+      // The store applies the removal before side effects see the action, so only the list before it still holds the
+      // wallet.
+      withLatestFrom(selectAll$.pipe(startWith([]), pairwise())),
+      map(([{ payload }, [before, after]]) =>
+        removedMidnightWallet(payload, [after, before]),
+      ),
+      switchMap(removed => {
+        if (!removed) return EMPTY;
+        const { walletId, accounts } = removed;
+        return client.deleteWallet(walletId, accounts).pipe(
+          defaultIfEmpty(undefined),
+          take(1),
+          catchError((error: unknown) => {
+            logger.error('Midnight delete wallet failed in the worker', error);
+            return of(undefined);
+          }),
+          mergeMap(() =>
+            accounts.flatMap(({ accountId }) => [
+              actions.addresses.resetAddresses({ accountId }),
+              actions.tokens.resetAccountTokens({ accountId }),
+              actions.activities.resetActivities({ accountId }),
+            ]),
+          ),
+        );
+      }),
+    );
+
+/**
+ * Shows in this tab a worker reset of an account it uses. One that ran clears the account's caches and shows the
+ * resync Pending until the replacement engine reports progress; one that waits for a settling submission shows
+ * Pending, and one whose wipe failed shows Failed.
+ */
+export const showMidnightEngineResets =
+  (client: Pick<MidnightEngineClient, 'notices$'>): SideEffect =>
+  (_, __, { actions }) =>
+    client.notices$.pipe(
+      mergeMap(({ accountId, kind }) => {
+        switch (kind) {
+          case 'reset':
+            return midnightEngineResetActions(actions, accountId);
+          case 'reset-pending':
+            return [midnightResyncOperation(actions, accountId, 'Pending')];
+          case 'reset-failed':
+            return [midnightResyncOperation(actions, accountId, 'Failed')];
+        }
+      }),
+    );

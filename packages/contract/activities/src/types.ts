@@ -2,7 +2,7 @@ import type { ComponentType } from 'react';
 
 import type { ActivityType } from './const';
 import type { AnyAddress } from '@lace-contract/addresses';
-import type { AppConfig } from '@lace-contract/module';
+import type { AppConfig, State } from '@lace-contract/module';
 import type {
   MetadataByTokenId,
   StoredTokenMetadata,
@@ -41,9 +41,38 @@ export type RewardActivity<BlockchainSpecificMetadata = unknown> = Omit<
 /** An activity with the fee it paid and the address it concerns, for its detail view. */
 export type ActivityDetail<BlockchainSpecificMetadata = unknown> =
   Activity<BlockchainSpecificMetadata> & {
+    /**
+     * The fee in the chain's base unit, as a decimal string. An empty string
+     * means the loader settled without a fee, so consumers must not show it
+     * as a zero-cost transaction.
+     */
     fee: string;
+    /** The address the chain's loader picked; an empty string means none. */
     address: string;
   };
+
+/**
+ * States of an account's activities that change after the activities were
+ * stored, such as funds still waiting at a script address. A list joins them
+ * to the stored activities when it renders instead of rewriting them. Each
+ * value is chain-specific: only code that knows the activity's chain reads it.
+ */
+export type ActivityStates = {
+  /** The state of each affected activity, keyed by activity id. */
+  byActivityId: Readonly<Partial<Record<string, unknown>>>;
+  /**
+   * Epoch milliseconds at which a state changes with the passage of time
+   * alone, if any, so a list knows when to select the states again.
+   */
+  nextChangeAt?: number;
+  /**
+   * Whether rows may show tags derived from the chain-specific metadata
+   * stored with the activities. Absent means no tags, so turning a feature
+   * off also hides what was stored while it was on. The blockchain that owns
+   * the metadata decides it; other blockchains may leave it unset.
+   */
+  isTaggingEnabled?: boolean;
+};
 
 export type ActivityDetailsSheetUICustomisation = UICustomisation<
   {
@@ -65,6 +94,8 @@ export type ActivityDetailsContentProps = {
   accountId: AccountId;
   getMainTokenBalanceChange?: GetActivityTokenBalanceChange;
   tokensMetadataByTokenId: MetadataByTokenId;
+  /** The activity's entry of the blockchain's `ActivityStates`, if any. */
+  activityState?: unknown;
 };
 
 export type ActivitiesListUICustomisation = UICustomisation<{
@@ -138,6 +169,21 @@ export type ActivitiesItemUICustomisation<AddressData = unknown> =
        * activity history (e.g: NFTs for Cardano).
        */
       getTokensInfoSummary?: GetActivityTokensInfoSummary;
+
+      /**
+       * Some blockchains track activity states that change after the activity
+       * was stored (e.g: a Cardano Hydra deposit waiting to enter its head).
+       * Selects those states of the account's activities as of `now`, in
+       * epoch milliseconds, and whether rows may show tags from the
+       * activities' stored metadata. Returns the same object for the same
+       * account and time until the data it reads changes, even when other
+       * callers select other times in between.
+       */
+      selectActivityStates?: (
+        state: State,
+        accountId: AccountId,
+        now: number,
+      ) => ActivityStates;
 
       /**
        * Some blockchains require a specific action when an activity is clicked

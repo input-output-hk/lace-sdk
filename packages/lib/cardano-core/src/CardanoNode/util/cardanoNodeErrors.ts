@@ -1,7 +1,7 @@
 import {
   isProductionEnvironment,
   stripStackTrace,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import { ProviderError } from '../../errors';
 import {

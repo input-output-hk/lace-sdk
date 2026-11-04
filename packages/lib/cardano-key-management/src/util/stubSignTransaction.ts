@@ -1,5 +1,5 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { deepEquals } from '@lace-lib/util/common';
+import { deepEquals } from '@lace-lib/cardano-util';
 import getRandomValues from 'get-random-values';
 import uniqWith from 'lodash/uniqWith.js';
 

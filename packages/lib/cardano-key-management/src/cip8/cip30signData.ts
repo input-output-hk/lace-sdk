@@ -1,6 +1,6 @@
 import { Cardano, Serialization, util } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { ComposableError } from '@lace-lib/util/common';
+import { ComposableError } from '@lace-lib/cardano-util';
 
 import { DREP_KEY_DERIVATION_PATH, STAKE_KEY_DERIVATION_PATH } from '../util';
 
@@ -21,7 +21,7 @@ import type {
 } from '../types';
 import type { Cip8SignDataContext } from './types';
 import type { Cip30DataSignature } from '@lace-lib/cardano-dapp-connector';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export interface Cip30SignDataRequest {
   knownAddresses: GroupedAddress[];

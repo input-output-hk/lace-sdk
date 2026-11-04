@@ -1,19 +1,33 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+  Serialization,
+} from '@cardano-sdk/core';
 import { Err, Ok, Timestamp } from '@lace-lib/util';
 import { isNotFoundError } from '@lace-lib/util-provider';
-import { catchError, forkJoin, from, map, type Observable, of } from 'rxjs';
+import {
+  catchError,
+  defer,
+  forkJoin,
+  from,
+  map,
+  type Observable,
+  of,
+} from 'rxjs';
 
 import { BlockfrostProvider } from '../blockfrost-provider';
 import { BlockfrostToCardanoSDK } from '../blockfrost-to-cardano-sdk';
+import { MAX_TRANSACTION_DEPTH, isCborWithinLimits } from '../cbor-limits';
 
 import { BlockfrostTxProvider } from './blockfrost-tx-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { ProviderError } from '@cardano-sdk/core';
 import type {
   CardanoPaymentAddress,
   CardanoTransactionHistoryItem,
   ExtendedTxDetails,
+  GetAssetTransactionHistoryProps,
 } from '@lace-contract/cardano-context';
 import type { Result } from '@lace-lib/util';
 import type { HttpClient } from '@lace-lib/util-provider';
@@ -102,6 +116,53 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
   }
 
   /**
+   * Fetches every transaction that minted, burned or moved an asset, oldest
+   * first, paging until exhausted or until `maxPages` pages were read. Each
+   * read starts on subscription, so a caller's retry re-requests.
+   *
+   * Blockfrost returns 404 for an asset that never existed; that is a valid
+   * empty history here, not an error.
+   *
+   * `assetId` is the hex policy id followed by the hex asset name, `page`
+   * the Blockfrost page to start from (default 1), `pageSize` the number
+   * of transactions per Blockfrost page (default 100) and `maxPages` the
+   * pages read at most (default unbounded).
+   */
+  public getAssetTransactionHistory({
+    assetId,
+    page = 1,
+    pageSize = 100,
+    maxPages,
+  }: GetAssetTransactionHistoryProps): Observable<
+    Result<CardanoTransactionHistoryItem[], ProviderError>
+  > {
+    return defer(async () =>
+      this.paginatedRequests<Responses['asset_transactions']>({
+        endpoint: `assets/${assetId}/transactions?order=asc`,
+        page,
+        pageSize,
+        maxPages,
+      }),
+    ).pipe(
+      map(items =>
+        Ok(
+          items.map(item => ({
+            txId: Cardano.TransactionId(item.tx_hash),
+            txIndex: Cardano.TxIndex(item.tx_index),
+            blockNumber: Cardano.BlockNo(item.block_height),
+            blockTime: Timestamp(item.block_time * 1000),
+          })),
+        ),
+      ),
+      catchError(error =>
+        isNotFoundError(error)
+          ? of(Ok<CardanoTransactionHistoryItem[]>([]))
+          : of(Err(error as ProviderError)),
+      ),
+    );
+  }
+
+  /**
    * Fetches transaction details, cbor and utxos to build a Cardano.HydratedTx
    * which is returned inside a tuple together with the tx details which holds
    * additional info not stored in the HydratedTx.
@@ -182,13 +243,30 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
     );
   }
 
+  /**
+   * The transaction decoded from its CBOR. A transaction that is larger or
+   * nests deeper than the decoders are allowed is refused before any
+   * decoding: the decoder's cost grows with the square of the nesting, so
+   * a transaction of someone else's making, such as the init of a head that
+   * looks like one of the account's, could otherwise stall every reader of
+   * its details with deeply nested metadata.
+   */
   #fetchTxFromCbor(txId: Cardano.TransactionId): Observable<Cardano.Tx> {
     return from(
       this.request<Responses['tx_content_cbor']>(`txs/${txId}/cbor`),
     ).pipe(
-      map(({ cbor }) =>
-        Serialization.Transaction.fromCbor(Serialization.TxCBOR(cbor)).toCore(),
-      ),
+      map(({ cbor }) => {
+        if (!isCborWithinLimits(cbor, MAX_TRANSACTION_DEPTH)) {
+          throw new ProviderError(
+            ProviderFailure.InvalidResponse,
+            undefined,
+            `Transaction ${txId} is larger or nests deeper than can be decoded`,
+          );
+        }
+        return Serialization.Transaction.fromCbor(
+          Serialization.TxCBOR(cbor),
+        ).toCore();
+      }),
     );
   }
 

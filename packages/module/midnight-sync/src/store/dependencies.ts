@@ -5,6 +5,7 @@ import {
   MidnightDustAddress,
   MidnightShieldedAddress,
   MidnightUnshieldedAddress,
+  inProcessMidnightWallets$,
   midnightWalletsForRuntime,
   SerialisedWalletState,
   toUnshieldedTokenType,
@@ -959,12 +960,9 @@ const createAndManageWallets = (
  * Creates SDK wallets, manages their start/stop lifecycle, and converts
  * to the MidnightWallet interface used by the rest of the application.
  */
-const createStartMidnightAccountWallet =
-  (
-    dependencies: WithLogger,
-    options: MidnightEngineOptions,
-  ): MidnightSideEffectsDependencies['startMidnightAccountWallet'] =>
-  props =>
+export const createStartMidnightAccountWallet =
+  (dependencies: WithLogger, options: MidnightEngineOptions) =>
+  (props: StartMidnightAccountWalletParams): Observable<MidnightWallet> =>
     createAndManageWallets(props, dependencies, options).pipe(
       switchMap(
         ({
@@ -992,11 +990,22 @@ const createStartMidnightAccountWallet =
 export const createMidnightSideEffectDependencies =
   (
     options: MidnightEngineOptions = {},
-  ): LaceInitSync<MidnightSideEffectsDependencies> =>
+  ): LaceInitSync<
+    Omit<MidnightSideEffectsDependencies, 'startMidnightAccountWallet'> & {
+      startMidnightAccountWallet: ReturnType<
+        typeof createStartMidnightAccountWallet
+      >;
+    }
+  > =>
   ({ runtime }, dependencies) => {
     const midnightWallets$ = midnightWalletsForRuntime(runtime);
     return {
-      midnightWallets$,
+      // The transaction executor and the dApp connector read ledger objects; they never load in Worker mode.
+      midnightWallets$: inProcessMidnightWallets$(
+        midnightWallets$,
+        'The Midnight transaction executor',
+      ),
+      midnightEngines$: midnightWallets$,
 
       wasmProofActivities$: EMPTY,
       dismissWasmProofActivity: () => undefined,

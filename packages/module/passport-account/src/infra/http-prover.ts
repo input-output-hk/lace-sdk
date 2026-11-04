@@ -1,12 +1,33 @@
 import { ArtefactIntegrityError } from '@lace-contract/passport';
 
 import { loadCircuitAssets } from '../acc/artefact-loader';
-import { accManifest } from '../acc/manifest';
+import { ACCOUNT_BUNDLE_ID, accManifest } from '../acc/manifest';
 
 import type { FetchBytes } from '../acc/artefact-loader';
-import type { AccManifest } from '../acc/manifest';
-import type { PassportProver } from '@lace-contract/passport';
+import type { AccCircuitManifestEntry } from '../acc/manifest';
+import type { PassportRegistry } from '../acc/registry';
+import type {
+  AccountBundle,
+  CalledContract,
+  PassportProver,
+} from '@lace-contract/passport';
 import type { ProvingKeyMaterial } from '@midnight-ntwrk/midnight-js-protocol/ledger';
+
+/**
+ * What the resolver needs of an account bundle: its id, to name it, its
+ * manifest of pins and where its artefacts are served. Every registered
+ * bundle satisfies it; the default is the vendored build's manifest alone,
+ * so the prover the SDK entry exports carries no generated contract code.
+ */
+export type KeyMaterialBundle = Pick<
+  AccountBundle,
+  'artefactUrl' | 'id' | 'manifest'
+>;
+
+const vendoredBundle: KeyMaterialBundle = {
+  id: ACCOUNT_BUNDLE_ID,
+  manifest: accManifest,
+};
 
 /**
  * Thrown when the proof server rejects a request or does not answer before
@@ -23,25 +44,43 @@ export class ProofServerError extends Error {
 }
 
 /**
+ * A canonical contract key location taken apart: the contract address as
+ * the location spells it, the circuit name, and the sha256 of the verifier
+ * key the chain expects for it, absent from a location that pins none.
+ */
+type CanonicalLocation = {
+  address: string;
+  circuit: string;
+  vkPin: string | undefined;
+};
+
+/**
  * Thrown when the ledger asks for the circuit of a contract the client holds
- * no key material for, for example a contract the account's circuits call.
- * Without it the proof server would receive the request with no circuit IR
- * and answer a bare 400.
+ * no key material for: a called contract that is not registered, or a
+ * circuit no registered bundle or called contract pins. Without it the
+ * proof server would receive the request with no circuit IR and answer a
+ * bare 400. `registered` names what the prover does resolve, so the
+ * message says which registration is missing.
  */
 export class UnresolvedContractCircuitError extends Error {
   public readonly code = 'unresolved-contract-circuit' as const;
+  public readonly contractAddress: string;
+  public readonly circuit: string;
+  public readonly verifierKeyHash: string | undefined;
 
   public constructor(
-    readonly contractAddress: string,
-    readonly circuit: string,
-    readonly verifierKeyHash?: string,
+    { address, circuit, vkPin }: CanonicalLocation,
+    registered: string,
   ) {
     super(
-      `No key material for circuit "${circuit}" of contract ${contractAddress}` +
-        `${verifierKeyHash === undefined ? '' : ` (vk=${verifierKeyHash})`}` +
-        ': the prover only resolves the Account Custody Contract circuits listed in its manifest.',
+      `No key material for circuit "${circuit}" of contract ${address}` +
+        `${vkPin === undefined ? '' : ` (vk=${vkPin})`}` +
+        `: the prover resolves ${registered}.`,
     );
     this.name = 'UnresolvedContractCircuitError';
+    this.contractAddress = address;
+    this.circuit = circuit;
+    this.verifierKeyHash = vkPin;
   }
 }
 
@@ -74,12 +113,17 @@ export type KeyMaterialResolver = (
 ) => Promise<ProvingKeyMaterial | undefined>;
 
 export type CreateManifestKeyMaterialResolverProps = {
-  /** Root URL of the hosted artefact bundle (holds zkir/ and keys/). */
+  /**
+   * Root URL of the network's artefact bundle (holds zkir/ and keys/),
+   * which a bundle without an artefact URL of its own downloads from.
+   */
   artefactUrl: string;
   /** Transport used to download each asset. */
   fetchBytes: FetchBytes;
-  /** Integrity pins to verify against; defaults to the bundled manifest. */
-  manifest?: AccManifest;
+  /** The registered account bundles, the default first; defaults to the vendored one alone. */
+  bundles?: readonly KeyMaterialBundle[];
+  /** The registered called contracts; none by default. */
+  calledContracts?: readonly CalledContract[];
 };
 
 /**
@@ -90,59 +134,150 @@ export type CreateManifestKeyMaterialResolverProps = {
 const CANONICAL_KEY_LOCATION =
   /^contract:([0-9a-f]+)\/([^?]+)(?:\?vk=([0-9a-f]+))?$/;
 
+const parseCanonical = (keyLocation: string): CanonicalLocation | undefined => {
+  const match = CANONICAL_KEY_LOCATION.exec(keyLocation);
+  return match
+    ? { address: match[1], circuit: match[2], vkPin: match[3] }
+    : undefined;
+};
+
+/** Where one circuit's assets come from: its pins and the artefact root that serves them. */
+type KeyMaterialSource = {
+  pins: Readonly<Record<string, AccCircuitManifestEntry>>;
+  artefactUrl: string;
+};
+
+const quoted = (names: readonly string[]): string =>
+  names.map(name => `'${name}'`).join(', ');
+
+/** What the resolver holds key material for, as an unresolved location reports it. */
+const describeRegistered = (
+  bundles: readonly KeyMaterialBundle[],
+  calledContracts: readonly CalledContract[],
+): string => {
+  const callees =
+    calledContracts.length === 0
+      ? 'no called contract'
+      : `the called contracts ${calledContracts
+          .map(contract => `'${contract.label}' (${contract.address})`)
+          .join(', ')}`;
+  return `the circuits of the account bundles ${quoted(
+    bundles.map(bundle => bundle.id),
+  )} and of ${callees}`;
+};
+
 /**
  * The default {@link KeyMaterialResolver}: maps a key location onto the
- * Account Custody Contract manifest and downloads that circuit's prover
- * key, verifier key, and IR through {@link loadCircuitAssets}, so every
- * byte is verified against the manifest's sha256 pins. Canonical contract
- * locations resolve by circuit name, and their embedded vk pin must match
- * the manifest's, so proving against a drifted artefact fails before the
- * proof server is asked. A canonical contract location whose circuit the
- * manifest does not list, such as a circuit of a contract the account
- * calls, throws {@link UnresolvedContractCircuitError}. Any other unlisted location
- * resolves to undefined (a protocol builtin the proof server supplies
+ * registered account bundles and called contracts and downloads that
+ * circuit's prover key, verifier key, and IR through
+ * {@link loadCircuitAssets} from the artefact URL of the registration that
+ * resolved it, so every byte is verified against that registration's own
+ * sha256 pins.
+ *
+ * A canonical contract location whose address is a registered called
+ * contract resolves through the contract's pins by circuit name, and its
+ * embedded vk pin must match. Any other address is an account: with a vk
+ * pin, the circuit resolves to the first registered bundle whose manifest
+ * pins that verifier key hash under the circuit's name, so an account of
+ * any registered build proves with its own artefacts; without one, to the
+ * first bundle that lists the circuit. A vk pin no bundle listing the
+ * circuit pins is a drifted artefact and throws
+ * {@link ArtefactIntegrityError} before the proof server is asked. A
+ * circuit nothing registered pins throws
+ * {@link UnresolvedContractCircuitError}. A bare location resolves by name
+ * in the default bundle, the first registered, and any other unlisted
+ * location to undefined (a protocol builtin the proof server supplies
  * itself).
  */
 export const createManifestKeyMaterialResolver = ({
   artefactUrl,
   fetchBytes,
-  manifest = accManifest,
+  bundles = [vendoredBundle],
+  calledContracts = [],
 }: CreateManifestKeyMaterialResolverProps): KeyMaterialResolver => {
-  const entries = Object.values(manifest.circuits);
-  return async keyLocation => {
-    const canonical = CANONICAL_KEY_LOCATION.exec(keyLocation);
-    const circuitName = canonical ? canonical[2] : keyLocation;
-    const vkPin = canonical?.[3];
-    const entry = entries.find(
-      candidate =>
-        candidate.keyLocation === keyLocation || candidate.name === circuitName,
-    );
-    if (!entry) {
-      if (canonical) {
-        throw new UnresolvedContractCircuitError(
-          canonical[1],
-          canonical[2],
-          vkPin,
-        );
-      }
-      return undefined;
-    }
+  const registered = describeRegistered(bundles, calledContracts);
+  const [defaultBundle] = bundles;
+
+  const bundleSource = (bundle: KeyMaterialBundle): KeyMaterialSource => ({
+    pins: bundle.manifest.circuits,
+    artefactUrl: bundle.artefactUrl ?? artefactUrl,
+  });
+
+  const calleeSource = (
+    callee: CalledContract,
+    location: CanonicalLocation,
+  ): KeyMaterialSource => {
+    const { circuit, vkPin } = location;
+    const entry = callee.pins[circuit];
+    if (!entry) throw new UnresolvedContractCircuitError(location, registered);
     if (vkPin !== undefined && vkPin !== entry.verifierKeySha256) {
       throw new ArtefactIntegrityError(
-        `verifier key pin mismatch for ${entry.name}: the chain expects ${vkPin}, the manifest pins ${entry.verifierKeySha256}`,
+        `verifier key pin mismatch for ${circuit}: the chain expects ${vkPin}, called contract '${callee.label}' pins ${entry.verifierKeySha256}`,
       );
     }
+    return { pins: callee.pins, artefactUrl: callee.artefactUrl };
+  };
+
+  const accountSource = (location: CanonicalLocation): KeyMaterialSource => {
+    const { circuit, vkPin } = location;
+    const listing = bundles.filter(bundle => bundle.manifest.circuits[circuit]);
+    if (listing.length === 0) {
+      throw new UnresolvedContractCircuitError(location, registered);
+    }
+    if (vkPin === undefined) return bundleSource(listing[0]);
+    const pinned = listing.find(
+      bundle => bundle.manifest.circuits[circuit].verifierKeySha256 === vkPin,
+    );
+    if (!pinned) {
+      throw new ArtefactIntegrityError(
+        `verifier key pin mismatch for ${circuit}: the chain expects ${vkPin}, the registered account bundles pin ${listing
+          .map(
+            bundle =>
+              `${bundle.manifest.circuits[circuit].verifierKeySha256} ('${bundle.id}')`,
+          )
+          .join(', ')}`,
+      );
+    }
+    return bundleSource(pinned);
+  };
+
+  const material = async (
+    source: KeyMaterialSource,
+    circuit: string,
+  ): Promise<ProvingKeyMaterial> => {
     const assets = await loadCircuitAssets({
-      artefactUrl,
-      circuit: entry.name,
+      artefactUrl: source.artefactUrl,
+      circuit,
       fetchBytes,
-      manifest,
+      pins: source.pins,
     });
     return {
       proverKey: assets.proverKey,
       verifierKey: assets.verifierKey,
       ir: assets.zkir,
     };
+  };
+
+  return async keyLocation => {
+    const location = parseCanonical(keyLocation);
+    if (!location) {
+      const entry = Object.values(defaultBundle.manifest.circuits).find(
+        candidate =>
+          candidate.keyLocation === keyLocation ||
+          candidate.name === keyLocation,
+      );
+      return entry
+        ? material(bundleSource(defaultBundle), entry.name)
+        : undefined;
+    }
+    const callee = calledContracts.find(
+      contract =>
+        contract.address.toLowerCase() === location.address.toLowerCase(),
+    );
+    return material(
+      callee ? calleeSource(callee, location) : accountSource(location),
+      location.circuit,
+    );
   };
 };
 
@@ -166,11 +301,23 @@ const defaultFetchBytes: FetchBytes = async url => {
 export type HttpProverOptions = {
   /**
    * Resolves key locations to key material. Defaults to
-   * {@link createManifestKeyMaterialResolver} over `artefactUrl`.
+   * {@link createManifestKeyMaterialResolver} over `artefactUrl` and
+   * `registry`.
    */
   resolveKeyMaterial?: KeyMaterialResolver;
-  /** Artefact bundle root the default resolver downloads from. */
+  /**
+   * Artefact bundle root of the network, which the default resolver
+   * downloads the assets of a bundle without an artefact URL of its own
+   * from. Alone, it resolves the default bundle's circuits.
+   */
   artefactUrl?: string;
+  /**
+   * What the host registers, the same value it gives the module: the
+   * default resolver proves for the default bundle, the registry's
+   * bundles beside it and its called contracts. Nothing beside the
+   * default by default.
+   */
+  registry?: PassportRegistry;
   /** Artefact download transport for the default resolver; defaults to fetch. */
   fetchBytes?: FetchBytes;
   /** Proof server transport; defaults to the global fetch. */
@@ -206,6 +353,8 @@ export const createHttpProver = (
       : createManifestKeyMaterialResolver({
           artefactUrl: options.artefactUrl,
           fetchBytes: options.fetchBytes ?? defaultFetchBytes,
+          bundles: [vendoredBundle, ...(options.registry?.bundles ?? [])],
+          calledContracts: options.registry?.calledContracts ?? [],
         }));
   if (!resolveKeyMaterial) {
     throw new Error(

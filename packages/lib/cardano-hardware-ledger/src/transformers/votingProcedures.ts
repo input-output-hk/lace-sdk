@@ -1,11 +1,11 @@
 import * as Ledger from '@cardano-foundation/ledgerjs-hw-app-cardano';
 import * as Crypto from '@lace-lib/cardano-crypto';
 import { util } from '@lace-lib/cardano-key-management';
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import type { LedgerTxTransformerContext } from '..';
 import type { Cardano } from '@lace-lib/cardano-core';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 
 /**
  * Maps a Voter to a Voter from the LedgerJS public types.

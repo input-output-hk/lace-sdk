@@ -2,7 +2,7 @@ import {
   HexBlob,
   InvalidArgumentError,
   InvalidStateError,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import { MirCertificateKind } from '../../../Cardano/types/Certificate';
 import { CborReader, CborReaderState, CborWriter } from '../../CBOR';

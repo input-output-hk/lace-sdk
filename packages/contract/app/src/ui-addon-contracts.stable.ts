@@ -6,6 +6,7 @@
 // stable-omits: blockchainSpecificAppCustomizationsAddonContract
 // stable-omits: blockchainSpecificAppSettingsPageCustomizationsAddonContract
 // stable-omits: dialogsAddonContract, portfolioAnnouncementsAddonContract
+// stable-omits: portfolioBannerUICustomisationAddonContract
 // stable-omits: profileDropdownWalletsAddonContract
 // stable-omits: sendFlowSheetUICustomisationAddonContract
 // stable-omits: tabMenuItemsAddonContract

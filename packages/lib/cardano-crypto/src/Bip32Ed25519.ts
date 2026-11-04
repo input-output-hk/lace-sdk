@@ -8,7 +8,7 @@ import type {
   Ed25519SignatureHex,
 } from './hexTypes';
 import type { BIP32Path } from './types';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * Ed25519 is the EdDSA signature scheme used in Cardano, it uses SHA-512 (SHA-2) as its hashing algorithm

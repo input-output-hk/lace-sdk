@@ -1,4 +1,4 @@
-import { HexBlob, InvalidArgumentError } from '@lace-lib/util/common';
+import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { CborReader, CborWriter } from '../CBOR';
 import { UnitInterval } from '../Common';

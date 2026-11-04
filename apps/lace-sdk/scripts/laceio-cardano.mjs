@@ -6,6 +6,8 @@
 // (rollup.dts.config.mjs) both resolve each package the domain layer
 // publishes to its subpath, external. The subpaths are the ones its
 // package.json exports, so the two builds and the package cannot disagree.
+// Worker mode's worker, which shares nothing with an app, bundles the subpath
+// instead (tsdown.config.ts).
 import fs from 'node:fs';
 import path from 'node:path';
 

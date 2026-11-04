@@ -4,7 +4,7 @@ import {
 } from '@lace-contract/passport';
 
 import { loadVerifierKeys } from '../acc/deploy';
-import { DEPLOYED_OPERATIONS } from '../acc/deployed-operations';
+import { ACCOUNT_BUNDLE_ID } from '../acc/manifest';
 import { planInstallWaves } from '../acc/wave-plan';
 import { createIndexerClient } from '../infra/indexer';
 import { createMidnightProviders } from '../infra/providers';
@@ -15,9 +15,12 @@ import { assertInstallSigner, installVerifierKeys } from './maintenance';
 import { readAccountInbox } from './rotation';
 
 import type { AccountCallInput, FlowContext } from './types';
-import type { MaintenanceVerifierKey } from '@lace-contract/passport';
+import type {
+  AccountBundle,
+  MaintenanceVerifierKey,
+} from '@lace-contract/passport';
 
-/** The account to upgrade and the operations of the deployed roster it should gain. */
+/** The account to upgrade and the operations of its bundle's roster it should gain. */
 export type InstallOperationsInput = Pick<AccountCallInput, 'account'> & {
   operations: readonly string[];
 };
@@ -25,7 +28,7 @@ export type InstallOperationsInput = Pick<AccountCallInput, 'account'> & {
 /**
  * What a completed install leaves behind: `operations`, those it
  * installed, and `alreadyInstalled`, those requested that the account
- * already held, each in the deployed roster's order.
+ * already held, each in the bundle roster's order.
  */
 export type InstalledOperations = {
   operations: string[];
@@ -34,21 +37,24 @@ export type InstalledOperations = {
 
 /**
  * The requested operations split by whether the account already holds
- * them, each in installation order, the deployed roster's.
+ * them, each in installation order, the bundle roster's.
  *
  * @throws {@link OperationNotInstallableError} naming every requested
- * operation outside the deployed roster, or when nothing is requested.
+ * operation outside the bundle's roster, or when nothing is requested.
  */
 const installableOperations = (
+  bundle: AccountBundle,
   requested: readonly string[],
   installed: readonly string[],
 ): InstalledOperations => {
   const outside = requested.filter(
-    operation => !DEPLOYED_OPERATIONS.includes(operation),
+    operation => !bundle.operations.includes(operation),
   );
   if (outside.length > 0) {
     throw new OperationNotInstallableError(
-      `Not operations this module deploys: ${outside.join(', ')}.`,
+      `Not operations of the account bundle '${bundle.id}': ${outside.join(
+        ', ',
+      )}.`,
     );
   }
   if (requested.length === 0) {
@@ -56,7 +62,7 @@ const installableOperations = (
       'No operation was named to install.',
     );
   }
-  const named = DEPLOYED_OPERATIONS.filter(operation =>
+  const named = bundle.operations.filter(operation =>
     requested.includes(operation),
   );
   return {
@@ -79,33 +85,37 @@ const insertsOf = (
   });
 
 /**
- * Installs on an unlocked account the verifier keys of operations of the
- * deployed roster it lacks, so an account created under an earlier
- * roster gains the circuits added since without a new deployment. Only
- * operations this module deploys can be installed, never a recovery
- * circuit or another device arm, and each key is the one pinned for its
+ * Installs on an unlocked account the verifier keys of operations of its
+ * bundle's roster it lacks, so an account created under an earlier roster
+ * of its build gains the circuits added since without a new deployment.
+ * The bundle is the registered one the account resolved to, so an account
+ * of any registered build gains the operations its own roster adds. Only
+ * operations of that roster can be installed, never a recovery circuit or
+ * another device arm, and each key is the one the bundle pins for its
  * operation, which the encryption key checks again before it signs.
  *
  * The operations the account holds and its maintenance authority are
- * read from chain before any prompt: a request naming no operation, or an
- * operation outside the roster, is refused with
- * OperationNotInstallableError naming them. Requested operations the
+ * read from chain before any prompt: an account whose bundle the
+ * registry does not hold is refused with AccountBundleUnknownError, and
+ * a request naming no operation, or an operation outside the roster,
+ * with OperationNotInstallableError naming them. Requested operations the
  * account already holds are skipped, so an install interrupted after some
  * waves landed is finished by running it again; when it holds every one,
  * this resolves with nothing submitted and no prompt. Otherwise a locked
  * account is refused with AuthorityRetiredError, and an encryption key
  * that cannot sign maintenance updates with
- * MaintenanceUpdateRefusedError. The verifier
- * keys are then downloaded against their pins and packed into waves
+ * MaintenanceUpdateRefusedError. The verifier keys are then downloaded
+ * from the bundle's artefacts against their pins and packed into waves
  * under the per-transaction budget. In one key session naming the
- * account and the operations, the keyring is read from the ledger as it
- * stands then, so a rotation that landed during the downloads is
- * followed, and the encryption key signs each wave with the roster key
- * of this device's keyring whose authority the chain holds; an authority none of them derives is refused with
- * MaintenanceAuthorityMismatchError before anything is submitted. Each
- * wave waits for the chain to show the advanced counter, so this
- * resolves once the chain holds every installed key, with the operations
- * it installed and those it skipped.
+ * account, the operations and, for a bundle other than the default, the
+ * bundle, the keyring is read from the ledger as it stands then, so a
+ * rotation that landed during the downloads is followed, and the
+ * encryption key signs each wave with the roster key of this device's
+ * keyring whose authority the chain holds; an authority none of them
+ * derives is refused with MaintenanceAuthorityMismatchError before
+ * anything is submitted. Each wave waits for the chain to show the
+ * advanced counter, so this resolves once the chain holds every installed
+ * key, with the operations it installed and those it skipped.
  *
  * No gated call is made, so the use counter and the record are left as
  * they are. The transactions' sponsoring stage is reported through
@@ -113,12 +123,14 @@ const insertsOf = (
  */
 export const installOperations = async (
   { account, operations: requested }: InstallOperationsInput,
-  { seams, onProgress }: FlowContext,
+  { seams, onProgress, bundles }: FlowContext,
 ): Promise<InstalledOperations> => {
   const { address } = account;
+  const bundle = bundles.get(account.bundleId);
   const { indexerUrl, indexerWsUrl } = seams.passportNetwork;
   const indexer = createIndexerClient({ indexerUrl, indexerWsUrl });
   const { operations, alreadyInstalled } = installableOperations(
+    bundle,
     requested,
     await queryAccountOperations(indexer, address),
   );
@@ -132,6 +144,9 @@ export const installOperations = async (
     network: seams.passportNetwork,
     prover: seams.passportProver,
     sponsor: seams.passportSponsor,
+    bundle,
+    bundles: bundles.bundles,
+    calledContracts: bundles.calledContracts,
     onStage: onProgress,
   });
   const { keys, sizes } = await loadVerifierKeys(providers, operations);
@@ -140,11 +155,16 @@ export const installOperations = async (
   );
   return inKeySession(
     seams.passportAuthoriser,
-    { kind: 'install-operations', account: AccAddress(address), operations },
+    {
+      kind: 'install-operations',
+      account: AccAddress(address),
+      operations,
+      ...(bundle.id === ACCOUNT_BUNDLE_ID ? {} : { bundleId: bundle.id }),
+    },
     async () => {
       const { keyring } = readAccountInbox(
         address,
-        await queryAccountLedger(indexer, address),
+        await queryAccountLedger(indexer, address, bundle),
         await seams.passportEncryptionKey.readerPublicKey(
           seams.passportNetwork.networkId,
         ),
@@ -154,6 +174,7 @@ export const installOperations = async (
         seams,
         providers,
         keyring,
+        bundleId: bundle.id,
         waves,
       });
       return { operations, alreadyInstalled };

@@ -7,7 +7,6 @@ import { Observable } from 'rxjs';
 import { createMidnightSideEffectDependencies } from './dependencies';
 import { createStoreTemenosAttestedProver } from './temenos-attested-prover';
 
-import type { MidnightSideEffectsDependencies } from '@lace-contract/midnight-context';
 import type { LaceInitSync } from '@lace-contract/module';
 
 // The app attests tee-delegated proof servers with the verifier library's full
@@ -29,7 +28,7 @@ const initializeEngineDependencies = createMidnightSideEffectDependencies({
 });
 
 export const initializeMidnightSideEffectDependencies: LaceInitSync<
-  MidnightSideEffectsDependencies
+  ReturnType<typeof initializeEngineDependencies>
 > = (props, dependencies) => ({
   ...initializeEngineDependencies(props, dependencies),
   wasmProofActivities$: new Observable(subscriber =>

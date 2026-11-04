@@ -1,7 +1,7 @@
 import { Cardano } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
 import { AddressType, KeyRole } from '@lace-lib/cardano-key-management';
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 import * as Trezor from '@trezor/connect';
 
 import type { TrezorTxTransformerContext } from '../src';

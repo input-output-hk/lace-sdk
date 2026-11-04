@@ -35,15 +35,19 @@ import {
 import { MidnightSubmitTimeoutError } from '../src/midnight-errors';
 import { submitMidnightTx } from '../src/submit-midnight-tx';
 
+import { pageModeEngineAccess } from './midnight-engine-access-fake';
+import { decodeLedgerFakes, ledgerFake } from './midnight-ledger-fakes';
+import { toMidnightFinalizedTx } from './midnight-opaque-fixtures';
+
 import type {
   MidnightMakeIntentProps,
   MidnightMakeTransferProps,
 } from '../src/midnight-connector-transactions';
 import type { WalletWithMidnight } from '../src/midnight-wallet';
-import type { MidnightFinalizedTx } from '../src/prove-midnight-tx';
 import type { Activity } from '@lace-contract/activities';
 import type { MidnightWallet } from '@lace-contract/midnight-context';
 import type { DesiredOutput } from '@midnight-ntwrk/dapp-connector-api';
+import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 
 const networkId = MidnightSDKNetworkIds.Preview;
 const accountId = MidnightAccountId(stubData.walletId, 0, networkId);
@@ -73,16 +77,17 @@ const unshielded: DesiredOutput = {
 };
 const recipe = { type: 'UNPROVEN_TRANSACTION' };
 const signed = { type: 'SIGNED' };
-const finalized = {
+const finalized = ledgerFake({
   transactionHash: () => 'actual-hash',
   intents: new Map(),
-} as unknown as MidnightFinalizedTx;
+}) as unknown as FinalizedTransaction;
 
 type FakeCoin = {
   utxo: { intentHash: string; outputNo: number; type: string; value: bigint };
 };
 
 const setup = () => {
+  decodeLedgerFakes();
   const engine = {
     accountId,
     networkId,
@@ -170,11 +175,18 @@ const setup = () => {
       },
     } as unknown as WalletWithMidnight['stateObservables'],
     _loadModules: (async () => [
-      of({ [accountId]: engine as unknown as MidnightWallet }),
+      pageModeEngineAccess(
+        of({ [accountId]: engine as unknown as MidnightWallet }),
+      ),
     ]) as unknown as WalletWithMidnight['_loadModules'],
   };
   return { engine, wallet, activities$, dispatch };
 };
+type Engine = ReturnType<typeof setup>['engine'];
+
+// The opaque value a helper returns for a transaction the engine proved.
+const valueOf = (engine: Engine, transaction = finalized) =>
+  toMidnightFinalizedTx(engine as unknown as MidnightWallet, transaction);
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -202,7 +214,7 @@ describe('connector transaction contracts', () => {
         tx: 'abcd',
         options: { payFees: false },
       });
-      expect(result.unwrap()).toBe(finalized);
+      expect(result.unwrap()).toEqual(valueOf(engine));
       expect(decode).toHaveBeenCalledWith(
         'signature',
         'proof',
@@ -266,7 +278,7 @@ describe('connector transaction contracts', () => {
           options: { payFees: false },
         })
       ).unwrap(),
-    ).toBe(finalized);
+    ).toEqual(valueOf(engine));
     expect(engine.transferTransaction).toHaveBeenCalledWith(
       [
         {
@@ -336,7 +348,7 @@ describe('connector transaction contracts', () => {
             options: { payFees, intentId: -12.5 },
           })
         ).unwrap(),
-      ).toBe(finalized);
+      ).toEqual(valueOf(engine));
       // Built without its fee, then balanced, so a release that fails beside a
       // fee failure is reported.
       expect(engine.initSwap).toHaveBeenCalledWith(
@@ -687,8 +699,8 @@ describe('connector transaction contracts', () => {
   });
 });
 
-const spendingTx = () =>
-  ({
+const spending = () =>
+  ledgerFake({
     ...finalized,
     intents: new Map([
       [
@@ -701,7 +713,8 @@ const spendingTx = () =>
         },
       ],
     ]),
-  } as unknown as MidnightFinalizedTx);
+  }) as unknown as FinalizedTransaction;
+const spendingTx = (engine: Engine) => valueOf(engine, spending());
 
 describe('submission reconciliation', () => {
   it('records the full input amount from the pending index while an unrelated coin stays available', async () => {
@@ -733,7 +746,9 @@ describe('submission reconciliation', () => {
       }),
     );
     expect(
-      (await submitMidnightTx(wallet, { transaction: spendingTx() })).unwrap(),
+      (
+        await submitMidnightTx(wallet, { transaction: spendingTx(engine) })
+      ).unwrap(),
     ).toEqual({ txId: 'submission-id' });
     expect(activities$.value[accountId]).toHaveLength(1);
     expect(
@@ -747,7 +762,9 @@ describe('submission reconciliation', () => {
       of({ unshielded: { availableCoins: [], pendingCoins: [] } }),
     );
     expect(
-      (await submitMidnightTx(wallet, { transaction: spendingTx() })).unwrap(),
+      (
+        await submitMidnightTx(wallet, { transaction: spendingTx(engine) })
+      ).unwrap(),
     ).toEqual({ txId: 'submission-id' });
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -761,7 +778,9 @@ describe('submission reconciliation', () => {
       return of('submission-id');
     });
     expect(
-      (await submitMidnightTx(wallet, { transaction: spendingTx() })).unwrap(),
+      (
+        await submitMidnightTx(wallet, { transaction: spendingTx(engine) })
+      ).unwrap(),
     ).toEqual({ txId: 'submission-id' });
     expect(engine.state.mock.invocationCallOrder[0]).toBeLessThan(
       engine.submitTransaction.mock.invocationCallOrder[0],
@@ -783,8 +802,8 @@ describe('submission reconciliation', () => {
   it('deduplicates concurrent submissions by activity hash', async () => {
     const { engine, wallet, activities$ } = setup();
     const results = await Promise.all([
-      submitMidnightTx(wallet, { transaction: spendingTx() }),
-      submitMidnightTx(wallet, { transaction: spendingTx() }),
+      submitMidnightTx(wallet, { transaction: spendingTx(engine) }),
+      submitMidnightTx(wallet, { transaction: spendingTx(engine) }),
     ]);
     expect(results.map(result => result.unwrap())).toEqual([
       { txId: 'submission-id' },
@@ -822,7 +841,9 @@ describe('submission reconciliation', () => {
         return of('submission-id');
       });
       expect(
-        (await submitMidnightTx(wallet, { transaction: spendingTx() })).isOk(),
+        (
+          await submitMidnightTx(wallet, { transaction: spendingTx(engine) })
+        ).isOk(),
       ).toBe(true);
       expect(dispatch).not.toHaveBeenCalled();
       expect(activities$.value[accountId][0]).toBe(confirmed);
@@ -830,9 +851,9 @@ describe('submission reconciliation', () => {
   );
 
   it('does not fabricate shielded-only activity', async () => {
-    const { wallet, dispatch } = setup();
+    const { engine, wallet, dispatch } = setup();
     expect(
-      (await submitMidnightTx(wallet, { transaction: finalized })).isOk(),
+      (await submitMidnightTx(wallet, { transaction: valueOf(engine) })).isOk(),
     ).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -847,7 +868,7 @@ describe('submission reconciliation', () => {
     'keeps successful submission when %s tracking fails',
     async stage => {
       const { wallet, engine, dispatch } = setup();
-      const transaction = spendingTx();
+      const spent = spending();
       if (stage === 'state')
         engine.state.mockImplementation(() =>
           throwError(() => new Error('state unavailable')),
@@ -861,15 +882,21 @@ describe('submission reconciliation', () => {
           selectAllMap$: throwError(() => new Error('activities unavailable')),
         };
       if (stage === 'derive')
-        vi.spyOn(transaction, 'transactionHash').mockImplementation(() => {
-          throw new Error('derive failed');
+        Object.defineProperty(spent, 'intents', {
+          get: () => {
+            throw new Error('derive failed');
+          },
         });
       if (stage === 'dispatch')
         dispatch.mockImplementation(() => {
           throw new Error('storage failed');
         });
       expect(
-        (await submitMidnightTx(wallet, { transaction })).unwrap(),
+        (
+          await submitMidnightTx(wallet, {
+            transaction: valueOf(engine, spent),
+          })
+        ).unwrap(),
       ).toEqual({ txId: 'submission-id' });
       expect(engine.submitTransaction).toHaveBeenCalledTimes(1);
     },
@@ -880,7 +907,7 @@ describe('submission reconciliation', () => {
     const error = new Error('node rejected');
     engine.submitTransaction.mockImplementation(() => throwError(() => error));
     const result = (
-      await submitMidnightTx(wallet, { transaction: spendingTx() })
+      await submitMidnightTx(wallet, { transaction: spendingTx(engine) })
     ).unwrapErr();
     expect(result).toBe(error);
     expect(result).not.toBeInstanceOf(MidnightSubmitTimeoutError);
@@ -896,7 +923,7 @@ describe('submission reconciliation', () => {
     engine.submitTransaction.mockReturnValue(NEVER);
     const error = (
       await submitMidnightTx(wallet, {
-        transaction: spendingTx(),
+        transaction: spendingTx(engine),
         submitTimeout: 1,
       })
     ).unwrapErr();
@@ -922,7 +949,7 @@ describe('submission reconciliation', () => {
     engine.state.mockReturnValue(state$.pipe(finalize(unsubscribe)));
     engine.submitTransaction.mockReturnValue(of('submission-id'));
     const result = await submitMidnightTx(wallet, {
-      transaction: spendingTx(),
+      transaction: spendingTx(engine),
       submitTimeout: 20,
     });
     expect(result.unwrap()).toEqual({ txId: 'submission-id' });
@@ -941,7 +968,7 @@ describe('submission reconciliation', () => {
       selectAllMap$: NEVER.pipe(finalize(unsubscribe)),
     };
     const result = await submitMidnightTx(wallet, {
-      transaction: spendingTx(),
+      transaction: spendingTx(engine),
       submitTimeout: 20,
     });
     expect(result.unwrap()).toEqual({ txId: 'submission-id' });
@@ -958,7 +985,7 @@ describe('submission reconciliation', () => {
       finality$.pipe(finalize(unsubscribe)),
     );
     const result = await submitMidnightTx(wallet, {
-      transaction: spendingTx(),
+      transaction: spendingTx(engine),
       submitTimeout: 20,
     });
     expect(result.unwrapErr()).toBeInstanceOf(MidnightSubmitTimeoutError);
@@ -982,7 +1009,7 @@ describe('submission reconciliation', () => {
         const { wallet, engine, dispatch } = setup();
         const error = (
           await submitMidnightTx(wallet, {
-            transaction: spendingTx(),
+            transaction: spendingTx(engine),
             submitTimeout,
           })
         ).unwrapErr();
@@ -998,7 +1025,9 @@ describe('submission reconciliation', () => {
       const finality$ = new Subject<string>();
       engine.submitTransaction.mockReturnValue(finality$);
 
-      const result = submitMidnightTx(wallet, { transaction: spendingTx() });
+      const result = submitMidnightTx(wallet, {
+        transaction: spendingTx(engine),
+      });
       await vi.waitFor(() => {
         expect(dispatch).toHaveBeenCalledTimes(1);
       });
@@ -1027,7 +1056,7 @@ describe('submission reconciliation', () => {
 
       const error = (
         await submitMidnightTx(wallet, {
-          transaction: spendingTx(),
+          transaction: spendingTx(engine),
           submitTimeout: 20,
         })
       ).unwrapErr();
@@ -1056,7 +1085,7 @@ describe('submission reconciliation', () => {
         }),
       );
       const result = await submitMidnightTx(wallet, {
-        transaction: spendingTx(),
+        transaction: spendingTx(engine),
       });
       expect(result.unwrap()).toEqual({ txId: 'submission-id' });
       expect(subscriptions).toBe(1);
@@ -1070,7 +1099,7 @@ describe('submission reconciliation', () => {
 
       const error = (
         await submitMidnightTx(wallet, {
-          transaction: spendingTx(),
+          transaction: spendingTx(engine),
           submitTimeout: 20,
         })
       ).unwrapErr();
@@ -1098,7 +1127,7 @@ describe('submission reconciliation', () => {
       const error = (
         await submitMidnightTx(
           { ...wallet, dispatch: undefined },
-          { transaction: spendingTx(), submitTimeout: 20 },
+          { transaction: spendingTx(engine), submitTimeout: 20 },
         )
       ).unwrapErr();
 
@@ -1113,7 +1142,9 @@ describe('submission reconciliation', () => {
       const failure$ = new Subject<string>();
       engine.submitTransaction.mockReturnValue(failure$);
 
-      const result = submitMidnightTx(wallet, { transaction: spendingTx() });
+      const result = submitMidnightTx(wallet, {
+        transaction: spendingTx(engine),
+      });
       await vi.waitFor(() => {
         expect(dispatch).toHaveBeenCalledTimes(1);
       });

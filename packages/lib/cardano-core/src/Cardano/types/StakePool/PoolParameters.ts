@@ -1,4 +1,4 @@
-import { typedBech32 } from '@lace-lib/util/common';
+import { typedBech32 } from '@lace-lib/cardano-util';
 
 import type { Fraction } from '../';
 import type { ExtendedStakePoolMetadata } from './ExtendedStakePoolMetadata';
@@ -7,7 +7,7 @@ import type { PoolId, VrfVkHex } from './primitives';
 import type { Relay } from './Relay';
 import type { RewardAccount } from '../../Address';
 import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 export interface PoolMetadataJson {
   hash: Hash32ByteBase16;

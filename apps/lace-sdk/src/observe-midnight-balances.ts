@@ -1,6 +1,16 @@
-import { NIGHT_TOKEN_ID } from '@lace-contract/midnight-context';
-import { midnightDustBalances } from '@lace-module/midnight-sync/sdk';
 import {
+  isRemoteMidnightEngine,
+  NIGHT_TOKEN_ID,
+} from '@lace-contract/midnight-context';
+import {
+  acrossMidnightEngineResets,
+  dustBalancesOf,
+  midnightStateOf$,
+  MidnightEngineClientError,
+  strictCompletionOf,
+} from '@lace-module/midnight-sync/sdk';
+import {
+  catchError,
   combineLatest,
   distinctUntilChanged,
   filter,
@@ -8,9 +18,10 @@ import {
   of,
   scan,
   switchMap,
+  throwError,
 } from 'rxjs';
 
-import { observeMidnightWallet } from './midnight-wallet';
+import { observeMidnightEngine } from './midnight-wallet';
 
 import type {
   MidnightAccountProps,
@@ -18,7 +29,7 @@ import type {
 } from './midnight-wallet';
 import type {
   MidnightAccountId,
-  MidnightWallet,
+  MidnightEngine,
   MidnightWalletAddress,
 } from '@lace-contract/midnight-context';
 import type { Observable } from 'rxjs';
@@ -35,8 +46,6 @@ export type MidnightBalances = {
   synced: { unshielded: boolean; shielded: boolean; dust: boolean };
 };
 
-// NIGHT stays on state().unshielded rather than the store's coinsByTokenType$:
-// that is a second stream of the same state, and combining the two can emit inconsistent snapshots.
 const sumNight = (
   coins: readonly { utxo: { type: string; value: bigint } }[],
 ) =>
@@ -56,22 +65,21 @@ const sameBalances = (a: MidnightBalances, b: MidnightBalances) =>
 
 const NOT_SYNCED = { unshielded: false, shielded: false, dust: false };
 
-const balancesOf = (midnightWallet: MidnightWallet) =>
-  combineLatest([
-    midnightWallet.state(),
-    midnightWallet.syncProgress$,
-    midnightWallet.address$,
-  ]).pipe(
+// NIGHT and the synced flags come from the engine state itself, not from the store's coinsByTokenType$ or the
+// engine's syncProgress$: those are second streams of the same state, and combining them can emit inconsistent
+// snapshots, such as synced flags newer than the balances they come with.
+const balancesOf = (engine: MidnightEngine) =>
+  combineLatest([midnightStateOf$(engine), engine.address$]).pipe(
     map(
-      ([state, progress, address]): MidnightBalances => ({
-        accountId: midnightWallet.accountId,
+      ([state, address]): MidnightBalances => ({
+        accountId: engine.accountId,
         address,
         night: {
           available: sumNight(state.unshielded.availableCoins),
           pending: sumNight(state.unshielded.pendingCoins),
         },
-        dust: midnightDustBalances(state),
-        synced: progress.isStrictlyComplete,
+        dust: dustBalancesOf(state),
+        synced: strictCompletionOf(state),
       }),
     ),
   );
@@ -96,9 +104,26 @@ export const observeMidnightBalances = (
   wallet: WalletWithMidnight,
   props: MidnightAccountProps = {},
 ): Observable<MidnightBalances> =>
-  observeMidnightWallet(wallet, props).pipe(
-    switchMap(midnightWallet =>
-      midnightWallet ? balancesOf(midnightWallet) : of(undefined),
+  observeMidnightEngine(wallet, props).pipe(
+    // A worker engine survives its reset, so the reset restarts its balances and marks them not synced, as a
+    // page engine's stop does. Its failure, which the account watcher retries, marks them not synced too; any
+    // other error, which nothing retries, reaches the subscriber as in page mode.
+    switchMap(engine =>
+      engine
+        ? acrossMidnightEngineResets<MidnightBalances | undefined>(
+            engine,
+            () => [undefined],
+            () => balancesOf(engine),
+          ).pipe(
+            catchError((error: unknown) =>
+              isRemoteMidnightEngine(engine) &&
+              error instanceof MidnightEngineClientError &&
+              error.reason === 'engine-failed'
+                ? of(undefined)
+                : throwError(() => error),
+            ),
+          )
+        : of(undefined),
     ),
     scan<MidnightBalances | undefined, MidnightBalances | undefined>(
       (last, next) => next ?? (last && { ...last, synced: NOT_SYNCED }),

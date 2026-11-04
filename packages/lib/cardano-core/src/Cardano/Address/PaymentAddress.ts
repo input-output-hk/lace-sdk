@@ -3,7 +3,7 @@ import {
   InvalidStringError,
   assertIsBech32WithPrefix,
   assertIsHexString,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import { Address, AddressType } from './Address';
 import { DRepID } from './DRepID';
@@ -12,7 +12,7 @@ import type { NetworkId } from '../ChainId';
 import type { RewardAccount } from './RewardAccount';
 import type { HydratedTx, Tx } from '../types/Transaction';
 import type { HydratedTxIn, TxIn, TxOut, Utxo } from '../types/Utxo';
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 /** mainnet or testnet address (Shelley as bech32 string, Byron as base58-encoded string) */
 export type PaymentAddress = OpaqueString<'PaymentAddress'>;

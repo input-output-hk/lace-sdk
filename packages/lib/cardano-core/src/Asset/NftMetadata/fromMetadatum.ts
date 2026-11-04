@@ -1,4 +1,4 @@
-import { isNotNil } from '@lace-lib/util/common';
+import { isNotNil } from '@lace-lib/cardano-util';
 import difference from 'lodash/difference.js';
 
 import { AssetId, AssetName } from '../../Cardano/types/Asset';

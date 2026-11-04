@@ -38,7 +38,7 @@ export const signMidnightData = async (
   wallet: WalletWithMidnight,
   { data, options, ...account }: SignMidnightDataProps,
 ): Promise<Result<Signature, Error>> =>
-  withMidnightWallet(wallet, account, midnightWallet =>
+  withMidnightWallet(wallet, account, engine =>
     defer(() => {
       if (options.keyType !== 'unshielded') {
         throw new Error(`Unsupported key type: ${String(options.keyType)}`);
@@ -46,7 +46,7 @@ export const signMidnightData = async (
       const bytes = applyMidnightSignedMessagePrefix(
         decodeMidnightSignData(data, options.encoding),
       );
-      return midnightWallet.signData(bytes).pipe(
+      return engine.signData(bytes).pipe(
         map(({ signature, verifyingKey }) => ({
           data,
           signature,

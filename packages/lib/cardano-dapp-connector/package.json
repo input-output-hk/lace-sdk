@@ -9,7 +9,7 @@
   "dependencies": {
     "@lace-lib/cardano-core": "*",
     "@lace-lib/cardano-crypto": "*",
-    "@lace-lib/util": "*",
+    "@lace-lib/cardano-util": "*",
     "ts-custom-error": "^3.3.1",
     "ts-log": "^2.2.7"
   },

@@ -302,7 +302,7 @@ describe('midnight-sync/store/side-effects', () => {
         '--a--a--a',
       );
 
-      expect(result.registry).toBe(result.dependencies.midnightWallets$);
+      expect(result.registry).toBe(result.dependencies.midnightEngines$);
 
       expect(result.stopAccount).toHaveBeenCalledTimes(2);
       expect(result.stop).toHaveBeenCalledOnce();
@@ -1375,7 +1375,7 @@ describe('midnight-sync/store/side-effects', () => {
         '--a--a',
       );
 
-      expect(result.registry).toBe(result.dependencies.midnightWallets$);
+      expect(result.registry).toBe(result.dependencies.midnightEngines$);
 
       expect(result.stopAccount).toHaveBeenCalledTimes(2);
       expect(result.stop).toHaveBeenCalledOnce();

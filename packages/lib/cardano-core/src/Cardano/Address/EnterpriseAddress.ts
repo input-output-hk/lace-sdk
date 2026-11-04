@@ -1,5 +1,5 @@
 import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
-import { InvalidArgumentError } from '@lace-lib/util/common';
+import { InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { Address, AddressType, CredentialType } from './Address';
 

@@ -1,11 +1,11 @@
 import { Serialization } from '@cardano-sdk/core';
-import { catchError, from, switchMap, throwError } from 'rxjs';
-
-import { CollateralOwnershipError } from './assert-collateral-ownership';
 import {
   collateralRefusalCase,
   resolveCollateralOwnershipSets,
-} from './collateral-ownership';
+} from '@lace-lib/core/dapp-connector/signing';
+import { catchError, from, switchMap, throwError } from 'rxjs';
+
+import { CollateralOwnershipError } from './assert-collateral-ownership';
 
 import type { CollateralOwnershipErrorCase } from './assert-collateral-ownership';
 import type {
@@ -53,7 +53,7 @@ export const withCollateralOwnershipGuard = (
             body,
             resolveInput: async input =>
               context.collateralInputResolver.resolveInput(input),
-            knownAddresses: context.knownAddresses,
+            ownAddresses: context.knownAddresses.map(({ address }) => address),
           }),
         );
       })(),

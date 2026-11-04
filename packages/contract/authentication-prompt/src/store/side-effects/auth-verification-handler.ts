@@ -1,9 +1,19 @@
 import { toEmpty } from '@cardano-sdk/util-rxjs';
 import { firstStateOfStatus } from '@lace-lib/util-store';
-import { filter, take, merge, tap, switchMap, of, EMPTY } from 'rxjs';
+import {
+  filter,
+  take,
+  merge,
+  tap,
+  switchMap,
+  of,
+  EMPTY,
+  takeUntil,
+} from 'rxjs';
 
 import { propagateAuthSecret } from '../auth-secret-accessor';
 
+import type { AuthSecret } from '../../value-objects';
 import type {
   AuthSecretVerifier,
   AuthenticationPromptSliceState,
@@ -57,11 +67,25 @@ type VerifyAndPropagateAuthSecret = {
   ): Observable<T>;
 };
 
-export const createVerifyAndPropagateAuthSecret = ({
-  accessSecretFromAuthFlow,
-  verifyAuthSecret,
-}: MakeVerifyAndPropagateAuthSecretParams): VerifyAndPropagateAuthSecret =>
-  (<T>({
+const propagateOnSuccessfulCompletion = (
+  state$: Observable<AuthenticationPromptSliceState>,
+  authSecret: AuthSecret,
+): Observable<never> =>
+  firstStateOfStatus(state$, 'Completing').pipe(
+    take(1),
+    filter(state => state.success),
+    tap(() => {
+      propagateAuthSecret(authSecret);
+    }),
+    toEmpty,
+  );
+
+export const createVerifyAndPropagateAuthSecret =
+  ({
+    accessSecretFromAuthFlow,
+    verifyAuthSecret,
+  }: MakeVerifyAndPropagateAuthSecretParams): VerifyAndPropagateAuthSecret =>
+  <T>({
     selectAuthenticationPromptState$,
     actionCreator,
     failureReason,
@@ -71,33 +95,34 @@ export const createVerifyAndPropagateAuthSecret = ({
   >): Observable<T> =>
     accessSecretFromAuthFlow(authSecret =>
       verifyAuthSecret({ authSecret }).pipe(
-        switchMap(success =>
-          merge(
+        switchMap(success => {
+          const payload: BiometricVerificationPayload =
+            !success && failureReason
+              ? { success, failureReason }
+              : { success };
+
+          return merge(
             success
-              ? firstStateOfStatus(
+              ? propagateOnSuccessfulCompletion(
                   selectAuthenticationPromptState$,
-                  'Completing',
-                ).pipe(
-                  filter(state => state.success),
-                  take(1),
-                  tap(() => {
-                    propagateAuthSecret(authSecret);
-                  }),
-                  toEmpty,
+                  authSecret,
                 )
               : EMPTY,
-            of(
-              actionCreator(
-                success
-                  ? { success }
-                  : failureReason
-                  ? { success, failureReason }
-                  : { success },
-              ),
-            ),
+            of(actionCreator(payload)),
+          );
+        }),
+        // Arm cancellation before verification resolves. Successful completion
+        // must reach the propagation arm before the accessor wipes its clone.
+        takeUntil(
+          firstStateOfStatus(
+            selectAuthenticationPromptState$,
+            'Completing',
+          ).pipe(
+            take(1),
+            filter(state => !state.success),
           ),
         ),
       ),
-    )) as VerifyAndPropagateAuthSecret;
+    );
 
 export type { VerifyAndPropagateAuthSecret };

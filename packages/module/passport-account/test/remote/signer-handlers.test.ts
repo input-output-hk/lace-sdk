@@ -2,6 +2,7 @@ import {
   AccountCreationPendingError,
   AccountExistsError,
   CeremonyCancelledError,
+  CreationArtefactMismatchError,
   CreationLockMismatchError,
   DeviceRosterInvalidError,
   GrantOriginMissingError,
@@ -10,6 +11,11 @@ import {
   GrantSlot,
   MaintenanceUpdateRefusedError,
 } from '@lace-contract/passport';
+import {
+  accountTallyBundle,
+  TALLY_SET_CIRCUIT,
+  tallyCalledContract,
+} from '@lace-fixture/passport-account-tally';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import * as ledgerV9 from '@midnightntwrk/ledger-v9';
 import { x25519 } from '@noble/curves/ed25519.js';
@@ -17,6 +23,7 @@ import { jubjub } from '@noble/curves/misc.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { pureCircuits } from '../../src/acc/acc-module';
+import { accountBundle } from '../../src/acc/bundle';
 import {
   APPEND_INBOX_CIRCUIT,
   ROTATE_ENC_KEY_CIRCUIT,
@@ -43,9 +50,13 @@ import {
   authorityOf,
   maintenanceUpdateOf,
 } from '../../src/acc/maintenance-authority';
+import { createPassportRegistry } from '../../src/acc/registry';
 import { bytesToBigIntLE, JUBJUB_R, JubjubDevice } from '../../src/acc/signer';
 import { createPasskeyEncryptionKey } from '../../src/ceremony/encryption-key';
-import { MalformedPayloadError } from '../../src/remote/codec';
+import {
+  decodeAuthorisation,
+  MalformedPayloadError,
+} from '../../src/remote/codec';
 import {
   FlowScopeError,
   GrantBindingMismatchError,
@@ -80,7 +91,12 @@ import type * as DeviceReaders from '../../src/acc/device-readers';
 import type { CreatePassportSignerHandlersProps } from '../../src/remote/signer-handlers';
 import type { PassportAccountRecord } from '../../src/store/account-record';
 import type { SealedRecord } from '../../src/store/envelope';
-import type { GrantId, GrantScopeInput } from '@lace-contract/passport';
+import type {
+  AccountBundle,
+  Authorisation,
+  GrantId,
+  GrantScopeInput,
+} from '@lace-contract/passport';
 import type { SignerFlow } from '@lace-lib/passkey';
 
 const scans = vi.hoisted(() => ({ count: 0 }));
@@ -249,8 +265,9 @@ const seedRecord = async ({
 const setupInSession = async (
   flow: SignerFlow = { kind: 'sign-in' },
   dappOrigin?: string,
+  options: Partial<CreatePassportSignerHandlersProps> = {},
 ) => {
-  const context = setup();
+  const context = setup(options);
   await context.handlers['flow-open']({ flow }, dappOrigin);
   return context;
 };
@@ -292,6 +309,62 @@ const createFakeTimers = () => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+const TALLY_ADDRESS = '7a'.repeat(32);
+const OTHER_ADDRESS = '7b'.repeat(32);
+
+/** The account-tally build and the Tally it calls, as a signer pins them beside the default. */
+const tallyBundle = accountTallyBundle({
+  artefactUrl: 'http://artefacts.example.com/account-tally',
+  base: accountBundle,
+});
+const tally = tallyCalledContract({
+  address: TALLY_ADDRESS,
+  artefactUrl: 'http://artefacts.example.com/tally',
+});
+const tallyPins: Partial<CreatePassportSignerHandlersProps> = {
+  registry: createPassportRegistry({
+    bundles: [tallyBundle],
+    calledContracts: [tally],
+  }),
+};
+
+const CALL_TALLY: SignerFlow = {
+  kind: 'call-contract',
+  account: ACCOUNT,
+  bundleId: 'account-tally',
+  circuit: TALLY_SET_CIRCUIT,
+  args: [TALLY_ADDRESS, '42'],
+  callees: [TALLY_ADDRESS],
+};
+
+const contractAddress = (hex: string) => ({
+  bytes: ByteArray.fromHex(HexBytes(hex)),
+});
+
+/** The authorisation the call flow asks for the approved call, as the channel carries it. */
+const tallyAuthorisation = {
+  account: ACCOUNT,
+  circuit: TALLY_SET_CIRCUIT,
+  args: [contractAddress(TALLY_ADDRESS), 42n],
+  witnessValues: [],
+  authNonce: '7',
+  useCounter: '3',
+  bundleId: 'account-tally',
+};
+
+/** Whether a Schnorr authorisation verifies over `challenge` on the jubjub curve. */
+const verifies = (
+  { pk, sigR, sigS }: Authorisation,
+  challenge: Uint8Array,
+): boolean =>
+  jubjub.Point.fromAffine(sigR)
+    .add(jubjub.Point.fromAffine(pk).multiply(bytesToBigIntLE(challenge)))
+    .equals(
+      jubjub.Point.fromAffine(
+        pureCircuits.compute_public_point_with_jubjub(sigS),
+      ),
+    );
 
 describe('createPassportSignerHandlers', () => {
   it('answers the device public key as decimal coordinates', async () => {
@@ -358,6 +431,18 @@ describe('createPassportSignerHandlers', () => {
         y: expect.stringMatching(/^\d+$/) as unknown,
       },
     });
+    await handlers['flow-close'](FLOW_COMPLETED);
+  });
+
+  it('refuses a malformed bundle id on an authorisation', async () => {
+    const { handlers } = await setupInSession(ADD_DEVICE);
+
+    await expect(
+      handlers.authorise(
+        { ...addDeviceAuthorisation, bundleId: 'Account' },
+        DAPP_ORIGIN,
+      ),
+    ).rejects.toThrow(new MalformedPayloadError('bundleId'));
     await handlers['flow-close'](FLOW_COMPLETED);
   });
 
@@ -1402,6 +1487,383 @@ describe('createPassportSignerHandlers', () => {
 
       expect(deviceSecret).not.toHaveBeenCalled();
       await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it.each<[string, Partial<SignerFlow>, string]>([
+      [
+        'an operation outside the roster of its bundle',
+        { operations: [TALLY_SET_CIRCUIT] },
+        'operations[0]',
+      ],
+      [
+        'an operation outside the roster of a pinned bundle',
+        { bundleId: 'account-tally', operations: ['recover_submit'] },
+        'operations[0]',
+      ],
+      [
+        'a bundle this signer does not pin',
+        { bundleId: 'account-dex' },
+        'bundleId',
+      ],
+    ])(
+      'refuses to open a session for an install naming %s, before any ceremony',
+      async (_case, carried, field) => {
+        const { get, handlers } = setup(tallyPins);
+
+        await expect(
+          handlers['flow-open'](
+            { flow: { ...INSTALL_OPERATIONS, ...carried } },
+            DAPP_ORIGIN,
+          ),
+        ).rejects.toThrow(
+          new FlowScopeError('install-operations', { descriptor: field }),
+        );
+        expect(get).not.toHaveBeenCalled();
+        await expect(
+          handlers['reader-public-key']({ networkId: NETWORK_ID }),
+        ).rejects.toThrow(new KeySessionRequiredError('reader-public-key'));
+      },
+    );
+
+    it('opens a session for an install of an operation a pinned bundle adds to the roster', async () => {
+      const { handlers } = setup(tallyPins);
+
+      await handlers['flow-open'](
+        {
+          flow: {
+            ...INSTALL_OPERATIONS,
+            bundleId: 'account-tally',
+            operations: [TALLY_SET_CIRCUIT],
+          },
+        },
+        DAPP_ORIGIN,
+      );
+      await expect(
+        handlers['reader-public-key']({ networkId: NETWORK_ID }),
+      ).resolves.toEqual(expect.any(String));
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+  });
+
+  describe('create-account flow from a bundle', () => {
+    it.each<[string, Partial<SignerFlow>, string]>([
+      [
+        'a bundle this signer does not pin',
+        { bundleId: 'account-dex' },
+        'bundleId',
+      ],
+      [
+        'constructor arguments its bundle does not declare',
+        { bundleId: 'account-tally', constructorArgs: ['7'] },
+        'constructorArgs',
+      ],
+      [
+        'constructor arguments the default bundle does not declare',
+        { constructorArgs: ['7'] },
+        'constructorArgs',
+      ],
+    ])(
+      'refuses to open a session for a creation naming %s, before any ceremony',
+      async (_case, carried, field) => {
+        const { get, handlers } = setup(tallyPins);
+
+        await expect(
+          handlers['flow-open'](
+            { flow: { ...CREATE_ACCOUNT, ...carried } },
+            DAPP_ORIGIN,
+          ),
+        ).rejects.toThrow(
+          new FlowScopeError('create-account', { descriptor: field }),
+        );
+        expect(get).not.toHaveBeenCalled();
+      },
+    );
+
+    it('opens a session for a creation from a pinned bundle, or from the default by name', async () => {
+      for (const carried of [
+        { bundleId: 'account-tally', constructorArgs: [] },
+        { bundleId: 'account' },
+      ]) {
+        const { handlers } = setup(tallyPins);
+        await handlers['flow-open'](
+          { flow: { ...CREATE_ACCOUNT, ...carried } },
+          DAPP_ORIGIN,
+        );
+        await expect(handlers['record-read']({}, DAPP_ORIGIN)).resolves.toBe(
+          undefined,
+        );
+        await handlers['flow-close'](FLOW_COMPLETED);
+      }
+    });
+  });
+
+  describe('call-contract flow', () => {
+    it.each<[string, Partial<SignerFlow>, string]>([
+      [
+        'a bundle this signer does not pin',
+        { bundleId: 'account-dex' },
+        'bundleId',
+      ],
+      [
+        'a circuit its bundle does not describe',
+        { circuit: 'tally_get_with_jubjub' },
+        'circuit',
+      ],
+      [
+        'a value outside its argument',
+        { args: [TALLY_ADDRESS, '18446744073709551616'] },
+        'args',
+      ],
+      [
+        'fewer values than the circuit takes',
+        { args: [TALLY_ADDRESS] },
+        'args',
+      ],
+      ['no callee for its contract argument', { callees: [] }, 'callees'],
+      [
+        'a callee its contract arguments do not name',
+        { callees: [OTHER_ADDRESS] },
+        'callees',
+      ],
+      [
+        'a callee this signer does not pin',
+        { args: [OTHER_ADDRESS, '42'], callees: [OTHER_ADDRESS] },
+        'callees',
+      ],
+    ])(
+      'refuses to open a session for a call naming %s, before any ceremony',
+      async (_case, carried, field) => {
+        const { get, handlers, keySource } = setup(tallyPins);
+        const deviceSecret = vi.spyOn(keySource, 'deviceSecret');
+
+        await expect(
+          handlers['flow-open'](
+            { flow: { ...CALL_TALLY, ...carried } },
+            DAPP_ORIGIN,
+          ),
+        ).rejects.toThrow(
+          new FlowScopeError('call-contract', { descriptor: field }),
+        );
+        await expect(
+          handlers.authorise(tallyAuthorisation, DAPP_ORIGIN),
+        ).rejects.toThrow(new KeySessionRequiredError('authorise'));
+        expect(deviceSecret).not.toHaveBeenCalled();
+        expect(get).not.toHaveBeenCalled();
+      },
+    );
+
+    it('refuses a call on a signer pinning the default bundle alone, and one whose callee is pinned under another interface', async () => {
+      const { handlers: unpinned } = setup();
+      await expect(
+        unpinned['flow-open']({ flow: CALL_TALLY }, DAPP_ORIGIN),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', { descriptor: 'bundleId' }),
+      );
+
+      const { handlers } = setup({
+        registry: createPassportRegistry({
+          bundles: [tallyBundle],
+          calledContracts: [{ ...tally, interface: 'Counter' }],
+        }),
+      });
+      await expect(
+        handlers['flow-open']({ flow: CALL_TALLY }, DAPP_ORIGIN),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', { descriptor: 'callees' }),
+      );
+    });
+
+    it('serves the described circuit alone and holds the authorisation to the approved account, bundle and arguments', async () => {
+      const { handlers, keySource } = await setupInSession(
+        CALL_TALLY,
+        DAPP_ORIGIN,
+        tallyPins,
+      );
+      const deviceSecret = vi.spyOn(keySource, 'deviceSecret');
+
+      await expect(
+        handlers['reader-public-key']({ networkId: NETWORK_ID }),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', { kind: 'reader-public-key' }),
+      );
+      await expect(
+        handlers.authorise(addDeviceAuthorisation, DAPP_ORIGIN),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', {
+          circuit: 'add_device_with_jubjub',
+        }),
+      );
+      for (const [strayed, argument] of [
+        [{ account: 'ac'.repeat(32) }, 'account'],
+        [{ bundleId: 'account' }, 'bundleId'],
+        [{ bundleId: undefined }, 'bundleId'],
+        [{ args: tallyAuthorisation.args.slice(0, 1) }, 'args'],
+        [{ args: [contractAddress(OTHER_ADDRESS), 42n] }, 'args[0]'],
+        [{ args: [contractAddress(TALLY_ADDRESS), 43n] }, 'args[1]'],
+        [{ args: [contractAddress(TALLY_ADDRESS), '42'] }, 'args[1]'],
+      ] as const) {
+        await expect(
+          handlers.authorise(
+            { ...tallyAuthorisation, ...strayed } as Parameters<
+              Handlers['authorise']
+            >[0],
+            DAPP_ORIGIN,
+          ),
+        ).rejects.toThrow(new FlowScopeError('call-contract', { argument }));
+      }
+      expect(deviceSecret).not.toHaveBeenCalled();
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it('holds a bool and a bytes32 argument of the approved call value for value, before the key source is touched', async () => {
+      const FLAG_CIRCUIT = 'flag_set_with_jubjub';
+      const DIGEST = '5e'.repeat(32);
+      const flagBundle: AccountBundle = {
+        ...tallyBundle,
+        id: 'account-flag',
+        operations: [...accountBundle.operations, FLAG_CIRCUIT],
+        verifierKeys: {
+          ...accountBundle.verifierKeys,
+          [FLAG_CIRCUIT]: 'ee'.repeat(32),
+        },
+        circuits: {
+          [FLAG_CIRCUIT]: {
+            label: 'Set a flag',
+            args: [
+              { name: 'digest', label: 'Digest', type: 'bytes32' },
+              { name: 'final', label: 'Final', type: 'bool' },
+            ],
+            challenge: 'challenge_flag_set_with_jubjub',
+            challengeArgs: ['digest', 'final'],
+            witnesses: [],
+          },
+        },
+      };
+      const { handlers, keySource } = await setupInSession(
+        {
+          kind: 'call-contract',
+          account: ACCOUNT,
+          bundleId: flagBundle.id,
+          circuit: FLAG_CIRCUIT,
+          args: [DIGEST, 'true'],
+          callees: [],
+        },
+        DAPP_ORIGIN,
+        { registry: createPassportRegistry({ bundles: [flagBundle] }) },
+      );
+      const deviceSecret = vi.spyOn(keySource, 'deviceSecret');
+      const approved = {
+        ...tallyAuthorisation,
+        circuit: FLAG_CIRCUIT,
+        bundleId: flagBundle.id,
+        args: [ByteArray.fromHex(HexBytes(DIGEST)), true],
+      };
+
+      await expect(
+        handlers.authorise(
+          { ...approved, args: [approved.args[0], false] },
+          DAPP_ORIGIN,
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', { argument: 'args[1]' }),
+      );
+      await expect(
+        handlers.authorise(
+          {
+            ...approved,
+            args: [ByteArray.fromHex(HexBytes('5f'.repeat(32))), true],
+          },
+          DAPP_ORIGIN,
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', { argument: 'args[0]' }),
+      );
+      expect(deviceSecret).not.toHaveBeenCalled();
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it('signs the approved call over the challenge the bundle module builds for the circuit', async () => {
+      const { handlers } = await setupInSession(
+        CALL_TALLY,
+        DAPP_ORIGIN,
+        tallyPins,
+      );
+
+      const authorisation = decodeAuthorisation(
+        await handlers.authorise(tallyAuthorisation, DAPP_ORIGIN),
+        'authorisation',
+      );
+
+      const { pureCircuits: tallyCircuits } = await tallyBundle.module();
+      const challengeTallySet =
+        tallyCircuits.challenge_tally_set_with_jubjub as (
+          ...values: unknown[]
+        ) => Uint8Array;
+      const challenge = challengeTallySet(
+        contractAddress(ACCOUNT),
+        authorisation.sigR,
+        authorisation.pk,
+        contractAddress(TALLY_ADDRESS),
+        42n,
+        7n,
+        authorisation.grindNonce,
+      );
+      expect(authorisation.pk).toEqual(referenceDevice().pk);
+      expect(authorisation.useCounter).toBe(3n);
+      expect(verifies(authorisation, challenge)).toBe(true);
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it('signs the approved call once: a second authorisation under the approval is refused before the key source is touched again', async () => {
+      const { handlers, keySource } = await setupInSession(
+        CALL_TALLY,
+        DAPP_ORIGIN,
+        tallyPins,
+      );
+      const deviceSecret = vi.spyOn(keySource, 'deviceSecret');
+
+      await expect(
+        handlers.authorise(tallyAuthorisation, DAPP_ORIGIN),
+      ).resolves.toMatchObject({ scheme: 'jubjub-schnorr' });
+      await expect(
+        handlers.authorise(
+          { ...tallyAuthorisation, authNonce: '8', useCounter: '4' },
+          DAPP_ORIGIN,
+        ),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', { argument: 'call' }),
+      );
+      expect(deviceSecret).toHaveBeenCalledOnce();
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it('refuses to open a session for a call to a circuit that reads a witness, before any ceremony', async () => {
+      const reading: AccountBundle = {
+        ...tallyBundle,
+        circuits: {
+          [TALLY_SET_CIRCUIT]: {
+            ...tallyBundle.circuits[TALLY_SET_CIRCUIT],
+            witnesses: [{ name: 'held_coin', label: 'Coin' }],
+          },
+        },
+      };
+      const { handlers, keySource } = setup({
+        registry: createPassportRegistry({
+          bundles: [reading],
+          calledContracts: [tally],
+        }),
+      });
+      const deviceSecret = vi.spyOn(keySource, 'deviceSecret');
+
+      await expect(
+        handlers['flow-open']({ flow: CALL_TALLY }, DAPP_ORIGIN),
+      ).rejects.toThrow(
+        new FlowScopeError('call-contract', { descriptor: 'witnesses' }),
+      );
+      await expect(
+        handlers.authorise(tallyAuthorisation, DAPP_ORIGIN),
+      ).rejects.toThrow(new KeySessionRequiredError('authorise'));
+      expect(deviceSecret).not.toHaveBeenCalled();
     });
   });
 
@@ -3178,6 +3640,7 @@ describe('account key sessions', () => {
           ...replace,
           changes: {
             kind: 'insert-verifier-keys',
+            bundleId: 'account',
             inserts: [{ operation: 'withdraw_unshielded', verifierKey: '01' }],
           },
         }),
@@ -3496,6 +3959,7 @@ describe('account key sessions', () => {
         counter: '3',
         changes: {
           kind: 'insert-verifier-keys' as const,
+          bundleId: 'account',
           inserts: operations.map(operation => ({
             operation,
             verifierKey: '01'.repeat(16),
@@ -3508,6 +3972,25 @@ describe('account key sessions', () => {
       ).rejects.toThrow(
         new FlowScopeError('install-operations', {
           argument: 'changes.inserts[0]',
+        }),
+      );
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...insertOf('withdraw_unshielded_with_grant_k256'),
+          changes: {
+            kind: 'insert-verifier-keys',
+            bundleId: 'account-tally',
+            inserts: [
+              {
+                operation: 'withdraw_unshielded_with_grant_k256',
+                verifierKey: '01'.repeat(16),
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(
+        new FlowScopeError('install-operations', {
+          argument: 'changes.bundleId',
         }),
       );
       await expect(
@@ -3551,6 +4034,59 @@ describe('account key sessions', () => {
         handlers['sign-maintenance-update'](
           insertOf('withdraw_unshielded_with_grant_k256'),
         ),
+      ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
+
+      expect(deriveSecret).not.toHaveBeenCalled();
+      await handlers['flow-close'](FLOW_COMPLETED);
+    });
+
+    it('holds an install of a pinned bundle to inserts under that bundle, refusing a request naming another before any key is touched', async () => {
+      const { handlers, keySource } = setup(tallyPins);
+      const keys = await drawAccountKeys(handlers);
+      await handlers['flow-open'](
+        {
+          flow: {
+            kind: 'install-operations',
+            account: ACCOUNT,
+            bundleId: 'account-tally',
+            operations: [TALLY_SET_CIRCUIT],
+          },
+        },
+        DAPP_ORIGIN,
+      );
+      const deriveSecret = vi.spyOn(keySource, 'deriveSecret');
+      const insertUnder = (bundleId: string) => ({
+        networkId: NETWORK_ID,
+        keyring: keyringOf(keys),
+        authority: keys.authority,
+        counter: '3',
+        changes: {
+          kind: 'insert-verifier-keys' as const,
+          bundleId,
+          inserts: [
+            { operation: TALLY_SET_CIRCUIT, verifierKey: '01'.repeat(16) },
+          ],
+        },
+      });
+
+      await expect(
+        handlers['sign-maintenance-update'](insertUnder('account')),
+      ).rejects.toThrow(
+        new FlowScopeError('install-operations', {
+          argument: 'changes.bundleId',
+        }),
+      );
+      await expect(
+        handlers['sign-maintenance-update']({
+          ...insertUnder('account-tally'),
+          changes: {
+            ...insertUnder('account-tally').changes,
+            bundleId: 'Account-Tally',
+          },
+        }),
+      ).rejects.toThrow(new MalformedPayloadError('changes.bundleId'));
+      await expect(
+        handlers['sign-maintenance-update'](insertUnder('account-tally')),
       ).rejects.toBeInstanceOf(MaintenanceUpdateRefusedError);
 
       expect(deriveSecret).not.toHaveBeenCalled();
@@ -5111,6 +5647,57 @@ describe('record guards', () => {
     await expect(
       handlers['record-write']({ record }, DAPP_ORIGIN),
     ).rejects.toThrow(refused);
+    await handlers['flow-close'](FLOW_COMPLETED);
+
+    await expect(handlers['record-exists']({})).resolves.toBe('pending');
+  });
+
+  it('holds a resumed creation to the bundle and constructor arguments it was started from', async () => {
+    const { handlers } = setup(tallyPins);
+    const seeded = await seedPending(handlers);
+
+    await handlers['flow-open'](
+      { flow: { ...CREATE_ACCOUNT, bundleId: 'account-tally' } },
+      DAPP_ORIGIN,
+    );
+    await expect(handlers['record-read']({}, DAPP_ORIGIN)).rejects.toThrow(
+      new CreationArtefactMismatchError(
+        "The unfinished Passport account creation was started from account bundle 'account' with its recorded constructor arguments; resume it from the same bundle with the same arguments.",
+      ),
+    );
+    await expect(
+      handlers['record-write']({ record: seeded }, DAPP_ORIGIN),
+    ).rejects.toThrow(
+      new FlowScopeError('create-account', { argument: 'bundleId' }),
+    );
+    await handlers['flow-close'](FLOW_COMPLETED);
+
+    await expect(readAsCreation(handlers)).resolves.toEqual(seeded);
+  });
+
+  it('writes a first pending record only from the bundle, with the constructor arguments, the descriptor names', async () => {
+    const { handlers } = setup(tallyPins);
+    const keys = await openCreation(handlers);
+    const drawn = { ...deployment, handoverAuthority: keys.authority };
+    const refused = new FlowScopeError('create-account', {
+      argument: 'record.deployment.bundleId',
+    });
+
+    for (const build of [
+      { bundleId: 'account-tally' },
+      { constructorArgs: ['7'] },
+    ]) {
+      await expect(
+        handlers['record-write'](
+          { record: { ...record, deployment: { ...drawn, ...build } } },
+          DAPP_ORIGIN,
+        ),
+      ).rejects.toThrow(refused);
+    }
+    await handlers['record-write'](
+      { record: { ...record, deployment: { ...drawn, bundleId: 'account' } } },
+      DAPP_ORIGIN,
+    );
     await handlers['flow-close'](FLOW_COMPLETED);
 
     await expect(handlers['record-exists']({})).resolves.toBe('pending');

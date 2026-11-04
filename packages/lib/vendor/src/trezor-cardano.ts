@@ -1,25 +1,32 @@
 /**
- * `@lace-lib/vendor/trezor-cardano` — the Trezor Cardano SIGNING tree
- * (`@cardano-sdk/hardware-trezor`), a HEAVY co-load group
- * ([ADR 37](../../../../docs/adr/37-host-supply-chain-isolation.md), ADR 37 ).
+ * `@lace-lib/vendor/trezor-cardano` — the Trezor Cardano SIGNING tree, our own
+ * port (`@lace-lib/cardano-hardware-trezor`), a HEAVY co-load group
+ * ([ADR 37](../../../../docs/adr/37-host-supply-chain-isolation.md)).
  *
  * CONSUMER: the Cardano Trezor signer surface (`surfaces/trezor-signer.ts`),
  * which constructs a `TrezorKeyAgent` over the paired device's xpub and runs the
- * SDK's tx→device signing. The chain-agnostic Connect runtime is the SEPARATE
+ * port's tx→device signing. The chain-agnostic Connect runtime is the SEPARATE
  * `/trezor-connect` entry (this tree's internal `@trezor/connect-web` import is
  * build-aliased to the SAME webextension copy the split hoists per document, so
  * the agent's Connect singleton is the one the surface init/dispose reach).
  *
- * ONE entry for the whole signing interop: besides `TrezorKeyAgent` itself, the
- * signer constructs the agent from `@cardano-sdk/crypto` (`Bip32PublicKeyHex`,
- * `SodiumBip32Ed25519`) and `@cardano-sdk/key-management` (`CommunicationType`,
- * `KeyPurpose`, the `SignTransactionContext` type), so those interop symbols are
- * re-exported HERE — the surface consumes a single vendor entry instead of four
- * direct `@cardano-sdk` / `@trezor` dynamic imports. With `splitting: true` these
- * dedupe into shared chunks with `/index`, so there is one `@cardano-sdk` copy
- * per document (the ADR 37 point).
+ * ONE entry for the whole signing interop, typed in the ported domain layer:
+ * the agent plus the crypto / key-management symbols the signer constructs it
+ * from, and the `Serialization` codec the signer reads the transaction body's
+ * CBOR with. The build resolves the port's `@lace-lib/cardano-*` imports to
+ * the `@cardano-sdk/*` copies `/index` already carries, so a document still
+ * holds ONE domain-layer copy (the ADR 37 point) while these declarations stay
+ * the port's own.
  */
-export { TrezorKeyAgent } from '@cardano-sdk/hardware-trezor';
-export { Bip32PublicKeyHex, SodiumBip32Ed25519 } from '@cardano-sdk/crypto';
-export { CommunicationType, KeyPurpose } from '@cardano-sdk/key-management';
-export type { SignTransactionContext } from '@cardano-sdk/key-management';
+export { TrezorKeyAgent } from '@lace-lib/cardano-hardware-trezor';
+export { Cardano, Serialization } from '@lace-lib/cardano-core';
+export {
+  Bip32PublicKeyHex,
+  SodiumBip32Ed25519,
+} from '@lace-lib/cardano-crypto';
+export {
+  CommunicationType,
+  KeyPurpose,
+} from '@lace-lib/cardano-key-management';
+export type { SignTransactionContext } from '@lace-lib/cardano-key-management';
+export { HexBlob } from '@lace-lib/cardano-util';

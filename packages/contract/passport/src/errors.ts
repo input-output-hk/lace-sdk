@@ -578,3 +578,90 @@ export class OperationNotInstallableError extends CustomError {
     super(message);
   }
 }
+
+/**
+ * Thrown when an account's build is not registered: the verifier keys the
+ * account holds on chain are covered by no bundle the module was created
+ * with, or a bundle is named by an id none carries. No flow can prove a
+ * call to an account of a build the host does not carry. The message
+ * names the operations no bundle covers, or the id.
+ */
+export class AccountBundleUnknownError extends CustomError {
+  public readonly code = 'account-bundle-unknown' as const;
+
+  public constructor(
+    message = 'No registered account bundle covers the account.',
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when a value given for an argument of a bundle circuit or
+ * constructor does not fit the argument's descriptor: a value for no
+ * declared argument or a declared argument without one, hex that is not
+ * 32 bytes, a contract address that is not 64 hex characters, an integer
+ * that is not decimal or exceeds the declared bound, or a boolean other
+ * than `true` or `false`. Raised before any prompt, naming the argument.
+ */
+export class CallArgumentInvalidError extends CustomError {
+  public readonly code = 'call-argument-invalid' as const;
+
+  public constructor(
+    message = 'An argument does not fit the descriptor of its circuit.',
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when a contract argument names an address no registered called
+ * contract has, or one registered under another
+ * interface than the argument declares. An account only calls contracts
+ * the host registered, so the call is refused before any prompt.
+ */
+export class CalledContractNotRegisteredError extends CustomError {
+  public readonly code = 'called-contract-not-registered' as const;
+
+  public constructor(
+    message = 'The contract named is not registered as a called contract of the network.',
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when a bundle the module is created with breaks a registry rule:
+ * an id taken or malformed, a descriptor naming a circuit outside the
+ * bundle's roster or a challenge argument the circuit lacks, a derived
+ * argument naming no contract argument or placed where a caller supplies
+ * one, an integer argument bounded by anything but a decimal string, or
+ * an operation without a verifier key pin. Raised when the
+ * registry is built, naming the bundle and the rule, so a misregistered
+ * build never reaches a flow.
+ */
+export class AccountBundleInvalidError extends CustomError {
+  public readonly code = 'account-bundle-invalid' as const;
+
+  public constructor(message = 'The account bundle breaks a registry rule.') {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when a call names a circuit that is neither one of the module's
+ * own nor described by the bundle the call names, or whose descriptor
+ * names a challenge pure circuit its module lacks or a challenge argument
+ * the call has no value for. A flow refuses an undescribed circuit before
+ * any prompt and the other two when it builds the authorisation, before
+ * anything is signed; the error names the circuit.
+ */
+export class CircuitNotRegisteredError extends CustomError {
+  public readonly code = 'circuit-not-registered' as const;
+
+  public constructor(
+    message = 'No registered account bundle describes the circuit.',
+  ) {
+    super(message);
+  }
+}

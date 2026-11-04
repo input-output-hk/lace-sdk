@@ -1,6 +1,6 @@
 import { Cardano } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { isNotNil } from '@lace-lib/util/common';
+import { isNotNil } from '@lace-lib/cardano-util';
 import isEqual from 'lodash/isEqual.js';
 import uniqBy from 'lodash/uniqBy.js';
 import uniqWith from 'lodash/uniqWith.js';

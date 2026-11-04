@@ -13,6 +13,7 @@ import { HexBytes } from '@lace-lib/util';
 import { x25519 } from '@noble/curves/ed25519.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createBundleRegistry } from '../../src/acc/bundle';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import { deviceEntryOf } from '../../src/acc/device-readers';
@@ -47,6 +48,7 @@ import { AccountSim } from './account-sim';
 import type * as GatedCall from '../../src/acc/gated-call';
 import type { GatedContractHandle } from '../../src/acc/gated-call';
 import type * as Inbox from '../../src/acc/inbox';
+import type * as AccountCall from '../../src/flows/account-call';
 import type {
   AccountRecords,
   FlowAccountState,
@@ -93,6 +95,22 @@ vi.mock('../../src/infra/indexer', () => ({
     }),
   }),
 }));
+vi.mock('../../src/flows/account-call', async importOriginal => {
+  const { expectedVk } = await import('../../src/acc/acc-module');
+  return {
+    ...(await importOriginal<typeof AccountCall>()),
+    queryAccountVerifierKeys: async () =>
+      new Map(
+        simulated()
+          .contractState()
+          .operations()
+          .flatMap(operation => {
+            const hash = expectedVk[operation];
+            return hash ? [[operation, hash] as const] : [];
+          }),
+      ),
+  };
+});
 vi.mock('../../src/infra/providers', () => ({
   createMidnightProviders: async () => ({}),
 }));
@@ -184,6 +202,7 @@ const contextOver = (
     accountRecords,
     onProgress: vi.fn(),
     rpId: 'lace.io',
+    bundles: createBundleRegistry(),
   };
   return {
     context,

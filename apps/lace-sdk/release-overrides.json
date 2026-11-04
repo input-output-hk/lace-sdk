@@ -98,5 +98,100 @@
     "version": "0.1.1",
     "export": "index:m",
     "reason": "Its declaration imports the key-management and tx-construction types (KeyRole, AddressType, AccountKeyDerivationPath, GroupedAddress, Bip32AccountDependencies, TxEvaluator, TxEvaluationResult) from @laceio/cardano instead of carrying copies of them; the shapes are unchanged, and the enums are now the ones @laceio/cardano exports."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:CardanoContextObservables",
+    "reason": "Referenced Cardano store types gain wallet-reset actions and reset-operation and blocked-reason selectors. Existing action payloads, selector call and resultFunc signatures, state fields, and wallet construction parameters are unchanged. Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:WalletWithCardanoSigning",
+    "reason": "Referenced Cardano store types gain wallet-reset actions and reset-operation and blocked-reason selectors. Existing action payloads, selector call and resultFunc signatures, state fields, and wallet construction parameters are unchanged. Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:m",
+    "reason": "Referenced Cardano store types gain wallet-reset actions and reset-operation and blocked-reason selectors. Existing action payloads, selector call and resultFunc signatures, state fields, and wallet construction parameters are unchanged. Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:CardanoContextObservables",
+    "reason": "Referenced Cardano store types gain wallet-reset actions and reset-operation and blocked-reason selectors. Existing action payloads, selector call and resultFunc signatures, state fields, and wallet construction parameters are unchanged."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:WalletWithCardanoSigning",
+    "reason": "Referenced Cardano store types gain wallet-reset actions and reset-operation and blocked-reason selectors. Existing action payloads, selector call and resultFunc signatures, state fields, and wallet construction parameters are unchanged."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:m",
+    "reason": "Referenced Cardano store types gain wallet-reset actions and reset-operation and blocked-reason selectors. Existing action payloads, selector call and resultFunc signatures, state fields, and wallet construction parameters are unchanged."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:CreateLaceWalletProps",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:LaceWallet",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:WalletWithCardanoContext",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:createLaceWallet",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:createLazyInMemoryVaultModule",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:createPasskeyVaultModule",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "cardano:createRemoteCardanoVaultModule",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:ActivityDetailsContentProps",
+    "reason": "Gains the optional `activityState` prop, the activity's entry of the blockchain's `ActivityStates`; existing content components keep rendering without it."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:BlockfrostNetworkInfoProvider",
+    "reason": "Its declaration references the Cardano provider types, which gained `getAssetTransactionHistory` and an optional `maxPages` on `getUtxosAtAddress`, so the Hydra Head index can list a head's history and bound a listing; the calls that existed take the same arguments and give the same results."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:BlockfrostTxProvider",
+    "reason": "Its declaration references the Cardano provider types, which gained `getAssetTransactionHistory` and an optional `maxPages` on `getUtxosAtAddress`, so the Hydra Head index can list a head's history and bound a listing; the calls that existed take the same arguments and give the same results."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:BlockfrostTxSubmitProvider",
+    "reason": "Its declaration references the Cardano provider types, which gained `getAssetTransactionHistory` and an optional `maxPages` on `getUtxosAtAddress`, so the Hydra Head index can list a head's history and bound a listing; the calls that existed take the same arguments and give the same results."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:BlockfrostUtxoProvider",
+    "reason": "Its declaration references the Cardano provider types, which gained `getAssetTransactionHistory` and an optional `maxPages` on `getUtxosAtAddress`, so the Hydra Head index can list a head's history and bound a listing; the calls that existed take the same arguments and give the same results."
+  },
+  {
+    "version": "0.1.2",
+    "export": "index:SideEffectDependencies",
+    "reason": "Its declaration references the Cardano context and activities types, which gained the optional `ActivityStates` hook (`selectActivityStates`, `activityState`), the optional `maxPages` listing bound, `getAssetTransactionHistory` and the empty stable extension metadata of a transaction; nothing a caller passes or reads changed shape. The Cardano token metadata it carries gains an optional metadataSources field recording on-chain and token-registry sources. Existing metadata values without the field remain valid, and existing callers can ignore it; provenance does not imply authenticity verification."
   }
 ]

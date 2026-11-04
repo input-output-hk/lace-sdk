@@ -4,12 +4,21 @@
  * repository, src/wallet/signer.ts) over the same fixed scalar, address,
  * epoch, and counter.
  */
-import { AccAddress, DeviceEpoch, UseCounter } from '@lace-contract/passport';
+import {
+  AccAddress,
+  AccBindingVersion,
+  AccountBundleUnknownError,
+  CircuitNotRegisteredError,
+  DeviceEpoch,
+  UseCounter,
+} from '@lace-contract/passport';
 import { HexBytes } from '@lace-lib/util';
-import { describe, expect, it } from 'vitest';
+import { jubjub } from '@noble/curves/misc.js';
+import { describe, expect, it, vi } from 'vitest';
 
-import { UnknownCircuitError } from '../../src/acc/artefact-loader';
+import { expectedVk, pureCircuits } from '../../src/acc/acc-module';
 import { jubjubChallenges } from '../../src/acc/challenges';
+import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 import {
   ISSUE_GRANT_CIRCUIT,
@@ -17,9 +26,15 @@ import {
   REVOKE_GRANT_CIRCUIT,
 } from '../../src/acc/grant-circuits';
 import { issueGrantBinding, scopeArgs } from '../../src/acc/grants';
+import { accManifest } from '../../src/acc/manifest';
+import { createPassportRegistry } from '../../src/acc/registry';
 import { bytesToBigIntLE, JUBJUB_R } from '../../src/acc/signer';
 
-import type { AuthorisationRequest } from '@lace-contract/passport';
+import type {
+  AccountBundle,
+  Authorisation,
+  AuthorisationRequest,
+} from '@lace-contract/passport';
 
 const SK = BigInt(
   '0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
@@ -73,6 +88,77 @@ const addDeviceRequest: AuthorisationRequest = {
   authNonce: 7n,
   useCounter: UseCounter(3n),
 };
+
+const TALLY_CIRCUIT = 'tally_set_with_jubjub';
+const TALLY_CHALLENGE = 'challenge_tally_set_with_jubjub';
+const TALLY_ADDRESS = { bytes: new Uint8Array(32).fill(0x21) };
+/** A fixed challenge whose little-endian value is below JUBJUB_R, so the grind ends at once. */
+const TALLY_CHALLENGE_BYTES = Uint8Array.from({ length: 32 }, (_, index) =>
+  index === 31 ? 0 : 0x33,
+);
+
+const tallySetRequest: AuthorisationRequest = {
+  ...addDeviceRequest,
+  circuit: TALLY_CIRCUIT,
+  args: [TALLY_ADDRESS, TALLY_ADDRESS, 5n],
+  bundleId: 'account-tally',
+};
+
+/**
+ * A build of the account with one circuit calling a tally, whose module
+ * records the arguments its challenge pure circuit is handed and answers
+ * a fixed challenge.
+ */
+const tallyBundle = (circuits: Record<string, unknown>): AccountBundle => ({
+  id: 'account-tally',
+  bindingVersion: AccBindingVersion('0.1.0-tally.1'),
+  module: async () => ({
+    Contract: class {},
+    ledger: () => ({}),
+    pureCircuits: circuits,
+    expectedVk: { ...expectedVk, [TALLY_CIRCUIT]: 'aa'.repeat(32) },
+    circuitSignatures: {},
+    declaredInterfaces: {},
+  }),
+  manifest: {
+    ...accManifest,
+    bindingVersion: AccBindingVersion('0.1.0-tally.1'),
+  },
+  operations: [...DEPLOYED_OPERATIONS, TALLY_CIRCUIT],
+  verifierKeys: { ...expectedVk, [TALLY_CIRCUIT]: 'aa'.repeat(32) },
+  constructorArgs: [],
+  circuits: {
+    [TALLY_CIRCUIT]: {
+      label: 'Set the tally',
+      args: [
+        { name: 'tally', label: 'Tally', type: 'contract', interface: 'Tally' },
+        { name: 'tally_addr', type: 'contract-address', of: 'tally' },
+        {
+          name: 'value',
+          label: 'Value',
+          type: 'uint',
+          maxval: '18446744073709551615',
+        },
+      ],
+      challenge: TALLY_CHALLENGE,
+      challengeArgs: ['tally_addr', 'value'],
+      witnesses: [],
+    },
+  },
+});
+
+/** Schnorr verification of the signature over `challenge`: s * G = R + c * pk. */
+const verifies = (
+  { pk, sigR, sigS }: Authorisation,
+  challenge: Uint8Array,
+): boolean =>
+  jubjub.Point.fromAffine(sigR)
+    .add(jubjub.Point.fromAffine(pk).multiply(bytesToBigIntLE(challenge)))
+    .equals(
+      jubjub.Point.fromAffine(
+        pureCircuits.compute_public_point_with_jubjub(sigS),
+      ),
+    );
 
 describe('devJubjubAuthoriser', () => {
   const authoriser = devJubjubAuthoriser(SK);
@@ -223,15 +309,133 @@ describe('devJubjubAuthoriser', () => {
     ).rejects.toThrow(/scope arguments/);
   });
 
-  it('rejects circuits without a challenge builder', async () => {
+  it('rejects circuits without a challenge builder that name no bundle', async () => {
     for (const circuit of [
       'activate_initial_device_with_jubjub',
       'withdraw_unshielded_with_jubjub',
     ]) {
       await expect(
         authoriser.authorise({ ...addDeviceRequest, circuit }),
-      ).rejects.toThrow(UnknownCircuitError);
+      ).rejects.toThrow(CircuitNotRegisteredError);
     }
+  });
+
+  it('signs a descriptor circuit over the challenge the bundle module builds from the address, key, challenge arguments and nonces', async () => {
+    const challenge = vi.fn(() => TALLY_CHALLENGE_BYTES);
+    const withTally = devJubjubAuthoriser(
+      SK,
+      createPassportRegistry({
+        bundles: [tallyBundle({ [TALLY_CHALLENGE]: challenge })],
+      }),
+    );
+
+    const authorisation = await withTally.authorise(tallySetRequest);
+
+    expect(authorisation.pk).toEqual({ x: EXPECTED_PK_X, y: EXPECTED_PK_Y });
+    expect(authorisation.useCounter).toBe(3n);
+    expect(authorisation.grindNonce).toBe(0n);
+    expect(challenge).toHaveBeenCalledExactlyOnceWith(
+      { bytes: CONTRACT_ADDRESS },
+      authorisation.sigR,
+      authorisation.pk,
+      TALLY_ADDRESS,
+      5n,
+      7n,
+      0n,
+    );
+    expect(verifies(authorisation, TALLY_CHALLENGE_BYTES)).toBe(true);
+    expect(
+      verifies(authorisation, new Uint8Array(32).fill(0x44).fill(0, 31)),
+    ).toBe(false);
+  });
+
+  it('still signs the module circuits over their fixed builders when a bundle is registered', async () => {
+    const withTally = devJubjubAuthoriser(
+      SK,
+      createPassportRegistry({ bundles: [tallyBundle({})] }),
+    );
+
+    const authorisation = await withTally.authorise({
+      ...addDeviceRequest,
+      bundleId: 'account-tally',
+    });
+
+    const builder = jubjubChallenges.addDevice(
+      { contractAddress: CONTRACT_ADDRESS, authNonce: 7n },
+      authorisation.pk,
+      NEW_ENTRY,
+    );
+    expect(
+      verifies(
+        authorisation,
+        builder(authorisation.sigR, authorisation.grindNonce),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a descriptor circuit whose request names no bundle', async () => {
+    const withTally = devJubjubAuthoriser(
+      SK,
+      createPassportRegistry({ bundles: [tallyBundle({})] }),
+    );
+
+    await expect(
+      withTally.authorise({ ...tallySetRequest, bundleId: undefined }),
+    ).rejects.toThrow(CircuitNotRegisteredError);
+    await expect(
+      withTally.authorise({ ...tallySetRequest, bundleId: undefined }),
+    ).rejects.toThrow(
+      `Circuit ${TALLY_CIRCUIT} is not one of the module's own and names no account bundle.`,
+    );
+  });
+
+  it('rejects a circuit the named bundle does not describe', async () => {
+    const withTally = devJubjubAuthoriser(
+      SK,
+      createPassportRegistry({ bundles: [tallyBundle({})] }),
+    );
+
+    await expect(
+      withTally.authorise({ ...tallySetRequest, circuit: 'tally_get' }),
+    ).rejects.toThrow(CircuitNotRegisteredError);
+    await expect(
+      withTally.authorise({ ...tallySetRequest, circuit: 'tally_get' }),
+    ).rejects.toThrow(
+      "Account bundle 'account-tally' describes no circuit 'tally_get'.",
+    );
+  });
+
+  it('does not take an inherited property name for a circuit of the module or the bundle', async () => {
+    const withTally = devJubjubAuthoriser(
+      SK,
+      createPassportRegistry({ bundles: [tallyBundle({})] }),
+    );
+
+    await expect(
+      withTally.authorise({ ...tallySetRequest, circuit: 'constructor' }),
+    ).rejects.toThrow(
+      "Account bundle 'account-tally' describes no circuit 'constructor'.",
+    );
+  });
+
+  it('rejects a descriptor circuit of a bundle that is not registered', async () => {
+    await expect(authoriser.authorise(tallySetRequest)).rejects.toThrow(
+      AccountBundleUnknownError,
+    );
+  });
+
+  it('rejects a descriptor whose challenge the bundle module does not export', async () => {
+    const withTally = devJubjubAuthoriser(
+      SK,
+      createPassportRegistry({ bundles: [tallyBundle({})] }),
+    );
+
+    await expect(withTally.authorise(tallySetRequest)).rejects.toThrow(
+      CircuitNotRegisteredError,
+    );
+    await expect(withTally.authorise(tallySetRequest)).rejects.toThrow(
+      `names challenge '${TALLY_CHALLENGE}', which its bundle module does not export`,
+    );
   });
 
   it('rejects a request whose first argument is not a byte array', async () => {

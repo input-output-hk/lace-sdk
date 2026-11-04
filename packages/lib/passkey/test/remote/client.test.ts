@@ -93,6 +93,7 @@ const REQUESTS: {
     counter: '4',
     changes: {
       kind: 'insert-verifier-keys',
+      bundleId: 'account',
       inserts: [{ operation: 'withdraw_unshielded', verifierKey: '0102' }],
     },
   },

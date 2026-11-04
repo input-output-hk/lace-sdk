@@ -11,6 +11,7 @@ import { HexBytes } from '@lace-lib/util';
 import { firstValueFrom } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createBundleRegistry } from '../../src/acc/bundle';
 import { jubjubChallenges } from '../../src/acc/challenges';
 import { ROTATE_ENC_KEY_CIRCUIT } from '../../src/acc/enc-key-circuits';
 import {
@@ -693,6 +694,7 @@ describe('the issue-grant flow over the signer protocol', () => {
         accountRecords: toAccountRecords(records),
         onProgress: vi.fn(),
         rpId,
+        bundles: createBundleRegistry(),
       };
 
       const issued = await issueGrant(
@@ -700,6 +702,7 @@ describe('the issue-grant flow over the signer protocol', () => {
           account: {
             address: ACCOUNT,
             bindingVersion: record.bindingVersion,
+            bundleId: 'account',
             status: 'ready',
             networkId: 'undeployed',
           },

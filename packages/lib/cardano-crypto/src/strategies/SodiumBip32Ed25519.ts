@@ -18,7 +18,7 @@ import type {
   Ed25519SignatureHex,
 } from '../hexTypes';
 import type { BIP32Path } from '../types';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const EXTENDED_KEY_HEX_LENGTH = 128;
 

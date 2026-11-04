@@ -1,5 +1,8 @@
 import type { CARDANO_TOKEN_METADATA_SCHEMA_VERSION } from './const';
-import type { ExtensionAccountProps } from './extensions';
+import type {
+  ExtensionAccountProps,
+  TransactionExtensionMetadata,
+} from './extensions';
 import type { CardanoNetworkId, MasterFingerprint } from './value-objects';
 import type {
   Asset,
@@ -125,7 +128,7 @@ export interface TxMetadata {
   value: unknown[] | string;
 }
 
-export type CardanoTransaction = {
+export type CardanoTransaction = TransactionExtensionMetadata & {
   addrInputs: TxOutputInput[];
   addrOutputs: TxOutputInput[];
   certificates?: Cardano.HydratedCertificate[];
@@ -153,6 +156,8 @@ export type Reward = {
 export type CardanoRewardActivity = RewardActivity<Omit<Reward, 'rewards'>>;
 
 export type CardanoTokenMetadata = {
+  /** Provider-reported sources, not authenticity verification. Empty means none; absent means unknown. */
+  metadataSources?: Array<'on-chain' | 'token-registry'>;
   files?: CardanoTokenMetadataFile[];
   metadataSchemaVersion?: typeof CARDANO_TOKEN_METADATA_SCHEMA_VERSION;
   updatedAt: Timestamp;
@@ -236,6 +241,28 @@ export type GetUtxosAtAddressProps = {
    * Without it, `scriptReference` is absent.
    */
   withReferenceScripts?: boolean;
+  /**
+   * Pages read at most. The listing ends after them even when the address
+   * holds more UTxOs, so a caller that must not miss one checks whether the
+   * last page read was full. Unbounded when absent.
+   */
+  maxPages?: number;
+};
+
+export type GetAssetTransactionHistoryProps = {
+  /** Hex policy id followed by hex asset name. */
+  assetId: Cardano.AssetId;
+  /**
+   * Page to start listing from, counting from 1. The transactions on the
+   * pages before it are left out. Defaults to 1.
+   */
+  page?: number;
+  pageSize?: number;
+  /**
+   * Pages read at most, counting from `page`. The listing ends after them
+   * even when the history goes on. Unbounded when absent.
+   */
+  maxPages?: number;
 };
 
 export type EvaluateTxProps = {
@@ -313,6 +340,12 @@ export type DiscoverAddressesProps = {
 export type ExtendedTxDetails = Cardano.HydratedTx & {
   blockTime: number;
 };
+
+/** The parts of a transaction the features read to classify its activity. */
+export type ExtensionActivityTx = Pick<
+  Cardano.HydratedTx,
+  'auxiliaryData' | 'body' | 'id' | 'inputSource'
+>;
 
 export type DelegationTransactionDetailsMap = Record<
   CardanoRewardAccount,
@@ -426,6 +459,19 @@ export interface CardanoProvider {
     props: GetUtxosAtAddressProps,
     context: CardanoProviderContext,
   ) => Observable<Result<Cardano.Utxo[], ProviderError>>;
+
+  /**
+   * Fetch every transaction that minted, burned or moved an asset, oldest
+   * first, paging through the provider from `page` until exhausted or until
+   * `maxPages` pages were read. An asset that never existed has an empty
+   * history.
+   *
+   * @returns Observable that emits the asset's transactions once and completes
+   */
+  getAssetTransactionHistory: (
+    props: GetAssetTransactionHistoryProps,
+    context: CardanoProviderContext,
+  ) => Observable<Result<CardanoTransactionHistoryItem[], ProviderError>>;
 
   /**
    * @returns Observable that emits reward account info (rewards sum and controlled amount) once and completes

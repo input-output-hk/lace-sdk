@@ -8,6 +8,9 @@ import { assertProofServerRouting } from '@lace-lib/vendor/midnight-proof-server
 import { createMidnightSyncModule } from '@lace-module/midnight-sync/sdk';
 import { finalize, of, tap } from 'rxjs';
 
+import { midnightWorkerOptionsOf } from './midnight-worker/options';
+
+import type { MidnightWorkerOptions } from './midnight-worker/options';
 import type {
   MidnightNetworkConfig,
   ProofServerMode,
@@ -96,8 +99,19 @@ export type CreateMidnightModuleProps = {
   /** Endpoint overrides per network, over {@link MIDNIGHT_PUBLIC_ENDPOINTS}. */
   networks?: MidnightNetworkConfigOverrides;
   batchUpdates?: MidnightSyncBatchUpdates;
-  /** Trusted host adapter; must accept evidence and bind a channel before returning a session. */
+  /**
+   * Trusted host adapter; must accept evidence and bind a channel before returning a session. Not available in
+   * Worker mode: combined with `worker`, `createMidnightModule` throws `MidnightAttestedProverUnsupportedError`.
+   */
   createAttestedProver?: CreateAttestedProver;
+  /**
+   * Runs each account's engine in one SharedWorker that the app's pages share, off every page's main thread, instead
+   * of on this page: `true`, or {@link MidnightWorkerOptions} to keep the engines' state in IndexedDB or to adopt the
+   * settings of an engine another page runs. The helpers and their results stay the same. Where no module
+   * SharedWorker can run, every call that needs the engine returns `MidnightWorkerUnsupportedError`; there is no
+   * fallback to the page. A Vite production build also needs `worker: { format: 'es' }` in its configuration.
+   */
+  worker?: MidnightWorkerOptions | boolean;
 };
 
 // Each access lends a further copy, zeroed after use. Modules have no teardown
@@ -178,6 +192,9 @@ const supportedNetworkIds = (
  * `defaultMidnightTestnetNetworkId`, the testnet a wallet starts on, as
  * Cardano needs `defaultTestnetChainId`; without a testnet there,
  * `createLaceWallet` rejects.
+ *
+ * @throws {@link MidnightAttestedProverUnsupportedError} When `worker` is combined with `createAttestedProver`.
+ * @throws `TypeError` When `worker` is neither a boolean nor {@link MidnightWorkerOptions}.
  */
 export const createMidnightModule = ({
   password,
@@ -185,7 +202,9 @@ export const createMidnightModule = ({
   networks = {},
   batchUpdates,
   createAttestedProver,
+  worker,
 }: CreateMidnightModuleProps) => {
+  const workerOptions = midnightWorkerOptionsOf(worker, createAttestedProver);
   const overrides = networkOverrides(networks);
   return createMidnightSyncModule({
     auth: passwordAuth(password),
@@ -198,5 +217,6 @@ export const createMidnightModule = ({
     ),
     batchUpdates,
     createAttestedProver,
+    worker: workerOptions,
   });
 };

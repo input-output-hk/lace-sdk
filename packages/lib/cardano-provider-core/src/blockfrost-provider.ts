@@ -13,6 +13,8 @@ interface PaginatedRequestProps {
   pageSize: number;
   requestInit?: RequestInit;
   page?: number;
+  /** Pages requested at most, counting from `page`. Unbounded when absent. */
+  maxPages?: number;
 }
 
 export abstract class BlockfrostProvider implements Provider {
@@ -59,6 +61,8 @@ export abstract class BlockfrostProvider implements Provider {
    * @param endpoint - e.g. 'blocks/latest'
    * @param pageSize - number of items per page
    * @param requestInit - request options
+   * @param maxPages - pages requested at most, counting from `page`; the first
+   * page is always requested, so a value below 1 acts as 1
    * @throws `ProviderError`
    */
   protected async paginatedRequests<T extends unknown[]>({
@@ -66,12 +70,13 @@ export abstract class BlockfrostProvider implements Provider {
     pageSize,
     requestInit,
     page = 1,
+    maxPages = Number.POSITIVE_INFINITY,
   }: PaginatedRequestProps): Promise<T> {
     const separator = endpoint.includes('?') ? '&' : '?';
     const url = `${endpoint}${separator}page=${page}&count=${pageSize}`;
     const response = await this.request<T>(url, requestInit);
 
-    if (response.length !== pageSize) return response;
+    if (response.length !== pageSize || maxPages <= 1) return response;
 
     // Hermes corrupts a spread of an awaited value inside an array literal when
     // the async frame resumes (LW-15491) — keep the await hoisted out of the literal.
@@ -80,6 +85,7 @@ export abstract class BlockfrostProvider implements Provider {
       pageSize,
       requestInit,
       page: page + 1,
+      maxPages: maxPages - 1,
     });
 
     return [...response, ...rest] as T;

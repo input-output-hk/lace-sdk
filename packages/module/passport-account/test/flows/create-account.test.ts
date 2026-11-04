@@ -1,7 +1,11 @@
 import {
+  AccBindingVersion,
+  AccountBundleUnknownError,
   AccountExistsError,
   ArtefactIntegrityError,
   AuthorityRetiredError,
+  CallArgumentInvalidError,
+  CalledContractNotRegisteredError,
   CeremonyCancelledError,
   CreationArtefactMismatchError,
   CreationLockMismatchError,
@@ -12,6 +16,7 @@ import {
 import { HexBytes } from '@lace-lib/util';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { accountBundle, createBundleRegistry } from '../../src/acc/bundle';
 import { encodeDevicePublicKey } from '../../src/acc/envelopes';
 import { accManifest } from '../../src/acc/manifest';
 import { JubjubDevice } from '../../src/acc/signer';
@@ -28,6 +33,8 @@ import type {
 import type { MidnightProviderStage } from '../../src/infra/providers';
 import type { PassportAccountRecord } from '../../src/store/account-record';
 import type {
+  AccountBundle,
+  CalledContract,
   PassportAuthoriser,
   PassportEncryptionKey,
 } from '@lace-contract/passport';
@@ -77,6 +84,33 @@ const network = {
 };
 const providers = { publicDataProvider: 'public-data' };
 const indexer = { tag: 'indexer' };
+
+const TALLY_ADDRESS = 'ab'.repeat(32);
+const tally: CalledContract = {
+  label: 'Tally',
+  address: TALLY_ADDRESS,
+  interface: 'Tally',
+  module: vi.fn(),
+  artefactUrl: 'http://artefacts.example.com/tally',
+  pins: {},
+};
+const otherTally: CalledContract = { ...tally, address: 'cd'.repeat(32) };
+const tallyCallees = [tally, otherTally];
+
+/** A registered build taking the tally it calls as a constructor argument. */
+const tallyBundle: AccountBundle = {
+  ...accountBundle,
+  id: 'account-tally',
+  bindingVersion: AccBindingVersion('0.1.0-tally.1'),
+  module: vi.fn(),
+  constructorArgs: [
+    { name: 'tally', label: 'Tally', type: 'contract', interface: 'Tally' },
+  ],
+};
+const tallyConstructor = {
+  constructorArgs: [TALLY_ADDRESS],
+  constructorValues: [{ bytes: new Uint8Array(32).fill(0xab) }],
+};
 const deploymentProgress: Omit<PendingDeployment, 'keyEntries'> = {
   operations: ['deposit_unshielded', 'deposit_shielded'],
   lockAccount: true,
@@ -146,7 +180,14 @@ const createAccountRecords = (stored?: PassportAccountRecord) => {
 const createContext = ({
   keySession = false,
   stored,
-}: { keySession?: boolean; stored?: PassportAccountRecord } = {}) => {
+  bundles = [],
+  calledContracts = [],
+}: {
+  keySession?: boolean;
+  stored?: PassportAccountRecord;
+  bundles?: AccountBundle[];
+  calledContracts?: CalledContract[];
+} = {}) => {
   const withKeySession = vi.fn(async (operation: () => Promise<unknown>) =>
     operation(),
   );
@@ -188,6 +229,7 @@ const createContext = ({
       stages.push(stage);
     },
     rpId: 'lace.io',
+    bundles: createBundleRegistry(bundles, calledContracts),
   };
   return {
     authoriser,
@@ -213,6 +255,7 @@ const commitmentAt = (counter: number): string =>
 const readyAccount = {
   address: accountAddress,
   bindingVersion: accManifest.bindingVersion,
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -279,10 +322,16 @@ describe('createAccount', () => {
       network,
       prover,
       sponsor,
+      bundle: accountBundle,
+      bundles: [accountBundle],
+      calledContracts: [],
       onStage: expect.any(Function) as unknown,
     });
     expect(mocks.deployAccount).toHaveBeenCalledExactlyOnceWith({
       providers,
+      bundle: accountBundle,
+      constructorArgs: [],
+      constructorValues: [],
       authoriser,
       encPublicKey,
       lockAccount: true,
@@ -665,6 +714,7 @@ describe('createAccount', () => {
 
       expect(mocks.resumeAccountDeployment).toHaveBeenCalledExactlyOnceWith({
         providers,
+        bundle: accountBundle,
         authoriser,
         address: accountAddress,
         pending: pendingDeployment,
@@ -876,6 +926,223 @@ describe('createAccount', () => {
       await createAccount({ lockAccount: true }, context);
 
       expect(readInSession).toEqual([true]);
+    });
+  });
+
+  describe('from a registered bundle with a constructor argument', () => {
+    it('deploys that bundle with its decoded arguments through providers built for it, and publishes its id and binding version', async () => {
+      const { context, sponsor, prover } = createContext({
+        bundles: [tallyBundle],
+        calledContracts: tallyCallees,
+      });
+
+      await expect(
+        createAccount(
+          {
+            lockAccount: false,
+            bundleId: 'account-tally',
+            constructorArgs: ['AB'.repeat(32)],
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        account: {
+          ...readyAccount,
+          bindingVersion: tallyBundle.bindingVersion,
+          bundleId: 'account-tally',
+        },
+      });
+
+      expect(mocks.createMidnightProviders).toHaveBeenCalledExactlyOnceWith({
+        network,
+        prover,
+        sponsor,
+        bundle: tallyBundle,
+        bundles: [accountBundle, tallyBundle],
+        calledContracts: tallyCallees,
+        onStage: expect.any(Function) as unknown,
+      });
+      expect(mocks.deployAccount).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          bundle: tallyBundle,
+          lockAccount: false,
+          ...tallyConstructor,
+        }),
+      );
+    });
+
+    it('names the bundle and the canonical constructor arguments to the key session', async () => {
+      const { context, withKeySession } = createContext({
+        keySession: true,
+        bundles: [tallyBundle],
+        calledContracts: tallyCallees,
+      });
+
+      await createAccount(
+        {
+          lockAccount: true,
+          bundleId: 'account-tally',
+          constructorArgs: ['AB'.repeat(32)],
+        },
+        context,
+      );
+
+      expect(withKeySession).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Function),
+        {
+          kind: 'create-account',
+          lockAccount: true,
+          bundleId: 'account-tally',
+          constructorArgs: [TALLY_ADDRESS],
+        },
+      );
+    });
+
+    it('writes the pending record under the binding version of the bundle', async () => {
+      const { context, accountRecords } = createContext({
+        bundles: [tallyBundle],
+        calledContracts: tallyCallees,
+      });
+
+      await createAccount(
+        {
+          lockAccount: true,
+          bundleId: 'account-tally',
+          constructorArgs: [TALLY_ADDRESS],
+        },
+        context,
+      );
+
+      expect(accountRecords.write).toHaveBeenNthCalledWith(1, {
+        ...expectedPendingRecord('0'),
+        bindingVersion: tallyBundle.bindingVersion,
+      });
+    });
+
+    it.each<[string, () => unknown, unknown]>([
+      [
+        'a bundle no registry holds',
+        () => ({ lockAccount: true, bundleId: 'account-bridge' }),
+        new AccountBundleUnknownError(
+          "No account bundle 'account-bridge' is registered.",
+        ),
+      ],
+      [
+        'a contract argument naming no registered called contract',
+        () => ({
+          lockAccount: true,
+          bundleId: 'account-tally',
+          constructorArgs: ['11'.repeat(32)],
+        }),
+        new CalledContractNotRegisteredError(
+          `No called contract at ${'11'.repeat(
+            32,
+          )}, which argument 'tally' names, is registered.`,
+        ),
+      ],
+      [
+        'a value that does not fit its argument',
+        () => ({
+          lockAccount: true,
+          bundleId: 'account-tally',
+          constructorArgs: ['not-an-address'],
+        }),
+        new CallArgumentInvalidError(
+          "Argument 'tally' must be a contract address of 64 hex characters.",
+        ),
+      ],
+      [
+        'a constructor argument for the default bundle, which declares none',
+        () => ({ lockAccount: true, constructorArgs: [TALLY_ADDRESS] }),
+        new CallArgumentInvalidError(
+          '1 values were given for 0 declared arguments.',
+        ),
+      ],
+    ])(
+      'rejects %s before any ceremony, read or deploy',
+      async (_case, input, refusal) => {
+        const { context, withKeySession, authoriser, accountRecords, stages } =
+          createContext({
+            keySession: true,
+            bundles: [tallyBundle],
+            calledContracts: tallyCallees,
+          });
+
+        await expect(
+          createAccount(
+            input() as Parameters<typeof createAccount>[0],
+            context,
+          ),
+        ).rejects.toThrow(refusal);
+
+        expect(stages).toEqual([]);
+        expect(accountRecords.presence).not.toHaveBeenCalled();
+        expect(withKeySession).not.toHaveBeenCalled();
+        expect(authoriser.devicePublicKey).not.toHaveBeenCalled();
+        expect(mocks.createMidnightProviders).not.toHaveBeenCalled();
+        expect(mocks.deployAccount).not.toHaveBeenCalled();
+        expect(accountRecords.write).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects a contract argument naming a contract of another interface before any key session', async () => {
+      const { context, withKeySession } = createContext({
+        keySession: true,
+        bundles: [tallyBundle],
+        calledContracts: [{ ...tally, interface: 'Bridge' }],
+      });
+
+      await expect(
+        createAccount(
+          {
+            lockAccount: true,
+            bundleId: 'account-tally',
+            constructorArgs: [TALLY_ADDRESS],
+          },
+          context,
+        ),
+      ).rejects.toThrow(CalledContractNotRegisteredError);
+
+      expect(withKeySession).not.toHaveBeenCalled();
+    });
+
+    it('resumes a recorded bundle deployment under the recorded constructor arguments, not the request ones', async () => {
+      const recorded: PendingDeployment = {
+        ...pendingDeployment,
+        bundleId: 'account-tally',
+        constructorArgs: [TALLY_ADDRESS],
+      };
+      const { context, accountRecords } = createContext({
+        stored: {
+          ...storedPendingRecord,
+          bindingVersion: tallyBundle.bindingVersion,
+          deployment: recorded,
+        },
+        bundles: [tallyBundle],
+        calledContracts: tallyCallees,
+      });
+
+      await expect(
+        createAccount(
+          {
+            lockAccount: true,
+            bundleId: 'account-tally',
+            constructorArgs: [otherTally.address],
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        account: { bundleId: 'account-tally' },
+      });
+
+      expect(mocks.resumeAccountDeployment).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ bundle: tallyBundle, pending: recorded }),
+      );
+      expect(mocks.deployAccount).not.toHaveBeenCalled();
+      await expect(accountRecords.read()).resolves.toEqual({
+        ...expectedRecord(),
+        bindingVersion: tallyBundle.bindingVersion,
+      });
     });
   });
 

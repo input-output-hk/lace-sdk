@@ -6,18 +6,25 @@ import nodePolyfills from '@rolldown/plugin-node-polyfills';
 import { defineConfig } from 'tsdown';
 
 import type { Plugin } from 'rolldown';
+import type { UserConfig } from 'tsdown';
 
 import {
   CANARY_ONLY_ENTRIES,
   channelEntryNames,
   channelPublishedPeers,
   entrySource,
+  MIDNIGHT_WORKER,
 } from './scripts/entries.mjs';
 import {
+  filesImportingEntry,
   findStaticMidnightImports,
   undeclaredPackageRequires,
+  unexpectedPackageImports,
 } from './src/scan-static-midnight-imports.ts';
-import { useLaceioCardano } from './scripts/laceio-cardano.mjs';
+import {
+  cardanoSubpathOf,
+  useLaceioCardano,
+} from './scripts/laceio-cardano.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -235,6 +242,12 @@ if (CHANNEL !== 'stable' && CHANNEL !== 'canary') {
   throw new Error(`SDK_CHANNEL must be stable or canary, not ${CHANNEL}`);
 }
 
+// Worker mode's SharedWorker script (scripts/entries.mjs, MIDNIGHT_WORKER): a build input of the canary build alone,
+// emitted as ESM next to dist/midnight.js, where the Midnight entry's `new URL('./midnight-worker.js',
+// import.meta.url)` finds it, and not a package export. A worker runs module scripts only, so there is no CommonJS
+// output.
+const MIDNIGHT_WORKER_NAME = MIDNIGHT_WORKER.name;
+
 // The stable build resolves a workspace file's `.stable` variant first
 // (scripts/reach.mjs, moduleSuffixes), as its declaration build does.
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.json'];
@@ -381,16 +394,16 @@ const FORBIDDEN_EXTERNAL = FORBIDDEN_PACKAGE_PATTERNS.map(
 );
 
 // The Midnight WASM packages and the relay's Node-conditioned Polkadot
-// transport stay external in both outputs: a bundle cannot carry WASM
-// binaries, Polkadot's Node build needs the real platform (no browser
-// shims), and both load under require(). The canary CommonJS output requires
-// them directly, so package.json declares them as optional peers; Cardano
-// never reaches them.
+// transport stay external in both outputs of the entries: a bundle cannot
+// carry WASM binaries, Polkadot's Node build needs the real platform (no
+// browser shims), and both load under require(). The canary CommonJS output
+// requires them directly, so package.json declares them as optional peers;
+// Cardano never reaches them. The worker bundles Polkadot (WORKER_EXTERNAL).
 const MIDNIGHT_WASM_EXTERNAL = [
   /^@midnight-ntwrk\//,
   /^@midnightntwrk\/(?:ledger|onchain-runtime)-v\d+/,
-  /^@polkadot\//,
 ];
+const POLKADOT_EXTERNAL = [/^@polkadot\//];
 // The Midnight wallet SDK packages publish import-only export maps, so
 // require() cannot resolve them. Engine code imports them statically (ADR 25:
 // no import() in service-worker code), the ESM output imports them from the
@@ -405,7 +418,7 @@ const MIDNIGHT_IMPORT_ONLY = [
 // test/check-bundled-licences.mjs). `wallet-sdk-address-format` depends on
 // the GPL-3.0-or-later `@subsquid/*` packages, plain CommonJS that loads under
 // require(), so they stay external and `@subsquid/scale-codec` is a declared
-// optional peer; the ESM output never reaches them.
+// optional peer; the entries' ESM output never reaches them.
 const NON_PERMISSIVE_EXTERNAL = [/^@subsquid\//];
 const BUNDLES_IMPORT_ONLY = (format: 'esm' | 'cjs') =>
   format === 'cjs' && CHANNEL === 'canary';
@@ -450,6 +463,7 @@ const deps = (format: 'esm' | 'cjs') => ({
   neverBundle: [
     ...FORBIDDEN_EXTERNAL,
     ...MIDNIGHT_WASM_EXTERNAL,
+    ...POLKADOT_EXTERNAL,
     ...NON_PERMISSIVE_EXTERNAL,
     ...(BUNDLES_IMPORT_ONLY(format) ? [] : MIDNIGHT_IMPORT_ONLY),
   ],
@@ -463,8 +477,20 @@ const deps = (format: 'esm' | 'cjs') => ({
 const NATIVE_ADDON_CODE =
   /chacha-native|bindings\.node|\.node["']\)|node-gyp-build/;
 
+// tsdown runs each format of each config below as a build of its own and holds
+// every build:done until all builds of the package have written their files
+// (0.21.4: `bundleDone` in tsdown/dist/build-*.mjs). These checks read all of
+// dist/, so they run once, in the last call. They count the builds that start,
+// not the ones configured here, so they also run when fewer builds run.
+let buildsStarted = 0;
+let buildsDone = 0;
 const assertNoForbiddenPackages = {
+  'build:prepare': () => {
+    buildsStarted += 1;
+  },
   'build:done': async () => {
+    buildsDone += 1;
+    if (buildsDone < buildsStarted) return;
     const distDir = path.resolve(__dirname, 'dist');
     const files = fs.readdirSync(distDir).filter(f => /\.[cm]?js$/.test(f));
     const violations: string[] = [];
@@ -560,12 +586,60 @@ const assertNoForbiddenPackages = {
         );
       }
     }
+    const workerFile = `${MIDNIGHT_WORKER_NAME}.js`;
+    const hasWorker = fs.existsSync(path.join(distDir, workerFile));
+    if (hasWorker !== (CHANNEL === 'canary')) {
+      throw new Error(
+        CHANNEL === 'canary'
+          ? `The canary build emitted no ${workerFile} next to midnight.js`
+          : `The stable build emitted ${workerFile}, a canary build input`,
+      );
+    }
+    if (hasWorker) {
+      // The worker attaches its connect listener before it imports the engine;
+      // a Midnight package in its static closure would load the WebAssembly,
+      // whose top-level await delays the listener past the first page's
+      // connection. The worker bundles most of them, so an inlined one counts.
+      const workerMidnightImports = findStaticMidnightImports(
+        distDir,
+        workerFile,
+        { inlined: true },
+      );
+      if (workerMidnightImports.length > 0) {
+        throw new Error(
+          `The Midnight worker reaches Midnight packages through its static imports, so it would load them before it listens for pages:\n  ${workerMidnightImports.join(
+            '\n  ',
+          )}`,
+        );
+      }
+      const unbundled = unexpectedPackageImports(
+        distDir,
+        workerFile,
+        WORKER_PACKAGE_IMPORTS,
+      );
+      if (unbundled.length > 0) {
+        throw new Error(
+          `The Midnight worker imports packages it must bundle, which a development server would serve unconverted:\n  ${unbundled.join(
+            '\n  ',
+          )}`,
+        );
+      }
+      const entryImporters = filesImportingEntry(distDir, workerFile);
+      if (entryImporters.length > 0) {
+        throw new Error(
+          `Files of the Midnight worker import its entry, which a development server would then run a second time, with a second engine host:\n  ${entryImporters.join(
+            '\n  ',
+          )}`,
+        );
+      }
+    }
     // Every package an entry requires or lazily imports, including through a
     // bundled dependency, must be declared, so that a consumer's install
     // holds it: a bundle moves its dependencies' import sites into this
     // package.
     const undeclared = channelEntryNames(CHANNEL)
       .flatMap(entry => [`${entry}.js`, `${entry}.cjs`])
+      .concat(hasWorker ? [workerFile] : [])
       .flatMap(file =>
         undeclaredPackageRequires(distDir, file, declaredPackages).map(
           violation => `${file}: ${violation}`,
@@ -581,16 +655,49 @@ const assertNoForbiddenPackages = {
   },
 };
 
-export default defineConfig({
-  entry: Object.fromEntries(
-    channelEntryNames(CHANNEL).map(entry => [
-      entry,
-      entrySource(entry, CHANNEL),
-    ]),
-  ),
+const ENTRIES = Object.fromEntries(
+  channelEntryNames(CHANNEL).map(entry => [entry, entrySource(entry, CHANNEL)]),
+);
+
+// Worker mode's SharedWorker script is a build of its own on canary, which
+// shares no chunk with the entries and bundles every package it loads but the
+// Midnight WASM packages and the GPL @subsquid ones (MAINTAINING.md, Midnight
+// packages). Polkadot stays in the bundle: the wallet SDK's node client checks
+// the block numbers Polkadot returns with `instanceof` against its own bn.js,
+// so both must use the bundle's one copy.
+const WORKER_EXTERNAL = [
+  ...FORBIDDEN_EXTERNAL,
+  ...MIDNIGHT_WASM_EXTERNAL,
+  ...NON_PERMISSIVE_EXTERNAL,
+];
+// The only packages the worker may import from the app's install: a bundler's
+// development server serves the worker's files unconverted, so a CommonJS
+// import fails to load there unless the app pre-bundles it, as the Midnight
+// guide asks for @subsquid/scale-codec.
+const WORKER_PACKAGE_IMPORTS = [
+  /^@midnight-ntwrk\/ledger-v\d+$/,
+  /^@subsquid\/scale-codec$/,
+];
+// The worker bundles @laceio/cardano where the entries import it
+// (useLaceioCardano), from the file the package's exports map names.
+const bundledLaceioCardano: Plugin = {
+  name: 'bundled-laceio-cardano',
+  resolveId(source, importer, options) {
+    const subpath = cardanoSubpathOf(source);
+    return subpath
+      ? this.resolve(`@laceio/cardano/${subpath}`, importer, options)
+      : null;
+  },
+};
+
+const entriesBuild = {
+  entry: ENTRIES,
   // nodeCryptoBuiltin comes before webCryptoRandomBytes to take priority
   format: {
-    esm: { plugins, deps: deps('esm') },
+    esm: {
+      plugins,
+      deps: deps('esm'),
+    },
     cjs: {
       plugins: [
         nodeCryptoBuiltin,
@@ -607,4 +714,44 @@ export default defineConfig({
   inputOptions,
   outputOptions,
   hooks: assertNoForbiddenPackages,
-});
+} satisfies UserConfig;
+const workerBuild = {
+  entry: { [MIDNIGHT_WORKER_NAME]: MIDNIGHT_WORKER.source },
+  format: {
+    esm: {
+      plugins: [
+        bundledLaceioCardano,
+        // The entries' build records the contracts the declarations describe.
+        ...plugins.filter(
+          plugin =>
+            plugin !== useLaceioCardano && plugin !== recordBundledContracts,
+        ),
+      ],
+      deps: {
+        neverBundle: WORKER_EXTERNAL,
+        alwaysBundle: () => true,
+        skipNodeModulesBundle: false,
+      },
+    },
+  },
+  dts: false,
+  platform: 'browser',
+  target: 'es2022',
+  clean: true,
+  inputOptions: {
+    ...inputOptions,
+    // The entry chunk exports what worker.ts exports, nothing, so the modules
+    // it shares with the lazy chunks go to chunks of their own and no chunk
+    // imports the entry, which the hook refuses (filesImportingEntry).
+    preserveEntrySignatures: 'strict',
+  },
+  outputOptions: {
+    ...outputOptions,
+    chunkFileNames: `${MIDNIGHT_WORKER_NAME}-[name]-[hash].js`,
+  },
+  hooks: assertNoForbiddenPackages,
+} satisfies UserConfig;
+const BUILDS =
+  CHANNEL === 'canary' ? [entriesBuild, workerBuild] : [entriesBuild];
+
+export default defineConfig(BUILDS);

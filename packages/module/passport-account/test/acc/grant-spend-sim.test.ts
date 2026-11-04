@@ -16,6 +16,7 @@ import { HexBytes } from '@lace-lib/util';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createBundleRegistry } from '../../src/acc/bundle';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import { JubjubDevice, randomJubjubScalar } from '../../src/acc/signer';
@@ -149,6 +150,7 @@ const owner = (): FlowContext => {
     accountRecords: memoryRecords(),
     onProgress: vi.fn(),
     rpId,
+    bundles: createBundleRegistry(),
   };
 };
 

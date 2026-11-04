@@ -1,5 +1,5 @@
 import { Ed25519SignatureHex } from '@lace-lib/cardano-crypto';
-import { HexBlob, InvalidStringError } from '@lace-lib/util/common';
+import { HexBlob, InvalidStringError } from '@lace-lib/cardano-util';
 
 import { Cardano } from '../../../';
 

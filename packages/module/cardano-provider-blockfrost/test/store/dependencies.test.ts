@@ -249,6 +249,96 @@ describe('cardano-provider-blockfrost dependencies', () => {
     });
   });
 
+  describe('getAssetTransactionHistory', () => {
+    const assetId = Cardano.AssetId(
+      '87e5931f96faa62899239102381dd637acd7d7b20752f070651f88904879647261486561645632',
+    );
+    const historyEndpoint = `assets/${assetId}/transactions?order=asc&page=1&count=100`;
+
+    it('re-issues its request on every retry attempt', async () => {
+      transport.respond = async () => {
+        throw new HttpClientError(RETRIABLE_STATUS, 'unhealthy');
+      };
+      const { cardanoProvider } = await init();
+
+      const attempts = await measureRequestsUnderRetry({
+        call: () =>
+          cardanoProvider.getAssetTransactionHistory({ assetId }, context),
+        requests: () => transport.issued,
+        retry: PROVIDER_REQUEST_RETRY_CONFIG,
+      });
+
+      expect(attempts).toEqual(
+        Array.from({ length: 4 }, () => historyEndpoint),
+      );
+    });
+
+    it('issues one request and maps the history when the provider answers', async () => {
+      transport.respond = async () => ({
+        data: [
+          {
+            tx_hash:
+              'ab1b61fcffe37dda1b44bbcf504b48e8ed22aee0124ebbd80f124ad8c769a36d',
+            tx_index: 4,
+            block_height: 4_946_836,
+            block_time: 1_784_296_284,
+          },
+        ],
+      });
+      const { cardanoProvider } = await init();
+
+      const result = await firstValueFrom(
+        cardanoProvider.getAssetTransactionHistory({ assetId }, context),
+      );
+
+      expect(result.unwrap()).toEqual([
+        {
+          txId: 'ab1b61fcffe37dda1b44bbcf504b48e8ed22aee0124ebbd80f124ad8c769a36d',
+          txIndex: 4,
+          blockNumber: 4_946_836,
+          blockTime: 1_784_296_284_000,
+        },
+      ]);
+      expect(transport.issued).toEqual([historyEndpoint]);
+    });
+
+    it('passes the page bound through to the provider', async () => {
+      transport.respond = async () => ({
+        data: [
+          {
+            tx_hash:
+              'ab1b61fcffe37dda1b44bbcf504b48e8ed22aee0124ebbd80f124ad8c769a36d',
+            tx_index: 4,
+            block_height: 4_946_836,
+            block_time: 1_784_296_284,
+          },
+        ],
+      });
+      const { cardanoProvider } = await init();
+
+      await firstValueFrom(
+        cardanoProvider.getAssetTransactionHistory(
+          { assetId, maxPages: 2, pageSize: 1 },
+          context,
+        ),
+      );
+
+      expect(transport.issued).toEqual([
+        `assets/${assetId}/transactions?order=asc&page=1&count=1`,
+        `assets/${assetId}/transactions?order=asc&page=2&count=1`,
+      ]);
+    });
+
+    it('issues no request until something subscribes', async () => {
+      const { cardanoProvider } = await init();
+
+      cardanoProvider.getAssetTransactionHistory({ assetId }, context);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(transport.issued).toEqual([]);
+    });
+  });
+
   describe('getProtocolParameters', () => {
     it('re-issues its request on every retry attempt', async () => {
       transport.respond = failWith(RETRIABLE_STATUS);

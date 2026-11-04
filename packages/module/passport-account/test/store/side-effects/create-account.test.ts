@@ -13,7 +13,11 @@ import { runPassportFlow } from '../../../src/store/side-effects/passport-flows'
 
 import type { CreatedAccount } from '../../../src/flows/create-account';
 import type { FlowEvent } from '../../../src/store/dependencies';
-import type { ActionCreators, Selectors } from '@lace-contract/passport';
+import type {
+  ActionCreators,
+  CreateAccountPayload,
+  Selectors,
+} from '@lace-contract/passport';
 import type { Observable } from 'rxjs';
 import type { RunHelpers } from 'rxjs/testing';
 
@@ -25,6 +29,7 @@ const created: CreatedAccount = {
   account: {
     address: accountAddress,
     bindingVersion: accManifest.bindingVersion,
+    bundleId: 'account',
     status: 'ready',
     networkId: 'undeployed',
   },
@@ -67,6 +72,8 @@ const idleDeviceState = {
 
 type FlowTest = {
   createAccount?: string;
+  /** What the createAccount trigger carries; the default locks the account. */
+  payload?: CreateAccountPayload;
   flows: (cold: RunHelpers['cold']) => Observable<FlowEvent<CreatedAccount>>[];
   assertion: (harness: {
     sideEffect$: Observable<unknown>;
@@ -80,7 +87,12 @@ type FlowTest = {
  * replaced by cold marbles; the other triggers never fire, so their flows
  * are never reached.
  */
-const runFlowTest = ({ createAccount = 'a', flows, assertion }: FlowTest) => {
+const runFlowTest = ({
+  createAccount = 'a',
+  payload = { lockAccount: true },
+  flows,
+  assertion,
+}: FlowTest) => {
   testSideEffect<Selectors, ActionCreators>(runPassportFlow, helpers => {
     const { cold, hot } = helpers;
     const createAccountFlow = vi.fn();
@@ -91,11 +103,12 @@ const runFlowTest = ({ createAccount = 'a', flows, assertion }: FlowTest) => {
         passport: {
           addDevice$: NEVER,
           createAccount$: hot(createAccount, {
-            a: actions.passport.createAccount({ lockAccount: true }),
+            a: actions.passport.createAccount(payload),
           }),
           issueGrant$: NEVER,
           installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
+          callContract$: NEVER,
           removeDevice$: NEVER,
           revokeAllGrants$: NEVER,
           revokeGrant$: NEVER,
@@ -129,6 +142,26 @@ describe('runPassportFlow: createAccount', () => {
         helpers.flush();
         expect(createAccountFlow).toHaveBeenCalledExactlyOnceWith(
           { lockAccount: true },
+          expect.objectContaining({ actions }),
+        );
+      },
+    });
+  });
+
+  it('hands the flow the bundle and constructor arguments the trigger names', () => {
+    const payload: CreateAccountPayload = {
+      lockAccount: false,
+      bundleId: 'account-tally',
+      constructorArgs: ['ab'.repeat(32)],
+    };
+    runFlowTest({
+      payload,
+      flows: cold => [cold('-(f|)', events)],
+      assertion: ({ sideEffect$, helpers, createAccountFlow }) => {
+        helpers.expectObservable(sideEffect$).toBe('a(ghiomj)', emitted);
+        helpers.flush();
+        expect(createAccountFlow).toHaveBeenCalledExactlyOnceWith(
+          payload,
           expect.objectContaining({ actions }),
         );
       },

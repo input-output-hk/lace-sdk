@@ -7,9 +7,14 @@ import * as rootCanary from '../src/index.canary';
 
 describe('the experimental entry', () => {
   it.each([
+    'AccountBundleInvalidError',
+    'AccountBundleUnknownError',
     'AccountCreationPendingError',
     'AuthorityNotRetiredError',
     'AuthorityRetiredError',
+    'CallArgumentInvalidError',
+    'CalledContractNotRegisteredError',
+    'CircuitNotRegisteredError',
     'CreationArtefactMismatchError',
     'CreationLockMismatchError',
     'GrantIssueRejectedError',
@@ -66,6 +71,8 @@ describe('the experimental entry', () => {
       expect.arrayContaining([
         ...Object.keys(cardano.m),
         'createPassportAccountModule',
+        'passportAccountBundle',
+        'passportAccountManifest',
       ]),
     );
   });

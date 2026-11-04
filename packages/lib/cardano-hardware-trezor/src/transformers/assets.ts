@@ -1,6 +1,6 @@
 import { Cardano } from '@lace-lib/cardano-core';
 
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 import type * as Trezor from '@trezor/connect';
 
 const compareAssetNameCanonically = (

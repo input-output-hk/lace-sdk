@@ -1,0 +1,6 @@
+kind: Fixed
+body: "`LedgerKeyAgent.createWithDevice` rejects with a `TransportError` when it cannot list the connected devices, as its documentation states, instead of passing on the transport's own error."
+time: 2026-10-27T06:35:28.647054703Z
+custom:
+  Build: stable
+  Package: cardano-ledger

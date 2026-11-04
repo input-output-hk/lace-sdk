@@ -48,14 +48,18 @@ export type ShieldedHoldings = {
  */
 export const readShieldedHoldings = async (
   { account }: ReadHoldingsInput,
-  { seams }: FlowContext,
+  { seams, bundles }: FlowContext,
 ): Promise<ShieldedHoldings> => {
   const { passportAuthoriser, passportEncryptionKey, passportNetwork } = seams;
   const indexer = createIndexerClient({
     indexerUrl: passportNetwork.indexerUrl,
     indexerWsUrl: passportNetwork.indexerWsUrl,
   });
-  const ledgerState = await queryAccountLedger(indexer, account.address);
+  const ledgerState = await queryAccountLedger(
+    indexer,
+    account.address,
+    bundles.get(account.bundleId),
+  );
   const { holdings, skippedEntries } = await walkInbox({
     address: account.address,
     ledgerState,

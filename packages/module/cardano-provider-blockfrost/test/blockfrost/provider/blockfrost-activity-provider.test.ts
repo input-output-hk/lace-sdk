@@ -170,6 +170,44 @@ describe('BlockfrostActivityProvider', () => {
       expect(txDetails.body.donation).toEqual(1_000_000n);
     });
 
+    /**
+     * The transaction with metadata whose single entry nests `depth` lists:
+     * the recorded transaction with its empty auxiliary data replaced.
+     */
+    const txCborWithMetadataDepth = (depth: number) => ({
+      cbor: `${txCborResponse.cbor.slice(0, -2)}a100${'81'.repeat(depth)}00`,
+    });
+
+    it('decodes a transaction whose metadata nests within the limit', async () => {
+      mockResponses(request, [
+        [`txs/${txId}`, { data: txDetailsResponse }],
+        [`txs/${txId}/cbor`, { data: txCborWithMetadataDepth(60) }],
+        [`txs/${txId}/utxos`, { data: txUtxosResponse }],
+      ]);
+
+      const result = await firstValueFrom(provider.getTransactionDetails(txId));
+
+      expect(result.isOk()).toBe(true);
+      expect(result.unwrap().auxiliaryData?.blob?.size).toBe(1);
+    });
+
+    it('refuses a transaction whose metadata nests deeper than can be decoded, before decoding it', async () => {
+      mockResponses(request, [
+        [`txs/${txId}`, { data: txDetailsResponse }],
+        [`txs/${txId}/cbor`, { data: txCborWithMetadataDepth(5000) }],
+        [`txs/${txId}/utxos`, { data: txUtxosResponse }],
+      ]);
+
+      const start = performance.now();
+      const result = await firstValueFrom(provider.getTransactionDetails(txId));
+
+      expect(result.isErr()).toBe(true);
+      expect(result.unwrapErr()).toMatchObject({
+        reason: ProviderFailure.InvalidResponse,
+      });
+      expect(performance.now() - start).toBeLessThan(1000);
+    });
+
     it('handles error on tx details fetch', async () => {
       const error = new HttpClientError(404, 'Transaction not found');
       mockResponses(request, [
@@ -334,6 +372,160 @@ describe('BlockfrostActivityProvider', () => {
       );
 
       expect(result.expect('should treat 404 as empty')).toEqual([]);
+    });
+  });
+
+  describe('getAssetTransactionHistory', () => {
+    const assetId = Cardano.AssetId(
+      '87e5931f96faa62899239102381dd637acd7d7b20752f070651f88904879647261486561645632',
+    );
+    const endpoint = (page: number, count = 100) =>
+      `assets/${assetId}/transactions?order=asc&page=${page}&count=${count}`;
+
+    /** Transactions of a Hydra head state token, recorded on Preprod. */
+    const recordedHistory: Responses['asset_transactions'] = [
+      {
+        tx_hash:
+          'ab1b61fcffe37dda1b44bbcf504b48e8ed22aee0124ebbd80f124ad8c769a36d',
+        tx_index: 4,
+        block_height: 4946836,
+        block_time: 1784296284,
+      },
+      {
+        tx_hash:
+          '2e96fef857407ad08c5a8d7da74484cecaabdf0d7ef688b45930f713ae7f926a',
+        tx_index: 21,
+        block_height: 4946893,
+        block_time: 1784297559,
+      },
+      {
+        tx_hash:
+          '6eda4f6cd2338f1f77e8c103eea3e225aa086860e0fe27a4dec8f344d867872d',
+        tx_index: 0,
+        block_height: 4946905,
+        block_time: 1784297886,
+      },
+      {
+        tx_hash:
+          'e5b07d117c390f9b87694ed21ebedb50dbe3170d49c0a7bfeeaeb1b3f4e11933',
+        tx_index: 2,
+        block_height: 4950617,
+        block_time: 1784381935,
+      },
+    ];
+
+    const toHistoryItem = (
+      raw: Responses['asset_transactions'][number],
+    ): CardanoTransactionHistoryItem => ({
+      txId: Cardano.TransactionId(raw.tx_hash),
+      txIndex: Cardano.TxIndex(raw.tx_index),
+      blockNumber: Cardano.BlockNo(raw.block_height),
+      blockTime: Timestamp(raw.block_time * 1000),
+    });
+
+    it('lists the transactions of an asset oldest first', async () => {
+      mockResponses(request, [[endpoint(1), { data: recordedHistory }]]);
+
+      const result = await firstValueFrom(
+        provider.getAssetTransactionHistory({ assetId }),
+      );
+
+      expect(result.unwrap()).toEqual(recordedHistory.map(toHistoryItem));
+    });
+
+    it('pages through the history until a page comes back short', async () => {
+      mockResponses(request, [
+        [endpoint(1, 2), { data: recordedHistory.slice(0, 2) }],
+        [endpoint(2, 2), { data: recordedHistory.slice(2, 4) }],
+        [endpoint(3, 2), { data: [] }],
+      ]);
+
+      const result = await firstValueFrom(
+        provider.getAssetTransactionHistory({ assetId, pageSize: 2 }),
+      );
+
+      expect(result.unwrap()).toEqual(recordedHistory.map(toHistoryItem));
+      expect(request).toHaveBeenCalledTimes(3);
+    });
+
+    it('starts the listing at the requested page', async () => {
+      mockResponses(request, [
+        [endpoint(2, 2), { data: recordedHistory.slice(2, 4) }],
+        [endpoint(3, 2), { data: [] }],
+      ]);
+
+      const result = await firstValueFrom(
+        provider.getAssetTransactionHistory({ assetId, page: 2, pageSize: 2 }),
+      );
+
+      expect(result.unwrap()).toEqual(
+        recordedHistory.slice(2, 4).map(toHistoryItem),
+      );
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops paging once maxPages pages were read', async () => {
+      mockResponses(request, [
+        [endpoint(1, 1), { data: recordedHistory.slice(0, 1) }],
+        [endpoint(2, 1), { data: recordedHistory.slice(1, 2) }],
+      ]);
+
+      const result = await firstValueFrom(
+        provider.getAssetTransactionHistory({
+          assetId,
+          maxPages: 2,
+          pageSize: 1,
+        }),
+      );
+
+      expect(result.unwrap()).toEqual(
+        recordedHistory.slice(0, 2).map(toHistoryItem),
+      );
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats a 404 (asset never minted) as an empty history', async () => {
+      mockResponses(request, [
+        [endpoint(1), new HttpClientError(404, 'Not Found')],
+      ]);
+
+      const result = await firstValueFrom(
+        provider.getAssetTransactionHistory({ assetId }),
+      );
+
+      expect(result.expect('should treat 404 as empty')).toEqual([]);
+    });
+
+    it('surfaces non-404 errors as Err', async () => {
+      const error = new HttpClientError(500, 'Internal server error');
+      mockResponses(request, [[endpoint(1), error]]);
+
+      const result = await firstValueFrom(
+        provider.getAssetTransactionHistory({ assetId }),
+      );
+
+      expect(result.expectErr('should be internal server error')).toEqual(
+        new ProviderError(
+          ProviderFailure.Unhealthy,
+          error,
+          'Internal server error',
+        ),
+      );
+    });
+
+    it('requests afresh on each subscription, so a retry does not replay a failure', async () => {
+      request
+        .mockRejectedValueOnce(new HttpClientError(500, 'Server Error'))
+        .mockResolvedValueOnce({ data: recordedHistory });
+
+      const history$ = provider.getAssetTransactionHistory({ assetId });
+      expect(request).not.toHaveBeenCalled();
+
+      expect((await firstValueFrom(history$)).isErr()).toBe(true);
+      const retried = await firstValueFrom(history$);
+
+      expect(retried.unwrap()).toHaveLength(recordedHistory.length);
+      expect(request).toHaveBeenCalledTimes(2);
     });
   });
 });

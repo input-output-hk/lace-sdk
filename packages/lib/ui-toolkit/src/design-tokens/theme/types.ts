@@ -49,6 +49,12 @@ export type Theme = {
   };
   extra: {
     chathamsBlue: string;
+    tagHydraBackground: string;
+    tagHydraText: string;
+    tagHydraRecoverBackground: string;
+    tagHydraRecoverText: string;
+    tagWarningBackground: string;
+    tagWarningText: string;
     fancyBorder: string;
     shadowDrop: string;
     shadowInner: string;

@@ -3,7 +3,7 @@ import { CborMajorType } from './CborMajorType';
 import { CborTag } from './CborTag';
 import { encodeHalf } from './Half';
 
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 // Constants
 const MINUS_ONE = BigInt(-1);

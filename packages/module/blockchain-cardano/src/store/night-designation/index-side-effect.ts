@@ -33,9 +33,10 @@ import {
   timer,
 } from 'rxjs';
 
+import { unwrapProviderResult } from '../helpers/unwrap-provider-result';
+
 import { resolveAccountKeyHashes } from './account-key-hashes';
 import { findRegistrationUtxo } from './registration-utxo';
-import { unwrapProviderResult } from './unwrap-provider-result';
 
 import type { SideEffect } from '../../contracts';
 import type { Cardano } from '@cardano-sdk/core';

@@ -1,0 +1,6 @@
+kind: Fixed
+body: Staking reward views hide the rewards chart and range selector when the selected pool has no reward history.
+time: 2026-10-26T19:18:39.015847Z
+custom:
+  Package: sdk
+  Build: canary

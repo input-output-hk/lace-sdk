@@ -1,4 +1,4 @@
-import { HexBlob } from '@lace-lib/util/common';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { PlutusLanguageVersion } from '../../../src/Cardano';
 import { ProposedProtocolParameterUpdates } from '../../../src/Serialization/Update/ProposedProtocolParameterUpdates';

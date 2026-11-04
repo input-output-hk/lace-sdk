@@ -5,11 +5,11 @@ import { util } from '@lace-lib/cardano-key-management';
 import {
   InvalidArgumentError,
   areStringsEqualInConstantTime,
-} from '@lace-lib/util/common';
+} from '@lace-lib/cardano-util';
 
 import type { LedgerTxTransformerContext } from '../types';
 import type { GroupedAddress } from '@lace-lib/cardano-key-management';
-import type { Transform } from '@lace-lib/util/common';
+import type { Transform } from '@lace-lib/cardano-util';
 
 // ledgerjs declares RelayType as a const enum, which only a whole-program tsc
 // build inlines; per-file transpilers leave it undefined at runtime. These are

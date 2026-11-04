@@ -26,9 +26,11 @@ import {
   signableChanges,
   signMaintenanceUpdate,
 } from './maintenance-authority';
+import { bundleRegistryLoader } from './signing-loader';
 import { sealGrantView } from './view-seal';
 
 import type { AccountSecrets } from './envelopes';
+import type { PassportRegistry } from './registry';
 import type {
   AccountKeyring,
   DeviceReader,
@@ -353,201 +355,212 @@ const sealToReaders = async (
  * view seals, maintenance update signatures and whether a keyring holds
  * the maintenance authority on chain leave it. The maintenance authority
  * a roster key derives exists only inside the call that derives it.
+ * `registry` is what the host registers beside the default bundle: a
+ * verifier key install is signed only for an operation of the
+ * roster of the bundle it names, with the key that bundle pins, so the
+ * registry is loaded when the first install is signed.
  */
 export const encryptionKeyOver = (
   deriveSecret: DeriveSecret,
-): Required<PassportEncryptionKey> => ({
-  readerPublicKey: async networkId =>
-    withReaderSecret(deriveSecret, networkId, async readerSecret =>
-      x25519.getPublicKey(readerSecret),
-    ),
-  createKeys: async (
-    networkId,
-    {
-      devicePublicKey,
-      keyring,
-      registrations = [],
-      readers = [],
-      rotateRoster,
-      removed,
-    },
-  ) =>
-    withReaderSecret(deriveSecret, networkId, async readerSecret => {
-      const self: DeviceReader = {
-        readerPublicKey: HexBytes.fromByteArray(
-          x25519.getPublicKey(readerSecret),
-        ),
+  registry?: PassportRegistry,
+): Required<PassportEncryptionKey> => {
+  const loadBundles = bundleRegistryLoader(registry);
+  return {
+    readerPublicKey: async networkId =>
+      withReaderSecret(deriveSecret, networkId, async readerSecret =>
+        x25519.getPublicKey(readerSecret),
+      ),
+    createKeys: async (
+      networkId,
+      {
         devicePublicKey,
-      };
-      assertDeviceReader(self);
-      const create = async (
-        others: readonly DeviceReader[],
-        kept: Uint8Array | undefined,
-      ) => {
-        const sealedTo = [self, ...others];
-        const secrets: AccountSecrets = {
-          secret: x25519.utils.randomSecretKey(),
-          rosterKey: kept
-            ? kept.slice()
-            : crypto.getRandomValues(new Uint8Array(KEY_LENGTH)),
+        keyring,
+        registrations = [],
+        readers = [],
+        rotateRoster,
+        removed,
+      },
+    ) =>
+      withReaderSecret(deriveSecret, networkId, async readerSecret => {
+        const self: DeviceReader = {
+          readerPublicKey: HexBytes.fromByteArray(
+            x25519.getPublicKey(readerSecret),
+          ),
+          devicePublicKey,
         };
-        try {
-          return {
-            authority: await authorityOf(
-              await loadMaintenanceLedger(),
-              secrets.rosterKey,
-            ),
-            encKey: x25519.getPublicKey(secrets.secret),
-            envelopes: await sealToReaders(sealedTo, secrets),
-            registrations: kept
-              ? []
-              : await Promise.all(
-                  sealedTo.map(async reader =>
-                    sealDeviceRegistration(secrets.rosterKey, {
-                      readerPublicKey: reader.readerPublicKey,
-                      devicePublicKey: reader.devicePublicKey,
-                    }),
-                  ),
-                ),
+        assertDeviceReader(self);
+        const create = async (
+          others: readonly DeviceReader[],
+          kept: Uint8Array | undefined,
+        ) => {
+          const sealedTo = [self, ...others];
+          const secrets: AccountSecrets = {
+            secret: x25519.utils.randomSecretKey(),
+            rosterKey: kept
+              ? kept.slice()
+              : crypto.getRandomValues(new Uint8Array(KEY_LENGTH)),
           };
-        } finally {
-          zeroSecrets(secrets);
-        }
-      };
-      if (!keyring) {
-        if (readers.length > 0) {
-          throw new DeviceRosterInvalidError(
-            'An account without keys has no roster to seal to.',
-          );
-        }
-        return create([], undefined);
-      }
-      return withKeyring(readerSecret, keyring, async ({ live }) => {
-        const registered: DeviceReader[] = [];
-        for (const entry of registrations) {
-          const device = await openDeviceRegistration(live.rosterKey, entry);
-          if (device) registered.push(device);
-        }
-        assertRegisteredReaders(readers, {
-          self,
-          registered,
-          removed: removed?.devicePublicKey,
-        });
-        return create(readers, rotateRoster ? undefined : live.rosterKey);
-      });
-    }),
-  sealToDevice: async (networkId, keyring, reader) => {
-    assertDeviceReader(reader);
-    return withReaderSecret(deriveSecret, networkId, async readerSecret =>
-      withKeyring(readerSecret, keyring, async ({ live }) => ({
-        envelope: await sealDeviceEnvelope(
-          ByteArray.fromHex(HexBytes(reader.readerPublicKey)),
-          live,
-        ),
-        registration: await sealDeviceRegistration(live.rosterKey, {
-          readerPublicKey: reader.readerPublicKey,
-          devicePublicKey: reader.devicePublicKey,
-        }),
-      })),
-    );
-  },
-  openInbox: async (networkId, keyring, entries) =>
-    withReaderSecret(deriveSecret, networkId, async readerSecret =>
-      withKeyring(readerSecret, keyring, async opened => {
-        const results: (OpenedInboxEntry | null)[] = [];
-        for (const entry of entries) {
-          const device = await openDeviceRegistration(
-            opened.live.rosterKey,
-            entry,
-          );
-          if (device) {
-            results.push({ kind: 'device', device });
-            continue;
-          }
-          const record = await openGrantRecord(
-            readerSecret,
-            keyring.account,
-            entry,
-          );
-          if (record) {
-            results.push({ kind: 'grant', record });
-            continue;
-          }
-          const coin = await openCoin(opened, entry);
-          results.push(coin && { kind: 'coin', coin });
-        }
-        return results;
-      }),
-    ),
-  sealGrant: async (networkId, account, { object, ...grant }) =>
-    withReaderSecret(deriveSecret, networkId, async readerSecret => [
-      await sealGrantRecord(readerSecret, account, { part: 'grant', ...grant }),
-      await sealGrantRecord(readerSecret, account, {
-        part: 'object',
-        grantId: grant.grantId,
-        object,
-      }),
-    ]),
-  reencryptInbox: async (networkId, { keyring, to }, entries) =>
-    withReaderSecret(deriveSecret, networkId, async readerSecret =>
-      withKeyring(readerSecret, keyring, async opened => {
-        const sealed: (Uint8Array | null)[] = [];
-        for (const entry of entries) {
-          const coin = await openCoin(opened, entry);
-          if (!coin) {
-            sealed.push(null);
-            continue;
-          }
           try {
-            sealed.push(await sealInboxEntry(to, coin));
+            return {
+              authority: await authorityOf(
+                await loadMaintenanceLedger(),
+                secrets.rosterKey,
+              ),
+              encKey: x25519.getPublicKey(secrets.secret),
+              envelopes: await sealToReaders(sealedTo, secrets),
+              registrations: kept
+                ? []
+                : await Promise.all(
+                    sealedTo.map(async reader =>
+                      sealDeviceRegistration(secrets.rosterKey, {
+                        readerPublicKey: reader.readerPublicKey,
+                        devicePublicKey: reader.devicePublicKey,
+                      }),
+                    ),
+                  ),
+            };
           } finally {
-            coin.nonce.fill(0);
+            zeroSecrets(secrets);
           }
-        }
-        return sealed;
-      }),
-    ),
-  sealView: async (networkId, keyring, binding) =>
-    withReaderSecret(deriveSecret, networkId, async readerSecret =>
-      withKeyring(readerSecret, keyring, async ({ live }) => {
-        const seal = await sealGrantView(live.secret, binding);
-        return {
-          seal,
-          entry: await sealGrantRecord(readerSecret, binding.account, {
-            part: 'view',
-            grantId: binding.grantId,
-            encKeyPrefix: HexBytes.fromByteArray(
-              keyring.encKey.slice(0, ENC_KEY_PREFIX_LENGTH),
-            ),
-            seal: HexBytes.fromByteArray(seal),
-          }),
         };
+        if (!keyring) {
+          if (readers.length > 0) {
+            throw new DeviceRosterInvalidError(
+              'An account without keys has no roster to seal to.',
+            );
+          }
+          return create([], undefined);
+        }
+        return withKeyring(readerSecret, keyring, async ({ live }) => {
+          const registered: DeviceReader[] = [];
+          for (const entry of registrations) {
+            const device = await openDeviceRegistration(live.rosterKey, entry);
+            if (device) registered.push(device);
+          }
+          assertRegisteredReaders(readers, {
+            self,
+            registered,
+            removed: removed?.devicePublicKey,
+          });
+          return create(readers, rotateRoster ? undefined : live.rosterKey);
+        });
       }),
-    ),
-  signMaintenanceUpdate: async (
-    networkId,
-    { keyring, authority, counter, changes: requested },
-  ) => {
-    const changes = await signableChanges(requested);
-    const ledger = await loadMaintenanceLedger();
-    return withReaderSecret(deriveSecret, networkId, async readerSecret =>
-      withRosterKeys(readerSecret, keyring, async rosterKeys =>
-        signMaintenanceUpdate(ledger, {
-          address: keyring.account,
-          rosterKeys,
-          authority,
-          counter,
-          changes,
+    sealToDevice: async (networkId, keyring, reader) => {
+      assertDeviceReader(reader);
+      return withReaderSecret(deriveSecret, networkId, async readerSecret =>
+        withKeyring(readerSecret, keyring, async ({ live }) => ({
+          envelope: await sealDeviceEnvelope(
+            ByteArray.fromHex(HexBytes(reader.readerPublicKey)),
+            live,
+          ),
+          registration: await sealDeviceRegistration(live.rosterKey, {
+            readerPublicKey: reader.readerPublicKey,
+            devicePublicKey: reader.devicePublicKey,
+          }),
+        })),
+      );
+    },
+    openInbox: async (networkId, keyring, entries) =>
+      withReaderSecret(deriveSecret, networkId, async readerSecret =>
+        withKeyring(readerSecret, keyring, async opened => {
+          const results: (OpenedInboxEntry | null)[] = [];
+          for (const entry of entries) {
+            const device = await openDeviceRegistration(
+              opened.live.rosterKey,
+              entry,
+            );
+            if (device) {
+              results.push({ kind: 'device', device });
+              continue;
+            }
+            const record = await openGrantRecord(
+              readerSecret,
+              keyring.account,
+              entry,
+            );
+            if (record) {
+              results.push({ kind: 'grant', record });
+              continue;
+            }
+            const coin = await openCoin(opened, entry);
+            results.push(coin && { kind: 'coin', coin });
+          }
+          return results;
         }),
       ),
-    );
-  },
-  holdsMaintenanceAuthority: async (networkId, keyring, authority) => {
-    const ledger = await loadMaintenanceLedger();
-    return withReaderSecret(deriveSecret, networkId, async readerSecret =>
-      withRosterKeys(readerSecret, keyring, async rosterKeys =>
-        derivesAuthority(ledger, rosterKeys, authority),
+    sealGrant: async (networkId, account, { object, ...grant }) =>
+      withReaderSecret(deriveSecret, networkId, async readerSecret => [
+        await sealGrantRecord(readerSecret, account, {
+          part: 'grant',
+          ...grant,
+        }),
+        await sealGrantRecord(readerSecret, account, {
+          part: 'object',
+          grantId: grant.grantId,
+          object,
+        }),
+      ]),
+    reencryptInbox: async (networkId, { keyring, to }, entries) =>
+      withReaderSecret(deriveSecret, networkId, async readerSecret =>
+        withKeyring(readerSecret, keyring, async opened => {
+          const sealed: (Uint8Array | null)[] = [];
+          for (const entry of entries) {
+            const coin = await openCoin(opened, entry);
+            if (!coin) {
+              sealed.push(null);
+              continue;
+            }
+            try {
+              sealed.push(await sealInboxEntry(to, coin));
+            } finally {
+              coin.nonce.fill(0);
+            }
+          }
+          return sealed;
+        }),
       ),
-    );
-  },
-});
+    sealView: async (networkId, keyring, binding) =>
+      withReaderSecret(deriveSecret, networkId, async readerSecret =>
+        withKeyring(readerSecret, keyring, async ({ live }) => {
+          const seal = await sealGrantView(live.secret, binding);
+          return {
+            seal,
+            entry: await sealGrantRecord(readerSecret, binding.account, {
+              part: 'view',
+              grantId: binding.grantId,
+              encKeyPrefix: HexBytes.fromByteArray(
+                keyring.encKey.slice(0, ENC_KEY_PREFIX_LENGTH),
+              ),
+              seal: HexBytes.fromByteArray(seal),
+            }),
+          };
+        }),
+      ),
+    signMaintenanceUpdate: async (
+      networkId,
+      { keyring, authority, counter, changes: requested },
+    ) => {
+      const changes = await signableChanges(requested, loadBundles);
+      const ledger = await loadMaintenanceLedger();
+      return withReaderSecret(deriveSecret, networkId, async readerSecret =>
+        withRosterKeys(readerSecret, keyring, async rosterKeys =>
+          signMaintenanceUpdate(ledger, {
+            address: keyring.account,
+            rosterKeys,
+            authority,
+            counter,
+            changes,
+          }),
+        ),
+      );
+    },
+    holdsMaintenanceAuthority: async (networkId, keyring, authority) => {
+      const ledger = await loadMaintenanceLedger();
+      return withReaderSecret(deriveSecret, networkId, async readerSecret =>
+        withRosterKeys(readerSecret, keyring, async rosterKeys =>
+          derivesAuthority(ledger, rosterKeys, authority),
+        ),
+      );
+    },
+  };
+};

@@ -131,4 +131,37 @@ describe('bundled-licences', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('reads every output file, including the chunks of the worker build', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lace-sdk-licences-'));
+    try {
+      const write = (relative: string, content: string) => {
+        const target = path.join(root, relative);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, content);
+      };
+      const distribution = path.join(root, 'dist');
+      write('dist/midnight.js', '//#region ../node_modules/lib-a/index.js');
+      write(
+        'dist/midnight-worker-engine-host-AbCd1234.js',
+        '//#region ../node_modules/@subsquid/scale-codec/lib/index.js',
+      );
+      write(
+        'node_modules/lib-a/package.json',
+        JSON.stringify({ version: '1.0.0', license: 'MIT' }),
+      );
+      write(
+        'node_modules/@subsquid/scale-codec/package.json',
+        JSON.stringify({ version: '4.0.1', license: 'GPL-3.0-or-later' }),
+      );
+      expect(licenceViolations(distribution, distribution)).toEqual({
+        count: 2,
+        violations: [
+          '@subsquid/scale-codec@4.0.1: GPL-3.0-or-later (in midnight-worker-engine-host-AbCd1234.js)',
+        ],
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

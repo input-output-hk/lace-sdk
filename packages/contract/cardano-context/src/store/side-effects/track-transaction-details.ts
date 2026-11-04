@@ -3,6 +3,7 @@ import { ActivityType } from '@lace-contract/activities';
 import { EMPTY, filter, map, of, switchMap, withLatestFrom } from 'rxjs';
 import { resultMergeMap } from 'ts-results-es/rxjs-operators';
 
+import { getEnabledExtensionActivities } from '../../extensions';
 import { mapTransactionToActivityDetails } from '../helpers/map-transaction-to-activity-details';
 import {
   createGetTokenMetadataWrapper as implicitCreateGetTokenMetadataWrapper,
@@ -15,6 +16,7 @@ import type { CardanoProvider, RequiredProtocolParameters } from '../../types';
 import type { GetTokenMetadataWrapper } from '../helpers/transaction-processors';
 import type { Activity } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
+import type { FeatureFlag } from '@lace-contract/feature';
 
 type CreateTrackTransactionDetailsParams = {
   createInputResolver?: (
@@ -35,16 +37,21 @@ const destructureActivityWithContext = ([
   chainId,
   addresses,
   protocolParameters,
+  loadedFeatures,
 ]: [
   { payload: { activity: Activity } },
   Cardano.ChainId,
   AnyAddress[],
   RequiredProtocolParameters | undefined,
+  { featureFlags: readonly FeatureFlag[] },
 ]) => ({
   activity,
   chainId,
   addresses,
   protocolParameters,
+  enabledExtensionActivities: getEnabledExtensionActivities(
+    loadedFeatures.featureFlags,
+  ),
 });
 
 export const createTrackTransactionDetails =
@@ -54,7 +61,7 @@ export const createTrackTransactionDetails =
   }: CreateTrackTransactionDetailsParams = {}): SideEffect =>
   (
     { activities },
-    { addresses, cardanoContext },
+    { addresses, cardanoContext, features: { selectLoadedFeatures$ } },
     {
       actions: {
         activities: { setActivityDetails },
@@ -73,9 +80,11 @@ export const createTrackTransactionDetails =
         cardanoContext.selectChainId$.pipe(filter(Boolean)),
         addresses.selectAllAddresses$,
         cardanoContext.selectProtocolParameters$,
+        selectLoadedFeatures$,
       ),
       map(destructureActivityWithContext),
-      switchMap(({ activity, chainId, addresses, protocolParameters }) => {
+      switchMap(context => {
+        const { activity, chainId, addresses, protocolParameters } = context;
         const { type, accountId, activityId } = activity;
 
         if (protocolParameters === undefined) {
@@ -126,6 +135,7 @@ export const createTrackTransactionDetails =
                 chainId,
               ),
               logger,
+              enabledExtensionActivities: context.enabledExtensionActivities,
             });
           }),
           map(result =>

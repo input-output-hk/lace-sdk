@@ -1,8 +1,10 @@
 import {
   Cardano,
   createTxInspector,
+  Serialization,
   transactionSummaryInspector,
 } from '@cardano-sdk/core';
+import { HexBlob } from '@cardano-sdk/util';
 import { ActivityType } from '@lace-contract/activities';
 import { TokenId } from '@lace-contract/tokens';
 import { AccountId } from '@lace-contract/wallet-repo';
@@ -27,6 +29,9 @@ import type {
 import type * as Core from '@cardano-sdk/core';
 
 const logger = dummyLogger;
+
+const allExtensionActivities = { nightDesignation: true, hydra: true };
+const noExtensionActivities = { nightDesignation: false, hydra: false };
 
 /**
  * A summary with every input resolved. The real `TransactionSummaryInspection`
@@ -61,6 +66,7 @@ vi.mock('@cardano-sdk/core', async importActual => {
       BlockId: vi.fn(),
       Slot: vi.fn(),
     },
+    Serialization: module.Serialization,
     createTxInspector: vi.fn(),
     transactionSummaryInspector: vi.fn(),
   };
@@ -177,6 +183,7 @@ describe('mapTransactionToActivity', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(classifyTxAsNightDesignation).mockReset();
 
     mockCreateTxInspector.mockReturnValue(mockTxSummaryInspector);
     (
@@ -230,7 +237,7 @@ describe('mapTransactionToActivity', () => {
         protocolParameters: mockProtocolParameters,
         resolveInput: mockResolveInput,
         logger,
-        isExtensionActivityEnabled: true,
+        enabledExtensionActivities: allExtensionActivities,
       });
 
       expect(transactionSummaryInspector).toHaveBeenCalledWith({
@@ -275,7 +282,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: true,
+          enabledExtensionActivities: allExtensionActivities,
         }),
       );
 
@@ -324,7 +331,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: true,
+          enabledExtensionActivities: allExtensionActivities,
         }),
       );
 
@@ -373,7 +380,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: true,
+          enabledExtensionActivities: allExtensionActivities,
         }),
       );
 
@@ -429,7 +436,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: true,
+          enabledExtensionActivities: allExtensionActivities,
         }),
       );
 
@@ -467,7 +474,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: true,
+          enabledExtensionActivities: allExtensionActivities,
         }),
       );
 
@@ -530,7 +537,7 @@ describe('mapTransactionToActivity', () => {
             protocolParameters: mockProtocolParameters,
             resolveInput: mockResolveInput,
             logger,
-            isExtensionActivityEnabled: true,
+            enabledExtensionActivities: allExtensionActivities,
           }),
         );
 
@@ -575,7 +582,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: false,
+          enabledExtensionActivities: noExtensionActivities,
         }),
       );
 
@@ -626,7 +633,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: true,
+          enabledExtensionActivities: allExtensionActivities,
         }),
       );
 
@@ -698,7 +705,7 @@ describe('mapTransactionToActivity', () => {
           protocolParameters: mockProtocolParameters,
           resolveInput: mockResolveInput,
           logger,
-          isExtensionActivityEnabled: true,
+          enabledExtensionActivities: allExtensionActivities,
         }),
       );
     };
@@ -790,6 +797,516 @@ describe('mapTransactionToActivity', () => {
       if (result.isOk()) expect(result.value.activityId).toBe(mockTxId);
     });
 
+    describe('Hydra Head transactions', () => {
+      /** Head of a Hydra 2.3.0 deposit recorded on Preprod. */
+      const headId = '324c8b8198c4c9db7526d6dccb79e992c4863b24b56453bb16995bdc';
+      const depositAddress = Cardano.PaymentAddress(
+        'addr_test1wrrcaryjq4epavl0gsg08kuuv95l5md5jlpyvswjnss998qyu7lhm',
+      );
+      const headAddress = Cardano.PaymentAddress(
+        'addr_test1wq4erflxvet45fr9hrrldflevr2cwr83x622vlejzhspf3gn6jry8',
+      );
+      const depositDatum =
+        'd8799f581c324c8b8198c4c9db7526d6dccb79e992c4863b24b56453bb16995bdc1b000001a05d17b3df9fd8799fd8799f5820e2f094efbbf8e363b9d02c7b5c61f89abdd6b839161d3a01638a882356ef96b101ff5f5840d8799fd8799fd8799f581cba1e067abfb07ecd833cec7005a8aa89cbdf09e10d6c87bb73da9e35ffd8799fd8799fd8799f581cac246d63642cf5fba32b6b605158236b8abf4d4e926fa42750db18341406ffffffffa140a1401a004699f3d87980d87a80ffffffffff';
+      const headStateTokenId =
+        `${headId}4879647261486561645632` as Cardano.AssetId;
+      const depositOutput = {
+        address: depositAddress,
+        value: { coins: 4_626_931n },
+        datum: Serialization.PlutusData.fromCbor(
+          HexBlob(depositDatum),
+        ).toCore(),
+      } as Cardano.TxOut;
+      const depositInput = {
+        txId: Cardano.TransactionId(
+          'c1a8300f3d89c7feca5a91561329d205574170d5886e7bfb384558b5b89759a7',
+        ),
+        index: 0,
+        address: depositAddress,
+      };
+      const headInput = {
+        txId: Cardano.TransactionId(
+          'd2b9a1c3e4f5061728394a5b6c7d8e9f00112233445566778899aabbccddeeff',
+        ),
+        index: 0,
+        address: headAddress,
+      };
+      const headOutput = {
+        address: headAddress,
+        value: {
+          coins: 10_000_000n,
+          assets: new Map([[headStateTokenId, 1n]]),
+        },
+      } as Cardano.TxOut;
+      const hydraTag = (value: string): Cardano.AuxiliaryData => ({
+        blob: new Map([[55_555n, value]]),
+      });
+
+      const hydraTx = ({
+        tag,
+        inputs = [ownInput],
+        outputs,
+        mint,
+        inputSource = Cardano.InputSource.inputs,
+      }: {
+        tag?: string;
+        inputs?: Cardano.HydratedTxIn[];
+        outputs: Cardano.TxOut[];
+        mint?: Cardano.TokenMap;
+        inputSource?: Cardano.InputSource;
+      }): ExtendedTxDetails =>
+        ({
+          ...mockTxDetails,
+          auxiliaryData: tag === undefined ? undefined : hydraTag(tag),
+          inputSource,
+          body: { ...mockTxDetails.body, inputs, outputs, mint },
+        } as ExtendedTxDetails);
+
+      const depositTx = (tag?: string) =>
+        hydraTx({
+          tag,
+          outputs: [depositOutput, ownOutputOf(5_000_000n)],
+        });
+
+      const depositSummary = summaryOf({
+        coins: -4_800_000n,
+        resolvedInputs: [
+          { ...ownInput, value: { coins: 9_800_000n } },
+        ] as Core.TransactionSummaryInspection['resolvedInputs'],
+      });
+
+      const mapWith = async (
+        txDetails: ExtendedTxDetails,
+        enabledExtensionActivities: typeof allExtensionActivities,
+        summary = depositSummary,
+      ) => {
+        mockTxSummaryInspector.mockReturnValue(of({ summary }));
+        const result = await firstValueFrom(
+          mapTransactionToActivity({
+            accountId: AccountId('account1'),
+            txDetails,
+            accountAddresses: mockAccountAddresses.map(addr =>
+              CardanoPaymentAddress(addr),
+            ),
+            rewardAccount: CardanoRewardAccount(mockRewardAccount),
+            protocolParameters: mockProtocolParameters,
+            resolveInput: mockResolveInput,
+            logger,
+            enabledExtensionActivities,
+          }),
+        );
+        if (result.isErr()) throw result.error;
+        return result.value;
+      };
+
+      const hydraOnly = { nightDesignation: false, hydra: true };
+
+      beforeEach(async () => {
+        const { Cardano: actual } = await vi.importActual<typeof Core>(
+          '@cardano-sdk/core',
+        );
+        vi.mocked(Cardano.AssetId.getPolicyId).mockImplementation(
+          actual.AssetId.getPolicyId,
+        );
+        vi.mocked(Cardano.AssetId.getAssetName).mockImplementation(
+          actual.AssetId.getAssetName,
+        );
+      });
+
+      afterEach(() => {
+        vi.mocked(Cardano.AssetId.getPolicyId).mockReset();
+        vi.mocked(Cardano.AssetId.getAssetName).mockReset();
+      });
+
+      const cardanoOf = (activity: { blockchainSpecific?: unknown }) =>
+        (activity.blockchainSpecific as { Cardano: Record<string, unknown> })
+          .Cardano;
+
+      it('adds the head id and deadline of a tagged deposit and keeps its Send type and amounts', async () => {
+        const off = await mapWith(
+          depositTx('HydraV2/DepositTx'),
+          noExtensionActivities,
+        );
+        const on = await mapWith(depositTx('HydraV2/DepositTx'), hydraOnly);
+
+        expect(on.type).toBe(ActivityType.Send);
+        expect(on).toEqual({
+          ...off,
+          blockchainSpecific: {
+            Cardano: {
+              ...cardanoOf(off),
+              hydra: {
+                protocol: 'HydraV2',
+                txName: 'DepositTx',
+                headId,
+                depositDeadline: '2026-09-01T13:10:29.599Z',
+              },
+            },
+          },
+        });
+      });
+
+      it('labels a tagged recover as Receive without a head id', async () => {
+        const activity = await mapWith(
+          hydraTx({
+            tag: 'HydraV2/RecoverTx',
+            inputs: [depositInput],
+            outputs: [ownOutputOf(4_400_000n)],
+          }),
+          hydraOnly,
+          summaryOf({ coins: 4_400_000n }),
+        );
+
+        expect(activity.type).toBe(ActivityType.Receive);
+        expect(cardanoOf(activity).hydra).toEqual({
+          protocol: 'HydraV2',
+          txName: 'RecoverTx',
+        });
+      });
+
+      it('reads the head id of a tagged fanout from the head state token it burns', async () => {
+        const activity = await mapWith(
+          hydraTx({
+            tag: 'HydraV2/FanoutTx',
+            inputs: [headInput],
+            outputs: [ownOutputOf(4_626_931n)],
+            mint: new Map([[headStateTokenId, -1n]]),
+          }),
+          hydraOnly,
+          summaryOf({ coins: 4_626_931n }),
+        );
+
+        expect(activity.type).toBe(ActivityType.Receive);
+        expect(cardanoOf(activity).hydra).toEqual({
+          protocol: 'HydraV2',
+          txName: 'FanoutTx',
+          headId,
+        });
+      });
+
+      it('reads the head id of a tagged head step from the head output', async () => {
+        const activity = await mapWith(
+          hydraTx({
+            tag: 'HydraV2/CloseTx',
+            inputs: [headInput],
+            outputs: [headOutput, ownOutputOf(5_000_000n)],
+          }),
+          hydraOnly,
+        );
+
+        expect(cardanoOf(activity).hydra).toEqual({
+          protocol: 'HydraV2',
+          txName: 'CloseTx',
+          headId,
+        });
+      });
+
+      it('reads the head id of a tagged increment from the head output', async () => {
+        const activity = await mapWith(
+          hydraTx({
+            tag: 'HydraV2/IncrementTx',
+            inputs: [headInput, depositInput],
+            outputs: [headOutput],
+          }),
+          hydraOnly,
+        );
+
+        expect(cardanoOf(activity).hydra).toEqual({
+          protocol: 'HydraV2',
+          txName: 'IncrementTx',
+          headId,
+        });
+      });
+
+      it('ignores a tagged transaction that touches no Hydra address, whatever it mints', async () => {
+        const activity = await mapWith(
+          hydraTx({
+            tag: 'HydraV2/FanoutTx',
+            outputs: [ownOutputOf(5_000_000n)],
+            mint: new Map([[headStateTokenId, 1n]]),
+          }),
+          hydraOnly,
+        );
+
+        expect(cardanoOf(activity)).not.toHaveProperty('hydra');
+      });
+
+      it.each([
+        ['CollectComTx', true],
+        ['CloseTx', true],
+        ['ContestTx', true],
+        ['DecrementTx', true],
+        ['PartialFanoutTx', true],
+        ['AbortTx', false],
+        ['FanoutTx', false],
+        ['FinalPartialFanoutTx', false],
+      ] as const)(
+        'names a head step %s from the marker when it fits whether a head UTxO is left (%s)',
+        async (step, leavesHead) => {
+          const activity = await mapWith(
+            hydraTx({
+              tag: `HydraV2/${step}`,
+              inputs: [headInput],
+              outputs: leavesHead ? [headOutput] : [ownOutputOf(5_000_000n)],
+            }),
+            hydraOnly,
+          );
+
+          expect(cardanoOf(activity).hydra).toMatchObject({
+            protocol: 'HydraV2',
+            txName: step,
+          });
+        },
+      );
+
+      it.each([
+        {
+          case: 'a step that leaves a head UTxO as one that does not',
+          tag: 'HydraV2/FanoutTx',
+          outputs: [headOutput],
+        },
+        {
+          case: 'a step that leaves no head UTxO as one that does',
+          tag: 'HydraV2/CloseTx',
+          outputs: [ownOutputOf(5_000_000n)],
+        },
+        {
+          case: 'a head step by a name it does not know',
+          tag: 'HydraV2/Claim refund at evil.example',
+          outputs: [headOutput],
+        },
+      ])(
+        'keeps a head step as HeadTx when the marker names $case',
+        async ({ tag, outputs }) => {
+          const activity = await mapWith(
+            hydraTx({ tag, inputs: [headInput], outputs }),
+            hydraOnly,
+          );
+
+          expect(cardanoOf(activity).hydra).toMatchObject({
+            protocol: 'HydraV2',
+            txName: 'HeadTx',
+          });
+        },
+      );
+
+      it.each([
+        {
+          case: 'an increment',
+          tag: 'HydraV2/FanoutTx',
+          inputs: [headInput, depositInput],
+          outputs: [headOutput],
+          txName: 'IncrementTx',
+        },
+        {
+          case: 'an init',
+          tag: 'HydraV2/CloseTx',
+          inputs: [ownInput],
+          outputs: [headOutput, ownOutputOf(5_000_000n)],
+          txName: 'InitTx',
+        },
+        {
+          case: 'a deposit',
+          tag: 'HydraV2/CloseTx',
+          inputs: [ownInput],
+          outputs: [depositOutput, ownOutputOf(5_000_000n)],
+          txName: 'DepositTx',
+        },
+      ])(
+        'names $case from its addresses whatever the marker says',
+        async ({ tag, inputs, outputs, txName }) => {
+          const activity = await mapWith(
+            hydraTx({ tag, inputs, outputs }),
+            hydraOnly,
+          );
+
+          expect(cardanoOf(activity).hydra).toMatchObject({ txName });
+        },
+      );
+
+      it.each([
+        {
+          case: 'a datum of another shape',
+          datum: Serialization.PlutusData.fromCbor(HexBlob('d87980')).toCore(),
+        },
+        { case: 'no datum', datum: undefined },
+      ])(
+        'labels a tagged deposit whose deposit output has $case without a head id or deadline',
+        async ({ datum }) => {
+          const activity = await mapWith(
+            hydraTx({
+              tag: 'HydraV2/DepositTx',
+              outputs: [{ ...depositOutput, datum }, ownOutputOf(5_000_000n)],
+            }),
+            hydraOnly,
+          );
+
+          expect(cardanoOf(activity).hydra).toEqual({
+            protocol: 'HydraV2',
+            txName: 'DepositTx',
+          });
+        },
+      );
+
+      it('labels a tagged deposit whose deadline is beyond the date range without a head id or deadline', async () => {
+        const datum = Serialization.PlutusData.fromCbor(
+          HexBlob(
+            depositDatum.replace('1b000001a05d17b3df', '1b001eb208c2dc0001'),
+          ),
+        ).toCore();
+        const activity = await mapWith(
+          hydraTx({
+            tag: 'HydraV2/DepositTx',
+            outputs: [{ ...depositOutput, datum }, ownOutputOf(5_000_000n)],
+          }),
+          hydraOnly,
+        );
+
+        expect(activity.type).toBe(ActivityType.Send);
+        expect(cardanoOf(activity).hydra).toEqual({
+          protocol: 'HydraV2',
+          txName: 'DepositTx',
+        });
+      });
+
+      it('recognises an untagged transaction paying the head state token to a head address as an init', async () => {
+        const activity = await mapWith(
+          hydraTx({ outputs: [headOutput, ownOutputOf(5_000_000n)] }),
+          hydraOnly,
+        );
+
+        expect(cardanoOf(activity).hydra).toEqual({
+          txName: 'InitTx',
+          headId,
+        });
+      });
+
+      it('recognises an untagged transaction paying a deposit address as a deposit', async () => {
+        const activity = await mapWith(depositTx(), hydraOnly);
+
+        expect(activity.type).toBe(ActivityType.Send);
+        expect(cardanoOf(activity).hydra).toEqual({
+          txName: 'DepositTx',
+          headId,
+          depositDeadline: '2026-09-01T13:10:29.599Z',
+        });
+      });
+
+      it('recognises an untagged transaction spending a deposit as a recover', async () => {
+        const activity = await mapWith(
+          hydraTx({
+            inputs: [depositInput],
+            outputs: [ownOutputOf(4_400_000n)],
+          }),
+          hydraOnly,
+          summaryOf({ coins: 4_400_000n }),
+        );
+
+        expect(activity.type).toBe(ActivityType.Receive);
+        expect(cardanoOf(activity).hydra).toEqual({ txName: 'RecoverTx' });
+      });
+
+      it('ignores an untagged transaction that touches no Hydra address', async () => {
+        const activity = await mapWith(
+          hydraTx({ outputs: [ownOutputOf(4_400_000n)] }),
+          hydraOnly,
+          summaryOf({ coins: 4_400_000n }),
+        );
+
+        expect(cardanoOf(activity)).not.toHaveProperty('hydra');
+      });
+
+      it.each(['HydraV3/DepositTx', 'HydraV2/', 'DepositTx'])(
+        'falls back to the script addresses when the tag is malformed: %s',
+        async tag => {
+          const tagged = await mapWith(
+            hydraTx({ tag, outputs: [ownOutputOf(5_000_000n)] }),
+            hydraOnly,
+          );
+          const deposit = await mapWith(depositTx(tag), hydraOnly);
+
+          expect(cardanoOf(tagged)).not.toHaveProperty('hydra');
+          expect(cardanoOf(deposit).hydra).toEqual({
+            txName: 'DepositTx',
+            headId,
+            depositDeadline: '2026-09-01T13:10:29.599Z',
+          });
+        },
+      );
+
+      it('ignores a transaction that failed phase-2 validation', async () => {
+        const activity = await mapWith(
+          hydraTx({
+            tag: 'HydraV2/DepositTx',
+            outputs: [depositOutput],
+            inputSource: Cardano.InputSource.collaterals,
+          }),
+          hydraOnly,
+        );
+
+        expect(cardanoOf(activity)).not.toHaveProperty('hydra');
+      });
+
+      it('maps a Hydra transaction exactly as without the feature when the flag is off', async () => {
+        const activity = await mapWith(
+          depositTx('HydraV2/DepositTx'),
+          noExtensionActivities,
+        );
+
+        expect(activity).toEqual({
+          accountId: AccountId('account1'),
+          activityId: mockTxId,
+          timestamp: Timestamp(mockBlockTime * 1000),
+          tokenBalanceChanges: [
+            { tokenId: TokenId('lovelace'), amount: BigNumber(-4_800_000n) },
+          ],
+          type: ActivityType.Send,
+          blockchainSpecific: {
+            Cardano: {
+              consumedInputs: [{ txId: ownInput.txId, index: ownInput.index }],
+              producedOutputs: [],
+              producedOwnOutpoints: [{ txId: mockTxDetails.id, index: 1 }],
+              slot: mockTxDetails.blockHeader.slot,
+              security: { exploits: { deterministicNonce202606: false } },
+            },
+          },
+        });
+      });
+
+      it.each([
+        { nightDesignation: false, hydra: false },
+        { nightDesignation: true, hydra: false },
+        { nightDesignation: false, hydra: true },
+        { nightDesignation: true, hydra: true },
+      ])(
+        'gates cNIGHT and Hydra classification independently: %o',
+        async enabled => {
+          vi.mocked(classifyTxAsNightDesignation).mockReturnValue({
+            action: 'designate',
+          });
+
+          const activity = await mapWith(
+            depositTx('HydraV2/DepositTx'),
+            enabled,
+          );
+          const cardano = cardanoOf(activity);
+
+          expect(activity.type).toBe(
+            enabled.nightDesignation
+              ? ActivityType.NightDesignation
+              : ActivityType.Send,
+          );
+          expect(cardano.nightDesignation).toEqual(
+            enabled.nightDesignation ? { action: 'designate' } : undefined,
+          );
+          expect('hydra' in cardano).toBe(enabled.hydra);
+          expect(
+            vi.mocked(classifyTxAsNightDesignation).mock.calls,
+          ).toHaveLength(enabled.nightDesignation ? 1 : 0);
+        },
+      );
+    });
+
     describe('custody accounts', () => {
       // Lace's Preprod custody account; literal here because this file mocks
       // `Cardano.AssetId`.
@@ -844,7 +1361,7 @@ describe('mapTransactionToActivity', () => {
             protocolParameters: mockProtocolParameters,
             resolveInput: mockResolveInput,
             logger,
-            isExtensionActivityEnabled: true,
+            enabledExtensionActivities: allExtensionActivities,
           }),
         );
 

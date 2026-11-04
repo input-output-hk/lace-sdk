@@ -1,7 +1,8 @@
 // copied from @cardano-sdk/cardano-services-client
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano } from '@cardano-sdk/core';
 import { Hash32ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+
+import { decodeInlineDatum, hashInlineDatum } from './inline-datum';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
 
@@ -167,6 +168,13 @@ export const BlockfrostToCardanoSDK = {
     treasuryExpansion: blockfrost.tau.toString(),
   }),
 
+  /**
+   * Maps a Blockfrost output. An inline datum that is malformed, too large or
+   * nested too deep is not decoded, so that one crafted output cannot fail or
+   * stall the listing that holds it. The output keeps its datum hash instead,
+   * so a reader still sees an output that carries a datum, as the chain does,
+   * rather than one free of any datum.
+   */
   txOut: (
     blockfrost: BlockfrostOutput,
     txOutFromCbor?: Cardano.TxOut,
@@ -192,12 +200,17 @@ export const BlockfrostToCardanoSDK = {
 
     // Blockfrost can report an inline datum's hash as `data_hash` too, and
     // `TransactionOutput.fromCore` lets `datumHash` replace `datum`, so the hash
-    // is kept only for outputs that carry no inline datum.
-    if (blockfrost.inline_datum)
-      txOut.datum = Serialization.PlutusData.fromCbor(
-        HexBlob(blockfrost.inline_datum),
-      ).toCore();
-    else if (blockfrost.data_hash)
+    // is kept only for outputs whose inline datum is absent or refused.
+    if (blockfrost.inline_datum) {
+      const datum = decodeInlineDatum(blockfrost.inline_datum);
+      if (datum) txOut.datum = datum;
+      else {
+        const datumHash = blockfrost.data_hash
+          ? Hash32ByteBase16(blockfrost.data_hash)
+          : hashInlineDatum(blockfrost.inline_datum);
+        if (datumHash) txOut.datumHash = datumHash;
+      }
+    } else if (blockfrost.data_hash)
       txOut.datumHash = Hash32ByteBase16(blockfrost.data_hash);
 
     if (txOutFromCbor?.scriptReference)

@@ -1,8 +1,8 @@
-import { hexStringToBuffer } from '@lace-lib/util/common';
+import { hexStringToBuffer } from '@lace-lib/cardano-util';
 import hash from 'blake2b';
 
 import type { Hash28ByteBase16, Hash32ByteBase16 } from './hexTypes';
-import type { HexBlob } from '@lace-lib/util/common';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export interface Blake2b {
   /**

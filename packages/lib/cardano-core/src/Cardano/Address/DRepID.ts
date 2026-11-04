@@ -1,12 +1,12 @@
 import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
-import { typedBech32 } from '@lace-lib/util/common';
+import { typedBech32 } from '@lace-lib/cardano-util';
 import * as BaseEncoding from '@scure/base';
 
 import { Address, AddressType, CredentialType } from './Address';
 
 import type { Credential } from './Address';
 import type { EnterpriseAddress } from './EnterpriseAddress';
-import type { OpaqueString } from '@lace-lib/util/common';
+import type { OpaqueString } from '@lace-lib/cardano-util';
 
 const MAX_BECH32_LENGTH_LIMIT = 1023;
 const CIP_105_DREP_ID_LENGTH = 28;

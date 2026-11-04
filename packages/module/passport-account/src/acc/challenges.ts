@@ -1,5 +1,8 @@
+import { CircuitNotRegisteredError } from '@lace-contract/passport';
+
 import { pureCircuits } from './acc-module';
 
+import type { AccountModule, CircuitDescriptor } from '@lace-contract/passport';
 import type { JubjubPoint } from '@midnight-ntwrk/compact-runtime';
 
 /**
@@ -166,4 +169,112 @@ export const jubjubChallenges = {
         context.authNonce,
         grindNonce,
       ),
+};
+
+/** What the challenge of a described circuit is built from: the module, the descriptor and the call. */
+type DescriptorChallengeProps = {
+  /** The pure circuits of the bundle module that compiled the circuit. */
+  pureCircuits: AccountModule['pureCircuits'];
+  /** The circuit the call runs, as the refusal names it. */
+  circuit: string;
+  /** The bundle's descriptor of that circuit. */
+  descriptor: CircuitDescriptor;
+  /** The call's arguments, in the order the descriptor declares them. */
+  args: readonly unknown[];
+  /** The call's witness values, in the order the descriptor declares them. */
+  witnessValues: readonly unknown[];
+};
+
+/**
+ * Builds the challenge of one call once the device key is at hand, from
+ * the call context and the device public key the signature is checked
+ * against.
+ */
+export type ContextChallenge = (
+  context: CallContext,
+  pk: JubjubPoint,
+) => ChallengeBuilder;
+
+/** A challenge pure circuit as a bundle module exports it. */
+type ChallengeCircuit = (...values: unknown[]) => Uint8Array;
+
+/**
+ * The pure circuit a bundle module exports under `name`, or undefined
+ * when it exports none; an inherited property such as `constructor` is
+ * no circuit.
+ */
+const exportedCircuit = (
+  circuits: AccountModule['pureCircuits'],
+  name: string,
+): ChallengeCircuit | undefined => {
+  const value = Object.hasOwn(circuits, name) ? circuits[name] : undefined;
+  return typeof value === 'function' ? (value as ChallengeCircuit) : undefined;
+};
+
+/**
+ * The value a challenge argument names: the call argument at the
+ * position of its descriptor, or the witness value at the position of
+ * its witness descriptor.
+ */
+const challengeValue = (
+  { circuit, descriptor, args, witnessValues }: DescriptorChallengeProps,
+  name: string,
+): unknown => {
+  const argument = descriptor.args.findIndex(
+    candidate => candidate.name === name,
+  );
+  const witness = descriptor.witnesses.findIndex(
+    candidate => candidate.name === name,
+  );
+  const value =
+    argument >= 0
+      ? args[argument]
+      : witness >= 0
+      ? witnessValues[witness]
+      : undefined;
+  if (value === undefined) {
+    throw new CircuitNotRegisteredError(
+      `Circuit ${circuit} has no value for challenge argument '${name}' its descriptor names.`,
+    );
+  }
+  return value;
+};
+
+/**
+ * The challenge of a circuit a bundle describes, over the pure circuit
+ * its descriptor names, which follows the contract's convention for
+ * every gated circuit: the account address, the signature announcement,
+ * the device public key, the values the descriptor's challenge arguments
+ * name in its order, the auth nonce and the grind nonce. The module's
+ * own circuits keep the builders above; this one lets a device sign a
+ * call to any circuit a registered build adds. The pure circuit and the
+ * values are resolved here, before the device key is asked for, so a
+ * call the module cannot challenge is refused without a ceremony.
+ *
+ * @throws {@link CircuitNotRegisteredError} naming the circuit when the
+ * module exports no pure circuit under the descriptor's challenge name,
+ * or a challenge argument names no value of the call.
+ */
+export const descriptorChallenge = (
+  props: DescriptorChallengeProps,
+): ContextChallenge => {
+  const { pureCircuits: circuits, circuit, descriptor } = props;
+  const challenge = exportedCircuit(circuits, descriptor.challenge);
+  if (!challenge) {
+    throw new CircuitNotRegisteredError(
+      `Circuit ${circuit} names challenge '${descriptor.challenge}', which its bundle module does not export.`,
+    );
+  }
+  const values = descriptor.challengeArgs.map(name =>
+    challengeValue(props, name),
+  );
+  return (context, pk) => (sigR, grindNonce) =>
+    challenge(
+      address(context),
+      sigR,
+      pk,
+      ...values,
+      context.authNonce,
+      grindNonce,
+    );
 };

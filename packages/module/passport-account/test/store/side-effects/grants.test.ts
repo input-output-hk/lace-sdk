@@ -45,6 +45,7 @@ const grantId = GrantId('ab'.repeat(32));
 const account: PassportAccountInfo = {
   address: accountAddress,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -252,6 +253,7 @@ const runFlowTest = ({
           issueGrant$: trigger$('issueGrant'),
           installOperations$: NEVER,
           readShieldedHoldings$: NEVER,
+          callContract$: NEVER,
           revokeGrant$: trigger$('revokeGrant'),
           revokeAllGrants$: trigger$('revokeAllGrants'),
         },

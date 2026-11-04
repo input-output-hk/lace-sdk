@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { View, StyleSheet, Pressable } from 'react-native';
 
 import { isWeb, truncateText, type ColorType } from '../..';
@@ -8,10 +8,27 @@ import { BlurView, CustomTag, getLabelColor, Icon, Text } from '../../atoms';
 import type { Theme } from '../../../design-tokens';
 import type { IconName } from '../../atoms';
 
-export type FlexibleInfo =
+/** Colour family of an activity tag pill and of the row icon beside it. */
+export type ActivityTagTone =
+  | 'hydra'
+  | 'hydraDeposit'
+  | 'hydraRecover'
+  | 'warning';
+
+/** Small pill rendered beside the subtitle of an activity row. */
+export type ActivityTag = {
+  label: string;
+  tone: ActivityTagTone;
+};
+
+export type FlexibleInfo = {
+  /** Pills shown in order beside the subtitle; the first one tints the row icon. */
+  tags?: ActivityTag[];
+} & (
   | { title: string; subtitle: string }
   | { title: string; subtitle?: string }
-  | { title?: string; subtitle: string };
+  | { title?: string; subtitle: string }
+);
 
 export type FlexibleValue =
   | { primaryText: string; secondaryText: string; subtitle?: string }
@@ -52,7 +69,15 @@ export const ActivityCard: React.FC<
   const styles = getStyles(theme);
 
   const { status, info, value, iconName, iconBackground } = props;
-  const tagIconColor = getLabelColor(theme, iconBackground, 'semiTransparent');
+  const tags = info.tags;
+  const coloredTags = useMemo(
+    () => tags?.map(tag => ({ ...tag, colors: getTagColors(theme, tag.tone) })),
+    [tags, theme],
+  );
+  const firstTagColors = coloredTags?.[0]?.colors;
+  const tagIconColor =
+    firstTagColors?.text ??
+    getLabelColor(theme, iconBackground, 'semiTransparent');
 
   // Left tag
   const renderTag = useCallback(
@@ -62,11 +87,18 @@ export const ActivityCard: React.FC<
           size="S"
           backgroundType="semiTransparent"
           color={iconBackground}
+          backgroundColor={firstTagColors?.background}
           icon={<Icon name={iconName} size={12} color={tagIconColor} />}
         />
       </View>
     ),
-    [iconBackground, iconName, styles.tagContainer, tagIconColor],
+    [
+      iconBackground,
+      iconName,
+      firstTagColors?.background,
+      styles.tagContainer,
+      tagIconColor,
+    ],
   );
 
   // Info section (left side with flex)
@@ -78,14 +110,39 @@ export const ActivityCard: React.FC<
             {info.title}
           </Text.XS>
         )}
-        {'subtitle' in info && !!info.subtitle && (
+        {'subtitle' in info && !!info.subtitle && !coloredTags?.length && (
           <Text.XS variant="secondary" numberOfLines={1}>
             {info.subtitle}
           </Text.XS>
         )}
+        {!!coloredTags?.length && (
+          <View style={styles.subtitleRow}>
+            {'subtitle' in info && !!info.subtitle && (
+              <Text.XS variant="secondary" numberOfLines={1}>
+                {info.subtitle}
+              </Text.XS>
+            )}
+            {coloredTags.map((tag, index) => (
+              <View
+                key={`${tag.tone}-${tag.label}`}
+                testID={`activity-${props.id}-tag-${index}`}
+                style={[
+                  styles.pill,
+                  { backgroundColor: tag.colors.background },
+                ]}>
+                <Text.XS
+                  weight="600"
+                  numberOfLines={1}
+                  style={{ color: tag.colors.text }}>
+                  {tag.label}
+                </Text.XS>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
     ),
-    [info, theme.text.primary, theme.text.secondary],
+    [info, coloredTags, props.id, styles.subtitleRow, styles.pill],
   );
 
   // Value section (right side)
@@ -150,6 +207,28 @@ export const ActivityCard: React.FC<
   );
 };
 
+/** Resolves the pill background and text colours of a tag tone. */
+const getTagColors = (theme: Theme, tone: ActivityTagTone) => {
+  switch (tone) {
+    case 'hydraRecover':
+      return {
+        background: theme.extra.tagHydraRecoverBackground,
+        text: theme.extra.tagHydraRecoverText,
+      };
+    case 'warning':
+      return {
+        background: theme.extra.tagWarningBackground,
+        text: theme.extra.tagWarningText,
+      };
+    case 'hydra':
+    case 'hydraDeposit':
+      return {
+        background: theme.extra.tagHydraBackground,
+        text: theme.extra.tagHydraText,
+      };
+  }
+};
+
 const getStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
@@ -170,6 +249,19 @@ const getStyles = (theme: Theme) =>
       flexBasis: '25%',
       marginRight: spacing.M,
       justifyContent: 'center',
+    },
+    subtitleRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      columnGap: spacing.S,
+      rowGap: spacing.XS,
+    },
+    pill: {
+      flexShrink: 1,
+      borderRadius: radius.rounded,
+      paddingHorizontal: spacing.S,
+      paddingVertical: 1,
     },
     valueSection: {
       alignItems: 'flex-end',

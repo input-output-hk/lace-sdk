@@ -334,13 +334,6 @@ export const CustomTextInput = forwardRef<RnTextInputRef, CustomTextInputProps>(
                 {...inputProps}
                 style={[inputProps.style, isWeb ? styles.inputWeb : undefined]}
               />
-              {!!inputError && (
-                <Text.XS
-                  style={styles.inputError}
-                  testID={`${testID}-input-error`}>
-                  {inputError}
-                </Text.XS>
-              )}
             </View>
 
             {!!postButton && <IconButton.Static {...postButton} />}
@@ -368,6 +361,11 @@ export const CustomTextInput = forwardRef<RnTextInputRef, CustomTextInputProps>(
             </View>
           )}
         </Pressable>
+        {!!inputError && (
+          <Text.XS style={styles.inputError} testID={`${testID}-input-error`}>
+            {inputError}
+          </Text.XS>
+        )}
       </BlurView>
     );
   },
@@ -415,7 +413,7 @@ const getStyles = (
       backgroundColor: theme.background.secondary,
       paddingVertical: spacing.XS,
       overflow: 'hidden',
-      flexDirection: 'row',
+      flexDirection: 'column',
       borderRadius: radius.S,
       borderWidth: 1,
       borderColor,
@@ -479,9 +477,9 @@ const getStyles = (
     },
     inputError: {
       color: theme.data.negative,
-      position: 'absolute',
-      bottom: -3,
-      left: spacing.S,
+      marginHorizontal: spacing.M,
+      marginTop: spacing.XS,
+      marginBottom: spacing.S,
       ...(styleOverrides?.inputError ?? {}),
     },
     mainContentWrapper: {

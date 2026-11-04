@@ -1,5 +1,4 @@
-import { defer } from 'rxjs';
-
+import { midnightOperationsOf } from './midnight-engine-operations';
 import { withMidnightWallet } from './midnight-wallet';
 
 import type { MidnightTxRecipe } from './build-midnight-transfer';
@@ -27,18 +26,18 @@ export interface DiscardMidnightTxProps extends MidnightAccountProps {
  * error, including a timeout, nor after it returned a transaction: the engine
  * releases a recipe whose proving fails, and releases a proved transaction
  * that never reaches the chain once its validity window (`ttl`) has passed.
- * Pass the `accountId` the recipe was built with: under another account the
- * release finds no reserved coins and still reports `Ok`. The release works
- * per coin, not per transaction, so discarding a recipe the engine has
- * already released, or one built before a sync reset cleared its
- * reservation, can free coins that a later build reserved
- * for a transaction still in flight. For the same reason, never discard a
- * recipe whose transaction was passed to `submitMidnightTx`.
+ * The release works per coin, not per transaction, so discarding a recipe the
+ * engine has already released can free coins that a later build reserved for
+ * a transaction still in flight. For the same reason, never discard a recipe
+ * whose transaction was passed to `submitMidnightTx`. A recipe passed under
+ * another account than the one that built it is refused, and so is one built
+ * before the account's engine restarted or was reset (`MidnightStaleTxError`):
+ * whatever it reserved stays reserved until a sync reset.
  */
 export const discardMidnightTx = async (
   wallet: WalletWithMidnight,
   { recipe, ...account }: DiscardMidnightTxProps,
 ): Promise<Result<void, Error>> =>
-  withMidnightWallet(wallet, account, midnightWallet =>
-    defer(() => midnightWallet.revert(recipe)),
+  withMidnightWallet(wallet, account, engine =>
+    midnightOperationsOf(engine).discard(recipe),
   );

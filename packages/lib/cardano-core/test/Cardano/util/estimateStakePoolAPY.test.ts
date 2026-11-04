@@ -1,4 +1,4 @@
-import { Percent } from '@lace-lib/util/common';
+import { Percent } from '@lace-lib/cardano-util';
 
 import { Cardano } from '../../../src';
 

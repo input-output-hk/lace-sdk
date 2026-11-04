@@ -1,4 +1,4 @@
-import { HexBlob, InvalidArgumentError } from '@lace-lib/util/common';
+import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { UnitInterval } from '../../../src/Serialization/Common';
 import { ProtocolParamUpdate } from '../../../src/Serialization/Update/ProtocolParamUpdate';

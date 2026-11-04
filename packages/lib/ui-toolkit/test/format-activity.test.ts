@@ -10,7 +10,7 @@ import {
   formatAndGroupActivitiesByDate,
 } from '../src/utils/formatActivity';
 
-import type { Activity } from '@lace-contract/activities';
+import type { Activity, ActivityStates } from '@lace-contract/activities';
 import type { MetadataByTokenId } from '@lace-contract/tokens';
 
 const fakeNowTimestamp = 1746526784955;
@@ -69,6 +69,20 @@ const mockT = vi.fn((key: string) => {
     'activity.history.night-designation': 'DUST designation',
     'activity.history.night-designation.update': 'DUST target changed',
     'activity.history.night-designation.deregister': 'DUST generation stopped',
+    'activity.history.hydra': 'Hydra',
+    'activity.history.hydra.deposit': 'Hydra deposit',
+    'activity.history.hydra.deposit.pending': 'Entering head...',
+    'activity.history.hydra.deposit.recoverable': 'Recoverable',
+    'activity.history.hydra.recover': 'Hydra recover',
+    'activity.history.hydra.init': 'Hydra init',
+    'activity.history.hydra.abort': 'Hydra abort',
+    'activity.history.hydra.commit': 'Hydra commit',
+    'activity.history.hydra.collect': 'Hydra collect',
+    'activity.history.hydra.increment': 'Hydra increment',
+    'activity.history.hydra.decommit': 'Hydra decommit',
+    'activity.history.hydra.close': 'Hydra close',
+    'activity.history.hydra.contest': 'Hydra contest',
+    'activity.history.hydra.fanout': 'Hydra fanout',
     'activity.assets.nfts': 'NFTs',
     'activity.assets.tokens': 'Tokens',
     'activity.assets.mixed': 'Mixed',
@@ -632,6 +646,254 @@ describe('formatAndGroupActivitiesByDate', () => {
         });
       },
     );
+
+    describe('Hydra metadata', () => {
+      const buildHydraActivity = (
+        type: ActivityType.Receive | ActivityType.Send,
+        blockchainSpecific?: unknown,
+      ): Activity => ({
+        accountId,
+        activityId: 'hydra-activity',
+        timestamp: Timestamp(fakeNowTimestamp),
+        tokenBalanceChanges: [
+          { tokenId: tokenId1, amount: BigNumber(-2000000n) },
+        ],
+        type,
+        ...(blockchainSpecific === undefined ? {} : { blockchainSpecific }),
+      });
+
+      const taggingEnabled: ActivityStates = {
+        byActivityId: {},
+        isTaggingEnabled: true,
+      };
+
+      it.each([
+        ['DepositTx', 'Hydra deposit', 'hydraDeposit'],
+        ['RecoverTx', 'Hydra recover', 'hydraRecover'],
+        ['InitTx', 'Hydra init', 'hydra'],
+        ['AbortTx', 'Hydra abort', 'hydra'],
+        ['CommitTx', 'Hydra commit', 'hydra'],
+        ['CollectComTx', 'Hydra collect', 'hydra'],
+        ['IncrementTx', 'Hydra increment', 'hydra'],
+        ['CloseTx', 'Hydra close', 'hydra'],
+        ['ContestTx', 'Hydra contest', 'hydra'],
+        ['FanoutTx', 'Hydra fanout', 'hydra'],
+        ['PartialFanoutTx', 'Hydra fanout', 'hydra'],
+        ['FinalPartialFanoutTx', 'Hydra fanout', 'hydra'],
+        ['DecrementTx', 'Hydra decommit', 'hydra'],
+        ['HeadTx', 'Hydra', 'hydra'],
+        ['FutureTx', 'Hydra', 'hydra'],
+      ] as const)(
+        'keeps the hash title and amount and tags a %s row as "%s"',
+        (txName, label, tone) => {
+          const activity = buildHydraActivity(ActivityType.Send, {
+            Cardano: { hydra: { txName } },
+          });
+
+          const result = formatAndGroupActivitiesByDate({
+            activities: [activity],
+            t: mockT,
+            tokensMetadataByTokenId,
+            activityStates: taggingEnabled,
+          });
+
+          expect(result[0].items[0]).toMatchObject({
+            id: activity.activityId,
+            status: 'sent',
+            iconName: 'FlowConnection',
+            iconBackground: 'positive',
+            info: {
+              title: activity.activityId,
+              subtitle: formatTime({
+                date: activity.timestamp,
+                type: 'local',
+              }),
+              tags: [{ label, tone }],
+            },
+            value: { title: { amount: '-2.00' } },
+          });
+        },
+      );
+
+      it('tags a received Hydra row', () => {
+        const activity = buildHydraActivity(ActivityType.Receive, {
+          Cardano: { hydra: { protocol: 'HydraV2', txName: 'RecoverTx' } },
+        });
+
+        const result = formatAndGroupActivitiesByDate({
+          activities: [activity],
+          t: mockT,
+          tokensMetadataByTokenId,
+          activityStates: taggingEnabled,
+        });
+
+        expect(result[0].items[0]).toMatchObject({
+          status: 'received',
+          iconName: 'FlowConnection',
+          info: { tags: [{ label: 'Hydra recover', tone: 'hydraRecover' }] },
+        });
+      });
+
+      it('tags a non-transfer row that carries Hydra metadata', () => {
+        const activity: Activity = {
+          ...buildHydraActivity(ActivityType.Send, {
+            Cardano: { hydra: { txName: 'CommitTx' } },
+          }),
+          type: ActivityType.Withdrawal,
+        };
+
+        const result = formatAndGroupActivitiesByDate({
+          activities: [activity],
+          t: mockT,
+          tokensMetadataByTokenId,
+          activityStates: taggingEnabled,
+        });
+
+        expect(result[0].items[0]).toMatchObject({
+          status: 'withdrawal',
+          iconName: 'FlowConnection',
+          iconBackground: 'secondary',
+          info: {
+            title: 'Withdrawal',
+            tags: [{ label: 'Hydra commit', tone: 'hydra' }],
+          },
+        });
+      });
+
+      it.each([
+        ['no blockchainSpecific at all', undefined],
+        ['Cardano metadata without a hydra entry', { Cardano: {} }],
+      ])('adds no tag with %s', (_shape, blockchainSpecific) => {
+        const activity = buildHydraActivity(
+          ActivityType.Send,
+          blockchainSpecific,
+        );
+
+        const result = formatAndGroupActivitiesByDate({
+          activities: [activity],
+          t: mockT,
+          tokensMetadataByTokenId,
+          activityStates: taggingEnabled,
+        });
+
+        expect(result[0].items[0]).toMatchObject({ iconName: 'ArrowUp03' });
+        expect(result[0].items[0].info).not.toHaveProperty('tags');
+      });
+
+      describe('while tagging is not enabled', () => {
+        const depositActivity = buildHydraActivity(ActivityType.Send, {
+          Cardano: { hydra: { txName: 'DepositTx' } },
+        });
+
+        it.each([
+          ['no activity states', undefined],
+          ['activity states without tagging', { byActivityId: {} }],
+          [
+            'a pending deposit state without tagging',
+            {
+              byActivityId: {
+                [depositActivity.activityId]: {
+                  status: 'pending',
+                  deadline: '2026-09-01T13:10:29.599Z',
+                },
+              },
+            },
+          ],
+        ] as const)(
+          'renders stored Hydra metadata as a plain row with %s',
+          (_case, activityStates) => {
+            const [item] = formatAndGroupActivitiesByDate({
+              activities: [depositActivity],
+              t: mockT,
+              tokensMetadataByTokenId,
+              activityStates,
+            })[0].items;
+
+            expect(item).toMatchObject({
+              iconName: 'ArrowUp03',
+              value: { title: { amount: '-2.00' } },
+            });
+            expect(item.info).not.toHaveProperty('tags');
+          },
+        );
+      });
+
+      describe('deposit states', () => {
+        const deadline = '2026-09-01T13:10:29.599Z';
+        const depositActivity = buildHydraActivity(ActivityType.Send, {
+          Cardano: { hydra: { txName: 'DepositTx' } },
+        });
+        const format = (activity: Activity, activityStates?: unknown) =>
+          formatAndGroupActivitiesByDate({
+            activities: [activity],
+            t: mockT,
+            tokensMetadataByTokenId,
+            activityStates: {
+              byActivityId:
+                activityStates === undefined
+                  ? {}
+                  : { [activity.activityId]: activityStates },
+              isTaggingEnabled: true,
+            },
+          })[0].items[0];
+
+        it('replaces the amount of a pending deposit with "Entering head..."', () => {
+          expect(
+            format(depositActivity, { status: 'pending', deadline }),
+          ).toMatchObject({
+            status: 'sent',
+            info: {
+              title: depositActivity.activityId,
+              tags: [{ label: 'Hydra deposit', tone: 'hydraDeposit' }],
+            },
+            value: { subtitle: 'Entering head...' },
+          });
+          expect(
+            format(depositActivity, { status: 'pending', deadline }).value,
+          ).not.toHaveProperty('title');
+        });
+
+        it('adds a warning pill to a recoverable deposit and keeps the amount', () => {
+          expect(
+            format(depositActivity, { status: 'recoverable', deadline }),
+          ).toMatchObject({
+            info: {
+              tags: [
+                { label: 'Hydra deposit', tone: 'hydraDeposit' },
+                { label: 'Recoverable', tone: 'warning' },
+              ],
+            },
+            value: { title: { amount: '-2.00' } },
+          });
+        });
+
+        it('renders a settled deposit as a plain Hydra deposit row', () => {
+          expect(format(depositActivity)).toMatchObject({
+            info: {
+              tags: [{ label: 'Hydra deposit', tone: 'hydraDeposit' }],
+            },
+            value: { title: { amount: '-2.00' } },
+          });
+        });
+
+        it.each([
+          [
+            'a Hydra row that is not a deposit',
+            buildHydraActivity(ActivityType.Receive, {
+              Cardano: { hydra: { txName: 'RecoverTx' } },
+            }),
+          ],
+          [
+            'a row without Hydra metadata',
+            buildHydraActivity(ActivityType.Send),
+          ],
+        ])('ignores a state given for %s', (_shape, activity) => {
+          expect(
+            format(activity, { status: 'pending', deadline }),
+          ).toStrictEqual(format(activity));
+        });
+      });
+    });
 
     it('formats Withdrawal activity correctly', () => {
       const activity: Activity = {

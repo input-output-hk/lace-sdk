@@ -1,6 +1,7 @@
 import {
   defaultTxTtlLength,
   fromUnshieldedTokenType,
+  isRemoteMidnightEngine,
 } from '@lace-contract/midnight-context';
 import { AuthenticationCancelledError } from '@lace-contract/signer';
 import { BigNumber, HexBytes } from '@lace-lib/util';
@@ -26,7 +27,7 @@ import type {
   MidnightSignResult,
   MidnightTransactionSigner,
   MidnightWallet,
-  MidnightWalletsByAccountId,
+  MidnightEnginesByAccountId,
 } from '@lace-contract/midnight-context';
 import type { SignerAuth } from '@lace-contract/signer';
 import type { AccountId } from '@lace-contract/wallet-repo';
@@ -74,7 +75,7 @@ const toOutputs = (
   ];
 };
 
-const signWithWallet = (
+export const signWithWallet = (
   midnightWallet: MidnightWallet,
   request: MidnightSignRequest,
   {
@@ -181,12 +182,12 @@ export class MidnightInMemoryTransactionSigner
   readonly #accountId: AccountId;
   readonly #auth: SignerAuth;
 
-  readonly #wallets$: Observable<MidnightWalletsByAccountId>;
+  readonly #wallets$: Observable<MidnightEnginesByAccountId>;
 
   public constructor(params: {
     accountId: AccountId;
     auth: SignerAuth;
-    wallets$: Observable<MidnightWalletsByAccountId>;
+    wallets$: Observable<MidnightEnginesByAccountId>;
   }) {
     this.#accountId = params.accountId;
     this.#auth = params.auth;
@@ -211,10 +212,13 @@ export class MidnightInMemoryTransactionSigner
                   }`,
                 );
               }
-              return signWithWallet(midnightWallet, request, {
-                accountId: this.#accountId,
-                onProgress,
-              });
+              // A worker engine runs the same pipeline in the worker; authentication stays on this page.
+              return isRemoteMidnightEngine(midnightWallet)
+                ? midnightWallet.signTransaction(request, onProgress)
+                : signWithWallet(midnightWallet, request, {
+                    accountId: this.#accountId,
+                    onProgress,
+                  });
             }),
           );
         }),

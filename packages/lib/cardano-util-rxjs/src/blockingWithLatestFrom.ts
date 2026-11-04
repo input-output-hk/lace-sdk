@@ -1,4 +1,4 @@
-import { isNotNil } from '@lace-lib/util/common';
+import { isNotNil } from '@lace-lib/cardano-util';
 import {
   combineLatest,
   defaultIfEmpty,

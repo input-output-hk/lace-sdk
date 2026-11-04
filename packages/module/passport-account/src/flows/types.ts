@@ -1,3 +1,4 @@
+import type { BundleRegistry } from '../acc/bundle';
 import type {
   PendingCreationMarker,
   PendingDeployment,
@@ -154,16 +155,18 @@ export type AccountRecords = {
 
 /**
  * Everything a flow consumes: the platform seams, the record store, the
- * progress sink, and the relying party id of the host, which is the
- * origin a grant it issues is bound to. Nothing here knows about the
- * store or its streams, so a flow can run under any host that supplies
- * these.
+ * progress sink, the relying party id of the host, which is the origin a
+ * grant it issues is bound to, and the account bundles the host
+ * registered, which an account's build is recognised among. Nothing here
+ * knows about the store or its streams, so a flow can run under any host
+ * that supplies these.
  */
 export type FlowContext = {
   seams: PassportDependencies;
   accountRecords: AccountRecords;
   onProgress: FlowProgress;
   rpId: string | undefined;
+  bundles: BundleRegistry;
 };
 
 /**

@@ -1,4 +1,4 @@
-import { InvalidStateError } from '@lace-lib/util/common';
+import { InvalidStateError } from '@lace-lib/cardano-util';
 
 import type { ChangeAddressResolver, Selection } from '../';
 import type { Cardano } from '@lace-lib/cardano-core';

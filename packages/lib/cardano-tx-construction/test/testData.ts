@@ -1,7 +1,7 @@
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
+import { Base64Blob, HexBlob } from '@lace-lib/cardano-util';
 import { generateRandomHexString } from '@lace-lib/cardano-util-dev';
-import { Base64Blob, HexBlob } from '@lace-lib/util/common';
 export const rewardAccount = Cardano.RewardAccount(
   'stake1u89sasnfyjtmgk8ydqfv3fdl52f36x3djedfnzfc9rkgzrcss5vgr',
 );

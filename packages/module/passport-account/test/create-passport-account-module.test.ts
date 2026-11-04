@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { accountBundle } from '../src/acc/bundle';
 import { createPassportAccountModule } from '../src/create-passport-account-module';
 import { runPassportFlow } from '../src/store/side-effects/passport-flows';
 import { restorePassportAccount } from '../src/store/side-effects/restore-account';
@@ -108,9 +109,14 @@ describe('createPassportAccountModule', () => {
       passportSponsor: sponsor,
       passportProver: prover,
       passportNetwork: network,
+      passportBundles: expect.objectContaining({
+        bundles: [accountBundle],
+        calledContracts: [],
+      }) as unknown,
       passportFlows: {
         createAccount: expect.any(Function) as unknown,
         signIn: expect.any(Function) as unknown,
+        restoreAccount: expect.any(Function) as unknown,
         addDevice: expect.any(Function) as unknown,
         removeDevice: expect.any(Function) as unknown,
         issueGrant: expect.any(Function) as unknown,
@@ -118,6 +124,7 @@ describe('createPassportAccountModule', () => {
         revokeAllGrants: expect.any(Function) as unknown,
         readShieldedHoldings: expect.any(Function) as unknown,
         installOperations: expect.any(Function) as unknown,
+        callContract: expect.any(Function) as unknown,
       },
     });
   });

@@ -31,6 +31,7 @@ const knownUseCounter = '2';
 const account: PassportAccountInfo = {
   address: accountAddress,
   bindingVersion: '0.1.0-lace.1',
+  bundleId: 'account',
   status: 'ready',
   networkId: 'undeployed',
 };
@@ -105,6 +106,7 @@ const runFlowTest = ({
           createAccount$: NEVER,
           issueGrant$: NEVER,
           installOperations$: NEVER,
+          callContract$: NEVER,
           readShieldedHoldings$: hot(trigger, {
             t: actions.passport.readShieldedHoldings(),
           }),

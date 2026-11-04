@@ -1,4 +1,4 @@
-import { HexBlob, InvalidStringError } from '@lace-lib/util/common';
+import { HexBlob, InvalidStringError } from '@lace-lib/cardano-util';
 
 import * as Crypto from '../../src';
 

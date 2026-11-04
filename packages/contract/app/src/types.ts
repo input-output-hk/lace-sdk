@@ -334,11 +334,19 @@ export type AccountUICustomisation = UICustomisation<{
   };
 }>;
 
+/** The asset tab of the portfolio account page a banner renders above. */
+export type PortfolioBannerAssetView = 'activities' | 'nfts' | 'tokens';
+
 /** Per-blockchain customisation for portfolio account page banners (selector param optional) */
 export type PortfolioBannerUICustomisation = UICustomisation<
   {
+    /**
+     * Receives the tab it renders above, so a banner can show on one tab only.
+     * Banners that belong on every tab ignore it.
+     */
     PortfolioBanner?: ComponentType<{
       accountId: string;
+      assetView?: PortfolioBannerAssetView;
     }>;
   },
   BlockchainName | void

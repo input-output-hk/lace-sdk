@@ -1,5 +1,5 @@
 import * as Crypto from '@lace-lib/cardano-crypto';
-import { HexBlob, InvalidStateError } from '@lace-lib/util/common';
+import { HexBlob, InvalidStateError } from '@lace-lib/cardano-util';
 
 import { CredentialType } from '../../../Cardano/Address/Address';
 import {

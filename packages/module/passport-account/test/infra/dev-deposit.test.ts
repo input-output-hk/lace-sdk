@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { openInboxEntry } from '../../src/acc/inbox';
 import { createDevDeposit } from '../../src/infra/dev-deposit';
 
+import type { BundleRegistry } from '../../src/acc/bundle';
 import type { SponsorWalletContext } from '../../src/infra/dev-sponsor';
 import type { FeeSponsor, PassportProver } from '@lace-contract/passport';
 
@@ -23,8 +24,8 @@ const mocks = vi.hoisted(() => {
       kind: 'providers',
     })),
     connectAccountHandle: vi.fn(async () => ({ callTx })),
-    readAccountLedger: vi.fn(
-      async (_address: string, _network: unknown) =>
+    readAccountByBuild: vi.fn(
+      async (_address: string, _network: unknown, _bundles: unknown) =>
         ({} as { indexer: object; ledgerState: { enc_key: Uint8Array } }),
     ),
   };
@@ -37,7 +38,7 @@ vi.mock('../../src/acc/gated-call', () => ({
   connectAccountHandle: mocks.connectAccountHandle,
 }));
 vi.mock('../../src/flows/account-call', () => ({
-  readAccountLedger: mocks.readAccountLedger,
+  readAccountByBuild: mocks.readAccountByBuild,
 }));
 
 const ADDRESS = 'ab'.repeat(32);
@@ -85,7 +86,7 @@ const sponsorHandedToProviders = (): FeeSponsor =>
 describe('createDevDeposit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.readAccountLedger.mockResolvedValue({
+    mocks.readAccountByBuild.mockResolvedValue({
       indexer: {},
       ledgerState: {
         enc_key: x25519.getPublicKey(x25519.utils.randomSecretKey()),
@@ -109,7 +110,7 @@ describe('createDevDeposit', () => {
   describe('depositShielded', () => {
     it("seals the coin it deposits to the account's ledger enc_key", async () => {
       const encSecret = x25519.utils.randomSecretKey();
-      mocks.readAccountLedger.mockResolvedValueOnce({
+      mocks.readAccountByBuild.mockResolvedValueOnce({
         indexer: {},
         ledgerState: { enc_key: x25519.getPublicKey(encSecret) },
       });
@@ -119,7 +120,17 @@ describe('createDevDeposit', () => {
         amount: 1000n,
       });
 
-      expect(mocks.readAccountLedger).toHaveBeenCalledWith(ADDRESS, localnet);
+      expect(mocks.readAccountByBuild).toHaveBeenCalledExactlyOnceWith(
+        ADDRESS,
+        localnet,
+        expect.anything(),
+      );
+      const [, , registry] = mocks.readAccountByBuild.mock.calls[0] as [
+        string,
+        unknown,
+        BundleRegistry,
+      ];
+      expect(registry.bundles.map(bundle => bundle.id)).toEqual(['account']);
       const [coin, entry] = mocks.callTx.deposit_shielded.mock.calls[0] as [
         { nonce: Uint8Array; color: Uint8Array; value: bigint },
         Uint8Array,
@@ -188,7 +199,7 @@ describe('createDevDeposit', () => {
       await expect(
         deposit.depositShielded({ address: ADDRESS, amount: 2n ** 128n }),
       ).rejects.toThrow(RangeError);
-      expect(mocks.readAccountLedger).not.toHaveBeenCalled();
+      expect(mocks.readAccountByBuild).not.toHaveBeenCalled();
     });
 
     it('refuses a malformed colour', async () => {

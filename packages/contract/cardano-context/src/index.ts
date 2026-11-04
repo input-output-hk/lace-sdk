@@ -64,6 +64,8 @@ export type * from './store';
 export * from './types';
 export type {
   CardanoActivityUtxoMetadata,
+  CardanoHydraActivityMetadata,
+  CardanoHydraDepositActivityState,
   CardanoNightDesignationActivityMetadata,
 } from './augmentations';
 

@@ -4,8 +4,8 @@ import {
   Serialization,
 } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { AssetId } from '@lace-lib/cardano-util-dev';
-import { HexBlob } from '@lace-lib/util/common';
 
 import { defaultSelectionConstraints } from '../../src';
 import { babbageTx, getBigBabbageTx } from '../testData';

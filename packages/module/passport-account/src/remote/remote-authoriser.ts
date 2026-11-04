@@ -75,10 +75,13 @@ const revokeFields = (
  * account, its grant id and, when the revocation rotates the encryption
  * key, the read flag with the device entries, an issue the grant with
  * its scope digest and, for a read grant, the device entries, a
- * creation its lock choice and an install the account it upgrades with
- * the operations it installs. A descriptor
- * missing a field its kind binds is refused here with the error the
- * signer would answer, before anything is sent.
+ * creation its lock choice with the bundle and constructor arguments it
+ * names, an install the account it upgrades with the operations it
+ * installs and, when it names one, the bundle whose roster they are of,
+ * and a contract call the account, bundle, circuit, canonical
+ * arguments and callees it names. A descriptor missing a field its kind
+ * binds is refused here with the error the signer would answer, before
+ * anything is sent.
  */
 const toSignerFlow = (flow: KeySessionFlow): SignerFlow => {
   switch (flow.kind) {
@@ -115,12 +118,26 @@ const toSignerFlow = (flow: KeySessionFlow): SignerFlow => {
       return {
         kind: flow.kind,
         lockAccount: required(flow.lockAccount, 'flow.lockAccount'),
+        ...(flow.bundleId === undefined ? {} : { bundleId: flow.bundleId }),
+        ...(flow.constructorArgs === undefined
+          ? {}
+          : { constructorArgs: flow.constructorArgs }),
       };
     case 'install-operations':
       return {
         kind: flow.kind,
         account: required(flow.account, 'flow.account'),
         operations: required(flow.operations, 'flow.operations'),
+        ...(flow.bundleId === undefined ? {} : { bundleId: flow.bundleId }),
+      };
+    case 'call-contract':
+      return {
+        kind: flow.kind,
+        account: required(flow.account, 'flow.account'),
+        bundleId: required(flow.bundleId, 'flow.bundleId'),
+        circuit: required(flow.circuit, 'flow.circuit'),
+        args: required(flow.args, 'flow.args'),
+        callees: required(flow.callees, 'flow.callees'),
       };
     case 'read-holdings':
     case 'sign-in':
@@ -187,6 +204,9 @@ export const createRemotePassportAuthoriser = (
           witnessValues: [...request.witnessValues],
           authNonce: encodeBigInt(request.authNonce),
           useCounter: encodeBigInt(request.useCounter),
+          ...(request.bundleId === undefined
+            ? {}
+            : { bundleId: request.bundleId }),
         }),
         'authorisation',
       ),

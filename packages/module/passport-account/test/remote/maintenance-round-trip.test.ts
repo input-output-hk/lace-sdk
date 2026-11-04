@@ -7,26 +7,34 @@
  * operations, removes the creating device, which moves the authority to
  * the fresh roster key, and installs again under the moved authority; a
  * removal over an authority no roster key of the device derives is
- * refused before its rotation.
+ * refused before its rotation. An account of a second registered build
+ * installs the operations of its roster under that build.
  * Only the network infrastructure is stood in for, and the verifier
- * keys are one fixture pinned for every operation.
+ * keys are one fixture pinned for every operation of the default build,
+ * with a second one for the operation the other build adds.
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { MaintenanceAuthorityMismatchError } from '@lace-contract/passport';
+import {
+  AccBindingVersion,
+  MaintenanceAuthorityMismatchError,
+} from '@lace-contract/passport';
 import { sha256 } from '@lace-lib/crypto';
 import { createSignerClient, serveSignerRequests } from '@lace-lib/passkey';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import * as ledgerV9 from '@midnightntwrk/ledger-v9';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createBundleRegistry } from '../../src/acc/bundle';
 import { DEPLOYED_OPERATIONS } from '../../src/acc/deployed-operations';
 import { devJubjubAuthoriser } from '../../src/acc/dev-authoriser';
 import { devEncryptionKey } from '../../src/acc/dev-encryption-key';
 import { deviceEntryOf } from '../../src/acc/device-readers';
 import { encodeDevicePublicKey } from '../../src/acc/envelopes';
 import { GRANTEE_WITHDRAWAL_CIRCUITS } from '../../src/acc/grant-circuits';
+import { accManifest } from '../../src/acc/manifest';
+import { createPassportRegistry } from '../../src/acc/registry';
 import { randomJubjubScalar } from '../../src/acc/signer';
 import { createPasskeyEncryptionKey } from '../../src/ceremony/encryption-key';
 import { createPasskeyAuthoriser } from '../../src/ceremony/passkey';
@@ -46,12 +54,14 @@ import type * as AccModule from '../../src/acc/acc-module';
 import type * as Deploy from '../../src/acc/deploy';
 import type * as GatedCall from '../../src/acc/gated-call';
 import type { GatedContractHandle } from '../../src/acc/gated-call';
+import type * as AccountCall from '../../src/flows/account-call';
 import type {
   AccountRecords,
   FlowContext,
   PassportAccountRecord,
 } from '../../src/flows/types';
 import type {
+  AccountBundle,
   MaintenanceVerifyingKey,
   PassportAuthoriser,
   PassportEncryptionKey,
@@ -64,6 +74,8 @@ const chain = vi.hoisted(() => ({
   sim: undefined as AccountSim | undefined,
   scalar: 0n,
   operations: [] as string[],
+  /** The sha256 of the verifier key the chain holds for each operation. */
+  verifierKeys: {} as Record<string, string>,
   committee: undefined as MaintenanceVerifyingKey[] | undefined,
   updates: [] as ledgerV9.MaintenanceUpdate[],
 }));
@@ -72,6 +84,9 @@ const simulated = (): AccountSim => {
   if (!chain.sim) throw new Error('No simulated account is deployed');
   return chain.sim;
 };
+
+const COUNTER_OPERATION = 'counter_bump_with_jubjub';
+const COUNTER_BUNDLE_ID = 'account-counter';
 
 /**
  * A verifier key the pinned compiler line emits, standing in for every
@@ -85,6 +100,29 @@ const verifierKey = new Uint8Array(
 for (const operation of DEPLOYED_OPERATIONS) {
   pins.expectedVk[operation] = HexBytes.fromByteArray(sha256(verifierKey));
 }
+/** Another key under the same header: what the counter build pins for its own operation. */
+const counterKey = verifierKey.slice();
+counterKey[counterKey.length - 1] ^= 1;
+const COUNTER_PIN = HexBytes.fromByteArray(sha256(counterKey));
+
+/**
+ * A build of the account with one more operation, pinning its own
+ * verifier key for it. Its module is the default build's, which the
+ * simulation runs and whose decoder reads the simulated ledger.
+ */
+const counterBundle: AccountBundle = {
+  id: COUNTER_BUNDLE_ID,
+  bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  module: async () => import('../../src/acc/acc-module'),
+  manifest: {
+    ...accManifest,
+    bindingVersion: AccBindingVersion('0.1.0-counter.1'),
+  },
+  operations: [...DEPLOYED_OPERATIONS, COUNTER_OPERATION],
+  verifierKeys: { ...pins.expectedVk, [COUNTER_OPERATION]: COUNTER_PIN },
+  constructorArgs: [],
+  circuits: {},
+};
 
 vi.mock('../../src/acc/acc-module', async importOriginal => ({
   ...(await importOriginal<typeof AccModule>()),
@@ -97,9 +135,25 @@ vi.mock('../../src/infra/indexer', () => ({
     queryShieldedOutputs: async () => [],
   }),
 }));
+vi.mock('../../src/flows/account-call', async importOriginal => ({
+  ...(await importOriginal<typeof AccountCall>()),
+  queryAccountVerifierKeys: async () =>
+    new Map(
+      simulated()
+        .contractState()
+        .operations()
+        .flatMap(operation => {
+          const hash = chain.verifierKeys[operation];
+          return hash ? [[operation, hash] as const] : [];
+        }),
+    ),
+}));
 vi.mock('../../src/infra/providers', () => ({
   createMidnightProviders: async () => ({
-    zkConfigProvider: { getVerifierKey: async () => verifierKey },
+    zkConfigProvider: {
+      getVerifierKey: async (operation: string) =>
+        operation === COUNTER_OPERATION ? counterKey : verifierKey,
+    },
   }),
 }));
 vi.mock('../../src/acc/gated-call', async importOriginal => ({
@@ -195,6 +249,7 @@ const contextOver = (
     accountRecords,
     onProgress: vi.fn(),
     rpId: 'lace.io',
+    bundles: createBundleRegistry([counterBundle]),
   };
   return {
     context,
@@ -213,7 +268,8 @@ const cleanups: (() => void)[] = [];
 /**
  * The seams a dApp holds over the hosted signer serving `passkey`,
  * through the real signer client and server, with the consent requests
- * the signer was asked.
+ * the signer was asked. The signer pins the counter build beside the
+ * default, as the module registers it.
  */
 const hostedSigner = async (passkey: ReturnType<typeof createFakePasskey>) => {
   const pair = createWindowPair();
@@ -221,6 +277,7 @@ const hostedSigner = async (passkey: ReturnType<typeof createFakePasskey>) => {
     ...createPassportSignerHandlers({
       keySource: passkey.keySource,
       createKeyValueStorage: createInMemoryStorage().createKeyValueStorage,
+      registry: createPassportRegistry({ bundles: [counterBundle] }),
     }),
     'sign-cardano-tx': unsupported,
     'sign-cardano-data': unsupported,
@@ -251,8 +308,11 @@ const hostedSigner = async (passkey: ReturnType<typeof createFakePasskey>) => {
     flows: () =>
       onRequest.mock.calls.map(
         ([request]) =>
-          (request.payload as { flow: { kind: string; operations?: string[] } })
-            .flow,
+          (
+            request.payload as {
+              flow: { kind: string; operations?: string[]; bundleId?: string };
+            }
+          ).flow,
       ),
   };
 };
@@ -278,6 +338,7 @@ beforeEach(() => {
   chain.operations = DEPLOYED_OPERATIONS.filter(
     operation => !K256_WITHDRAWALS.includes(operation),
   );
+  chain.verifierKeys = { ...pins.expectedVk };
 });
 
 afterEach(() => {
@@ -285,15 +346,24 @@ afterEach(() => {
 });
 
 /**
- * An unlocked account a development device created, with a passkey
- * device enrolled through it with the account keys and signed in over
- * the hosted signer.
+ * An unlocked account a development device created, from the bundle
+ * `bundleId` names or the default, with a passkey device enrolled through
+ * it with the account keys and signed in over the hosted signer.
  */
-const enrolledOverSigner = async () => {
+const enrolledOverSigner = async (bundleId?: string) => {
   const scalar = randomJubjubScalar();
   chain.scalar = scalar;
-  const first = contextOver(devJubjubAuthoriser(scalar), devEncryptionKey());
-  const created = await createAccount({ lockAccount: false }, first.context);
+  const first = contextOver(
+    devJubjubAuthoriser(scalar),
+    devEncryptionKey(
+      undefined,
+      createPassportRegistry({ bundles: [counterBundle] }),
+    ),
+  );
+  const created = await createAccount(
+    { lockAccount: false, ...(bundleId === undefined ? {} : { bundleId }) },
+    first.context,
+  );
   const { account } = created;
   const passkey = createFakePasskey();
   const local = createPasskeyAuthoriser({ keySource: passkey.keySource });
@@ -397,6 +467,37 @@ describe(
           kind: 'install-operations',
           account: account.address,
           operations: laterOperations,
+        },
+      ]);
+    });
+
+    it('installs on an account of the counter build the operations its roster lacks, under that build', async () => {
+      chain.operations = [...chain.operations, COUNTER_OPERATION];
+      chain.verifierKeys[COUNTER_OPERATION] = COUNTER_PIN;
+      const { account, signer, hosted } = await enrolledOverSigner(
+        COUNTER_BUNDLE_ID,
+      );
+      expect(account.bundleId).toBe(COUNTER_BUNDLE_ID);
+
+      await expect(
+        installOperations(
+          { account, operations: K256_WITHDRAWALS },
+          hosted.context,
+        ),
+      ).resolves.toEqual({
+        operations: K256_WITHDRAWALS,
+        alreadyInstalled: [],
+      });
+
+      expect(insertedPerUpdate().flat()).toEqual(K256_WITHDRAWALS);
+      expect(
+        signer.flows().filter(flow => flow.kind === 'install-operations'),
+      ).toEqual([
+        {
+          kind: 'install-operations',
+          account: account.address,
+          operations: K256_WITHDRAWALS,
+          bundleId: COUNTER_BUNDLE_ID,
         },
       ]);
     });
