@@ -83,7 +83,7 @@ describe('engine-host-proving', () => {
       withProofServer({
         kind: 'tee-delegated',
         url: 'https://api.proofserver.wastedp.io',
-        label: 'Temenos',
+        label: 'Veritee',
       }),
       'attested-prover',
     ],
@@ -92,7 +92,7 @@ describe('engine-host-proving', () => {
       withProofServer({
         kind: 'delegated',
         url: 'https://api.proofserver.wastedp.io',
-        label: 'Temenos',
+        label: 'Veritee',
       }),
       'Cannot attest a TEE proof server through ordinary HTTP; select tee-delegated',
     ],

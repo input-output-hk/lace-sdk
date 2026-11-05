@@ -31,6 +31,7 @@ import {
   renderPublicNotes,
   workspaceManifestChanges,
 } from '../scripts/release-scope';
+import { baselineRecipe } from '../scripts/releases.mjs';
 
 const lock = (packages: Lockfile['packages']): Lockfile => ({ packages });
 
@@ -160,7 +161,8 @@ describe("a channel's release", () => {
 
   it(
     'ships a change to a source only the canary worker reaches in a canary release alone',
-    { timeout: 120_000 },
+    // Both workspace graphs can take over two minutes beside CI's other workers.
+    { timeout: 180_000 },
     () => {
       const workerOnly = [
         'apps/lace-sdk/src/midnight-worker/worker.ts',
@@ -952,9 +954,312 @@ describe.skipIf(!fs.existsSync(RELEASE_WORKFLOW))(
   },
 );
 
+describe.skipIf(!fs.existsSync(RELEASE_WORKFLOW))(
+  'the packages a pull request versions',
+  () => {
+    const workflow = fs.existsSync(RELEASE_WORKFLOW)
+      ? fs.readFileSync(RELEASE_WORKFLOW, 'utf8')
+      : '';
+    /** A step's `run` script, as bash runs it. */
+    const stepScript = (name: string) => {
+      const step = workflow.slice(workflow.indexOf(`- name: ${name}\n`));
+      const lines = step.slice(step.indexOf('run: |\n') + 'run: |\n'.length);
+      return lines
+        .split('\n')
+        .slice(
+          0,
+          lines.split('\n').findIndex(line => /^ {0,9}\S/.test(line)),
+        )
+        .map(line => line.slice(10))
+        .join('\n');
+    };
+    const FAMILY = [
+      '@laceio/cardano',
+      '@laceio/cardano-ledger',
+      '@laceio/cardano-trezor',
+      '@laceio/sdk',
+    ];
+
+    /**
+     * A step's outputs, with node and git stubbed: releases.mjs lists the
+     * family, and release-scope.ts says a package ships when `shipping`
+     * names it, fails for the package `failing` names, or with `failing`
+     * 'garbled' prints a line that is not its JSON answer.
+     */
+    const run = (
+      name: string,
+      {
+        shipping = [],
+        failing,
+        environment = {},
+      }: {
+        shipping?: string[];
+        failing?: string;
+        environment?: Record<string, string>;
+      },
+    ): Record<string, string> => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-ships-'));
+      try {
+        const bin = path.join(root, 'bin');
+        fs.mkdirSync(bin);
+        fs.writeFileSync(
+          path.join(bin, 'node'),
+          [
+            '#!/usr/bin/env bash',
+            `[[ "$1" == *releases.mjs ]] && { echo '${JSON.stringify(
+              FAMILY,
+            )}'; exit 0; }`,
+            'package=${@: -1}',
+            `[[ "$package" == '${failing ?? ''}' ]] && exit 3`,
+            `[[ '${
+              failing ?? ''
+            }' == garbled ]] && { echo 'Scoping…'; exit 0; }`,
+            `case " ${shipping.join(
+              ' ',
+            )} " in *" $package "*) echo '{"ships":true}';; *) echo '{"ships":false}';; esac`,
+          ].join('\n'),
+          { mode: 0o755 },
+        );
+        fs.writeFileSync(
+          path.join(bin, 'git'),
+          '#!/usr/bin/env bash\necho base\n',
+          {
+            mode: 0o755,
+          },
+        );
+        const output = path.join(root, 'output');
+        fs.writeFileSync(output, '');
+        execFileSync('bash', ['-eo', 'pipefail', '-c', stepScript(name)], {
+          encoding: 'utf8',
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            ...environment,
+            PATH: `${bin}:${process.env.PATH}`,
+            GITHUB_OUTPUT: output,
+          },
+        });
+        return Object.fromEntries(
+          fs
+            .readFileSync(output, 'utf8')
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .map((line): [string, string] => {
+              const [key = '', value = ''] = line.split(/=(.*)/s);
+              return [key, value];
+            }),
+        );
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    const ships = (options: { shipping?: string[]; failing?: string }) =>
+      run('Find which packages the change ships', options);
+
+    it('names the one package whose shipped files changed', () => {
+      expect(ships({ shipping: ['@laceio/sdk'] })).toEqual({
+        ships: 'true',
+        packages: '["@laceio/sdk"]',
+      });
+    });
+
+    it('names several in dependency order', () => {
+      expect(
+        ships({ shipping: ['@laceio/sdk', '@laceio/cardano'] }).packages,
+      ).toBe('["@laceio/cardano","@laceio/sdk"]');
+    });
+
+    it('ships nothing when no package changed', () => {
+      expect(ships({})).toEqual({ ships: 'false', packages: '[]' });
+    });
+
+    it('fails when a package cannot be scoped', () => {
+      expect(() =>
+        ships({ shipping: ['@laceio/sdk'], failing: '@laceio/cardano-ledger' }),
+      ).toThrow();
+    });
+
+    it("fails when a package's scope is not its JSON answer", () => {
+      expect(() =>
+        ships({ shipping: ['@laceio/sdk'], failing: 'garbled' }),
+      ).toThrow();
+    });
+
+    const list = (shipping: string) =>
+      run('List the packages', { environment: { SHIPPING: shipping } })
+        .packages;
+
+    it('versions the packages the pull request ships', () => {
+      expect(list('["@laceio/sdk"]')).toBe('["@laceio/sdk"]');
+    });
+
+    it('versions every package otherwise', () => {
+      expect(list('')).toBe(JSON.stringify(FAMILY));
+    });
+  },
+);
+
 const VERSION_WORKFLOW = path.resolve(
   import.meta.dirname,
   '../../../.github/workflows/sdk-release-version.yml',
+);
+
+describe("a baseline's recipe", () => {
+  const workflow = [
+    'jobs:',
+    '  previous:',
+    '    steps:',
+    "      - name: Find the release's packages",
+    '        run: echo packages',
+    '      - name: Read the releases',
+    '        run: echo previous',
+    '  baseline:',
+    '    timeout-minutes: 45',
+    '    steps:',
+    '      - uses: actions/checkout@fbc6f399 # v5.1.0',
+    '      - uses: actions/setup-node@1a4442ca # v4.0.0',
+    '      # Builds the previous release.',
+    '      - name: Build the previous release',
+    '        run: npx nx run-many -t build',
+    '  canary-baseline:',
+    '    steps:',
+    '      - name: Build the canary',
+    '        run: echo canary',
+    '  version:',
+    '    env:',
+    '      FAMILY_ROOTS: ${{ needs.previous.outputs.family_roots }}',
+    '    steps:',
+    '      - name: Build the stable packages',
+    '        run: npx nx run-many -t build',
+    '      - name: Verify and unpack the canary declarations',
+    '        run: echo unpack',
+    '      - name: Write the release notes',
+    '        run: echo notes',
+    "      - name: Seed the next release's declarations",
+    '        run: echo seed',
+    '      - uses: actions/cache/save@v5',
+    '        with:',
+    '          key: seeded',
+    '  release:',
+    '    steps:',
+    '      - name: Tag',
+    '        run: echo tag',
+  ].join('\n');
+  const recipe = baselineRecipe(workflow);
+  const edited = (from: string, to: string) =>
+    baselineRecipe(workflow.replace(from, to));
+
+  it('keeps its hash when a step outside the recipe changes', () => {
+    expect(edited('echo notes', 'echo other notes')).toBe(recipe);
+    expect(edited('echo previous', 'echo other')).toBe(recipe);
+    expect(edited('echo tag', 'echo other')).toBe(recipe);
+  });
+
+  it('keeps its hash when only a comment changes', () => {
+    expect(edited('# Builds the previous release.', '# Builds it.')).toBe(
+      recipe,
+    );
+  });
+
+  it("keeps its hash when a file-moving action's pin or a job's timeout changes", () => {
+    expect(
+      edited('checkout@fbc6f399 # v5.1.0', 'checkout@0d6c1f2a # v5.2.0'),
+    ).toBe(recipe);
+    expect(edited('timeout-minutes: 45', 'timeout-minutes: 60')).toBe(recipe);
+    expect(edited('actions/checkout', 'actions/other')).not.toBe(recipe);
+  });
+
+  it("changes when any other action's pin changes", () => {
+    expect(
+      edited('setup-node@1a4442ca # v4.0.0', 'setup-node@49933ea5 # v4.4.0'),
+    ).not.toBe(recipe);
+  });
+
+  it('changes when a build of declarations or their seeding changes', () => {
+    expect(
+      edited(
+        'Build the previous release\n        run: npx nx run-many -t build',
+        'Build the previous release\n        run: npx nx run-many -t build --x',
+      ),
+    ).not.toBe(recipe);
+    expect(
+      edited(
+        'Build the stable packages\n        run: npx nx run-many -t build',
+        'Build the stable packages\n        run: npx nx run-many -t build --x',
+      ),
+    ).not.toBe(recipe);
+    expect(edited('echo seed', 'echo other seed')).not.toBe(recipe);
+    expect(edited('echo packages', 'echo other packages')).not.toBe(recipe);
+    expect(edited('key: seeded', 'key: other')).not.toBe(recipe);
+    expect(edited('outputs.family_roots', 'outputs.roots')).not.toBe(recipe);
+  });
+
+  it('refuses a step between the seed step and its save', () => {
+    expect(() =>
+      edited(
+        'echo seed\n      - uses: actions/cache/save@v5',
+        'echo seed\n      - uses: actions/upload-artifact@v7\n      - uses: actions/cache/save@v5',
+      ),
+    ).toThrow(/between Seed the next release's declarations and its save/);
+  });
+
+  it('refuses a workflow whose recipe step was renamed', () => {
+    expect(() =>
+      edited('Build the stable packages', 'Build the packages'),
+    ).toThrow(/missing version: Build the stable packages/);
+    expect(() =>
+      edited("- name: Seed the next release's declarations", '- id: seed'),
+    ).toThrow(/missing/);
+  });
+});
+
+const BASELINE_WORKFLOW = path.resolve(
+  import.meta.dirname,
+  '../../../.github/workflows/sdk-release-baseline.yml',
+);
+
+describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(
+  "main's baseline cache",
+  () => {
+    const version = fs.existsSync(VERSION_WORKFLOW)
+      ? fs.readFileSync(VERSION_WORKFLOW, 'utf8')
+      : '';
+    const job = (name: string) => {
+      const from = version.slice(version.indexOf(`\n  ${name}:\n`) + 1);
+      return from.slice(0, /\n {2}[a-z][\w-]*:\n/.exec(from.slice(1))?.index);
+    };
+
+    it("finds every part of the real workflow's recipe", () => {
+      expect(baselineRecipe(version)).toMatch(/^[\da-f]{16}$/);
+    });
+
+    it('builds a baseline alone when asked, packing nothing for a version', () => {
+      for (const name of ['baseline', 'canary-baseline']) {
+        const steps = job(name);
+        expect(steps).toContain(
+          'name: Pack the declarations\n        if: ${{ !inputs.baseline_only }}',
+        );
+        expect(
+          steps.match(/if: \$\{\{ !inputs\.baseline_only \}\}/g),
+        ).toHaveLength(2);
+      }
+      const versionJob = job('version');
+      expect(versionJob.slice(0, versionJob.indexOf('runs-on:'))).toContain(
+        '!inputs.baseline_only',
+      );
+    });
+
+    it.skipIf(!fs.existsSync(BASELINE_WORKFLOW))(
+      'seeds from main without a version or a release',
+      () => {
+        const seeding = fs.readFileSync(BASELINE_WORKFLOW, 'utf8');
+        expect(seeding).toContain('baseline_only: true');
+        expect(seeding).not.toMatch(/create_release|pull_request/);
+      },
+    );
+  },
 );
 
 describe.skipIf(!fs.existsSync(VERSION_WORKFLOW))(

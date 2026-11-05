@@ -30,7 +30,7 @@ import { buildNightDesignationTx } from './build-night-designation-tx';
 import { createProviderExUnitsEvaluator } from './provider-ex-units-evaluator';
 import { findRegistrationUtxo } from './registration-utxo';
 
-import type { SideEffect } from '../../contracts';
+import type { SideEffect } from '../../sdk-contracts';
 import type {
   Activity,
   BlockchainSpecificActivityMetadata,

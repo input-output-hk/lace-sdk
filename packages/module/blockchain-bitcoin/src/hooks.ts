@@ -5,7 +5,7 @@ import {
   createUseLaceSelectorHook,
 } from '@lace-lib/util-render';
 
-import type { ActionCreators, AvailableAddons, Selectors } from './index';
+import type { ActionCreators, AvailableAddons, Selectors } from './contracts';
 import type { UseLaceSelectorHook } from '@lace-lib/util-render';
 
 export const useLaceSelector: UseLaceSelectorHook<Selectors> =

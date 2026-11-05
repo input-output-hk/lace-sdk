@@ -1,6 +1,6 @@
 import { makeComposerBuilding } from './composer/build-side-effect';
 
-import type { SideEffect } from '../contracts';
+import type { SideEffect } from '../sdk-contracts';
 
 // =====================================================================
 // Transaction composer — build half (SDK-safe).

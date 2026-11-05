@@ -180,7 +180,7 @@ const getAccountWalletInstance = async (
   {
     account,
     config,
-    getTemenosLedgerIndexerUrl,
+    getVeriteeLedgerIndexerUrl,
     store,
     keyManager,
   }: MidnightAccountWalletInstanceDependencies,
@@ -232,11 +232,11 @@ const getAccountWalletInstance = async (
             networkId: networkId,
             proofServerApiUrl: config.proofServer.url,
             getLedgerIndexerUrl: async () => {
-              if (!getTemenosLedgerIndexerUrl)
+              if (!getVeriteeLedgerIndexerUrl)
                 throw new Error(
-                  'Temenos attestation requires a ledger indexer resolver',
+                  'Veritee attestation requires a ledger indexer resolver',
                 );
-              return getTemenosLedgerIndexerUrl();
+              return getVeriteeLedgerIndexerUrl();
             },
           }),
           onProgress,
@@ -984,7 +984,7 @@ export const createStartMidnightAccountWallet =
 
 /**
  * The engine's side-effect dependencies. The attested prover is the
- * loadout's: the app proves through the bundled Temenos deployment, which a
+ * loadout's: the app proves through the bundled Veritee deployment, which a
  * headless loadout does not ship.
  */
 export const createMidnightSideEffectDependencies =

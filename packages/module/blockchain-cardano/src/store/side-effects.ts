@@ -6,7 +6,7 @@ import {
 } from '@lace-contract/cardano-context';
 import { filter, map } from 'rxjs';
 
-import type { SideEffect } from '../contracts';
+import type { SideEffect } from '../sdk-contracts';
 import type { AppConfig } from '@lace-contract/module';
 import type { TestnetOption } from '@lace-contract/network';
 

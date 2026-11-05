@@ -57,7 +57,7 @@ import {
   midnightStateOf$,
   shieldedPublicKeysOf,
 } from '../../worker/state-accessors';
-import { createTemenosLedgerIndexerResolver } from '../temenos-ledger-indexer';
+import { createVeriteeLedgerIndexerResolver } from '../veritee-ledger-indexer';
 
 import { createAccountKeyManager as createAccountKeyManagerImpl } from './account-key-manager';
 
@@ -704,7 +704,7 @@ export const watchMidnightAccount =
         config,
         store,
         keyManager,
-        getTemenosLedgerIndexerUrl: createTemenosLedgerIndexerResolver(
+        getVeriteeLedgerIndexerUrl: createVeriteeLedgerIndexerResolver(
           stateObservables.midnightContext.selectNetworksConfig$,
         ),
       })

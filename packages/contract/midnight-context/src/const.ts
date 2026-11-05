@@ -18,13 +18,13 @@ export const FEATURE_FLAG_MIDNIGHT_NODE_URLS = FeatureFlagKey(
 );
 
 /**
- * Gates the Temenos TEE proof-server option (LW-15081). Boolean gate with
- * no payload by design: all Temenos configuration (endpoints, trust
+ * Gates the Veritee TEE proof-server option (LW-15081). Boolean gate with
+ * no payload by design: all Veritee configuration (endpoints, trust
  * anchors) is baked into the build, so the remote flag system controls
  * visibility only and can never inject or alter a TEE entry.
  */
-export const FEATURE_FLAG_MIDNIGHT_TEE_TEMENOS_PROOF_SERVER = FeatureFlagKey(
-  'BLOCKCHAIN_MIDNIGHT_TEE_TEMENOS_PROOF_SERVER',
+export const FEATURE_FLAG_MIDNIGHT_TEE_VERITEE_PROOF_SERVER = FeatureFlagKey(
+  'BLOCKCHAIN_MIDNIGHT_TEE_VERITEE_PROOF_SERVER',
 );
 
 export const defaultTxTtlLength = 60 * 60 * 1000;
@@ -57,7 +57,7 @@ export type MidnightNetworkConfig = {
 };
 
 export {
-  TEMENOS_PROOF_SERVER_MODES,
+  VERITEE_PROOF_SERVER_MODES,
   REMOTE_PROOF_SERVER_MODES,
   DEFAULT_LOCAL_PROOF_SERVER_URL,
   defaultLocalProofServerMode,

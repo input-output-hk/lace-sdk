@@ -126,7 +126,7 @@
   "midnight.label": "unknown",
   "cardano-bitcoin.label": "unknown",
   "midnight.network-config.invalid-network-url": "unknown",
-  "midnight.network-config.node-address": "unknown",
+  "midnight.network-config.node-address": "machine-translated",
   "midnight.network-config.proof-server-label": "unknown",
   "midnight.proof-server.section.on-device": "machine-translated",
   "midnight.proof-server.section.paired": "machine-translated",
@@ -180,7 +180,7 @@
   "midnight.network-config.network-option.preview": "unknown",
   "midnight.network-config.network-option.qanet": "unknown",
   "bitcoin.network-config.network-option.testnet4": "unknown",
-  "midnight.network-config.indexer-address": "unknown",
+  "midnight.network-config.indexer-address": "machine-translated",
   "midnight.resync.modal.cancel": "unknown",
   "midnight.resync.modal.confirm": "unknown",
   "midnight.resync.modal.description": "unknown",
@@ -3105,5 +3105,8 @@
   "dapp-connector.cardano.sign-tx.asset-identity.no-metadata": "mtpe",
   "dapp-connector.cardano.sign-tx.asset-identity.verification": "mtpe",
   "dapp-connector.cardano.sign-tx.asset-identity.unverified": "mtpe",
-  "dapp-connector.cardano.sign-tx.asset-identity.metadata-hint": "mtpe"
+  "dapp-connector.cardano.sign-tx.asset-identity.metadata-hint": "mtpe",
+  "midnight.proof-server.title": "machine-translated",
+  "midnight.proof-server.locally-generated": "machine-translated",
+  "midnight.proof-server.description": "machine-translated"
 }

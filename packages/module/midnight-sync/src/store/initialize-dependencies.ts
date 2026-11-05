@@ -1,16 +1,16 @@
-import { getTemenosBundledTrustRoots } from '@lace-lib/vendor/temenos-trust-roots';
+import { getVeriteeBundledTrustRoots } from '@lace-lib/vendor/veritee-trust-roots';
 import { wasmProofActivities } from '@lace-lib/vendor/wasm-proof-backend';
 // Static import keeps local proving available during MV3 install-time preload.
 import { createWasmProofServerAccess } from '@lace-lib/vendor/wasm-proof-server';
 import { Observable } from 'rxjs';
 
 import { createMidnightSideEffectDependencies } from './dependencies';
-import { createStoreTemenosAttestedProver } from './temenos-attested-prover';
+import { createStoreVeriteeAttestedProver } from './veritee-attested-prover';
 
 import type { LaceInitSync } from '@lace-contract/module';
 
 // The app attests tee-delegated proof servers with the verifier library's full
-// AKX pipeline against the baked Temenos deployment.
+// AKX pipeline against the baked Veritee deployment.
 const initializeEngineDependencies = createMidnightSideEffectDependencies({
   createLocalProofServerAccess: onProgress =>
     createWasmProofServerAccess(undefined, onProgress),
@@ -19,11 +19,11 @@ const initializeEngineDependencies = createMidnightSideEffectDependencies({
     proofServerApiUrl,
     getLedgerIndexerUrl,
   }) =>
-    createStoreTemenosAttestedProver({
+    createStoreVeriteeAttestedProver({
       networkId,
       proofServerApiUrl,
       getLedgerIndexerUrl,
-      trustRoots: getTemenosBundledTrustRoots(),
+      trustRoots: getVeriteeBundledTrustRoots(),
     }),
 });
 

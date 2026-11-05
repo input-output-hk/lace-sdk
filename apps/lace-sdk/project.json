@@ -46,7 +46,8 @@
         "^default",
         "sharedGlobals",
         "{workspaceRoot}/.github/workflows/sdk-release-version.yml",
-        "{workspaceRoot}/.github/workflows/sdk-release.yml"
+        "{workspaceRoot}/.github/workflows/sdk-release.yml",
+        "{workspaceRoot}/.github/workflows/sdk-release-baseline.yml"
       ]
     },
     "lint": {}

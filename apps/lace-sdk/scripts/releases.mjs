@@ -17,6 +17,7 @@
 //   node scripts/releases.mjs reference --channel C [--except TAG]
 //                                                          the release a C release must differ from
 //   node scripts/releases.mjs packages [--json]           the family's packages, in dependency order
+//   node scripts/releases.mjs recipe <workflow>            the baseline declarations' recipe hash
 //   node scripts/releases.mjs stamp <root> <version>      stamp the family's manifests
 //   node scripts/releases.mjs stamp <root> <version> --package <name> --with <name@version>...
 //                                                          stamp one package's release
@@ -36,6 +37,7 @@
 // otherwise from the GitHub API through `gh`, for GITHUB_REPOSITORY or the
 // checked-out repository.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -588,6 +590,109 @@ export const loadPackageReleases = name => {
   return packageReleasesOf(records, name);
 };
 
+/**
+ * The parts of sdk-release-version.yml that decide what a cached baseline
+ * holds: the jobs that build a previous release's declarations, the step that
+ * names the packages they cover, and the version job's steps that build the
+ * commit's and seed them for the next release, with that job's own
+ * environment, which those steps read.
+ */
+const RECIPE_JOBS = ['baseline', 'canary-baseline'];
+const SEED_STEP = "Seed the next release's declarations";
+const RECIPE_STEPS = {
+  previous: ["Find the release's packages"],
+  version: [
+    'Build the stable packages',
+    'Verify and unpack the canary declarations',
+    SEED_STEP,
+  ],
+};
+
+/**
+ * The hash a baseline's cache key names: of the workflow's recipe parts
+ * alone, comments and blank lines left out, so a change anywhere else in the
+ * workflow keeps reading the builds already cached. A job's timeout is left
+ * out too, as is the version pin of an action that only moves files
+ * (PIN_FREE_ACTIONS): neither changes what a build produces. Any other
+ * action keeps its pin in the hash. The cache save after the seed step, which keeps what it
+ * seeds, counts with it. A recipe part it cannot find, a job or step renamed
+ * or another step between the seed and its save, is an error rather than a
+ * smaller hash.
+ */
+// Actions whose version cannot change the declarations a baseline holds: they
+// check out, cache or carry files, and build nothing.
+const PIN_FREE_ACTIONS = [
+  /^actions\/checkout$/,
+  /^actions\/cache\/(?:restore|save)$/,
+  /^actions\/(?:upload|download)-artifact$/,
+];
+
+const withoutPinFreeVersion = line =>
+  line.replace(
+    /^(\s+(?:- )?uses: )([^\s@]+)@\S+(?: #.*)?$/,
+    (whole, prefix, action) =>
+      PIN_FREE_ACTIONS.some(pattern => pattern.test(action))
+        ? `${prefix}${action}`
+        : whole,
+  );
+
+export const baselineRecipe = workflow => {
+  let job = '';
+  let step = '';
+  let jobEnvironment = false;
+  const kept = [];
+  const found = new Set();
+  for (const line of workflow.split('\n')) {
+    if (line.trim() === '' || line.trim().startsWith('#')) continue;
+    if (/^ {4}timeout-minutes:/.test(line)) continue;
+    const jobKey = /^ {2}([a-z][\w-]*):$/.exec(line);
+    if (jobKey) {
+      job = jobKey[1];
+      step = '';
+    }
+    if (/^ {6}- /.test(line)) {
+      const name = /^ {6}- name: (.+)$/.exec(line)?.[1];
+      if (step === SEED_STEP && name === undefined) {
+        if (!/^ {6}- uses: actions\/cache\/save(@|$)/.test(line)) {
+          throw new Error(
+            `the baseline's recipe has a step between ${SEED_STEP} and its save`,
+          );
+        }
+        step = `${SEED_STEP}, saved`;
+      } else {
+        step = name ?? '';
+      }
+    }
+    if (/^ {0,4}\S/.test(line)) jobEnvironment = /^ {4}env:$/.test(line);
+    const part = RECIPE_JOBS.includes(job)
+      ? job
+      : RECIPE_STEPS[job]?.includes(step.replace(/, saved$/, ''))
+      ? `${job}: ${step}`
+      : RECIPE_STEPS[job] && jobEnvironment
+      ? `${job}: env`
+      : undefined;
+    if (part) {
+      kept.push(withoutPinFreeVersion(line));
+      found.add(part);
+    }
+  }
+  const expected = [
+    ...RECIPE_JOBS,
+    ...Object.entries(RECIPE_STEPS).flatMap(([name, steps]) =>
+      steps.map(stepName => `${name}: ${stepName}`),
+    ),
+    `version: ${SEED_STEP}, saved`,
+  ];
+  const missing = expected.filter(part => !found.has(part));
+  if (missing.length > 0) {
+    throw new Error(`the baseline's recipe is missing ${missing.join('; ')}`);
+  }
+  return createHash('sha256')
+    .update(kept.join('\n'))
+    .digest('hex')
+    .slice(0, 16);
+};
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -662,6 +767,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         values.channel,
       )?.tag;
     },
+    recipe: () => {
+      if (!positionals[1]) throw new Error('recipe needs the workflow file');
+      return baselineRecipe(fs.readFileSync(positionals[1], 'utf8'));
+    },
     packages: () => {
       const names = PACKAGES.map(({ name }) => name);
       return values.json ? JSON.stringify(names) : names.join(' ');
@@ -684,7 +793,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!Object.hasOwn(commands, command ?? '')) {
     // eslint-disable-next-line no-console -- usage
     console.error(
-      'usage: node scripts/releases.mjs fetch [--out <file>] | check | packages [--json] | previous [--below X.Y.Z] | latest [--except TAG] | highest | reference --channel stable|canary [--except TAG] | stamp <root> <version> [--package <name> --with <name@version>...]; previous, latest, highest and reference take --package <name>, --at <commit> and --published-by <tag>',
+      'usage: node scripts/releases.mjs fetch [--out <file>] | check | packages [--json] | recipe <workflow> | previous [--below X.Y.Z] | latest [--except TAG] | highest | reference --channel stable|canary [--except TAG] | stamp <root> <version> [--package <name> --with <name@version>...]; previous, latest, highest and reference take --package <name>, --at <commit> and --published-by <tag>',
     );
     process.exit(2);
   }

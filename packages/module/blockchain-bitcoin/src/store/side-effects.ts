@@ -31,8 +31,8 @@ import { BitcoinWallet, SyncStatus } from '../wallet';
 
 import { computeBitcoinTokenBalances } from './helpers/compute-token-balances';
 
-import type { SideEffect } from '..';
 import type { BitcoinWalletInfo } from '../common';
+import type { SideEffect } from '../sdk-contracts';
 import type { SyncStatusUpdate } from '../wallet';
 import type { ProviderError } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';

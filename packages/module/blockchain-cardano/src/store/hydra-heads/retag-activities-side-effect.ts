@@ -14,7 +14,7 @@ import {
   take,
 } from 'rxjs';
 
-import type { SideEffect } from '../../contracts';
+import type { SideEffect } from '../../sdk-contracts';
 import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';

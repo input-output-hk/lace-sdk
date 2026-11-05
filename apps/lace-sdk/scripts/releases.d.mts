@@ -37,6 +37,7 @@ export const DEVELOPMENT_VERSION: string;
 export const FIRST_VERSION: string;
 export const FAMILY_DIRECTORIES: readonly string[];
 export const PACKAGES: readonly { name: string; directory: string }[];
+export const baselineRecipe: (workflow: string) => string;
 export const releaseName: (tag: string, name?: string) => string;
 export const parsePackageReleaseTag: (
   tag: string,

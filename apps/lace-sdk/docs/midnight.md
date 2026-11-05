@@ -196,20 +196,20 @@ To prove in a trusted execution environment, select a `tee-delegated` proof serv
 each run, because the attestation ledger is on Preprod for every network. The callback is trusted host code: it
 must validate the evidence and policy and bind the channel before it returns a session.
 
-`createTemenosAttestedProver({ ...props, trustRoots, verifier })` is the adapter for the Temenos prover. It
+`createVeriteeAttestedProver({ ...props, trustRoots, verifier })` is the adapter for the Veritee prover. It
 accepts only its supported network and deployment configuration.
 
 ```typescript
 import {
   createMidnightModule,
-  createTemenosAttestedProver,
+  createVeriteeAttestedProver,
 } from '@laceio/sdk/midnight';
-import type { TemenosTrustRoots, TemenosVerifier } from '@laceio/sdk/midnight';
+import type { VeriteeTrustRoots, VeriteeVerifier } from '@laceio/sdk/midnight';
 
 const attestedModule = (
   password: Uint8Array,
-  trustRoots: TemenosTrustRoots,
-  verifier: TemenosVerifier,
+  trustRoots: VeriteeTrustRoots,
+  verifier: VeriteeVerifier,
 ) =>
   createMidnightModule({
     password,
@@ -218,16 +218,16 @@ const attestedModule = (
         proofServer: {
           kind: 'tee-delegated',
           url: 'https://api.proofserver.preview.wastedp.io',
-          label: 'Temenos',
+          label: 'Veritee',
         },
       },
     },
     createAttestedProver: props =>
-      createTemenosAttestedProver({ ...props, trustRoots, verifier }),
+      createVeriteeAttestedProver({ ...props, trustRoots, verifier }),
   });
 ```
 
-The Temenos adapter needs host access to the private `@input-output-hk/temenos-attestation-verifier@0.3.0`
+The Veritee adapter needs host access to the private `@input-output-hk/veritee-attestation-verifier@0.4.0`
 package, which the SDK neither installs nor imports. Supply in `verifier` its `LocalCheckFailedError` and
 `AttestationVerificationError` classes, and `createVerifier(config)` returning a **new** `AttestationVerifier` on
 each call, built from that same config: `AkxEvidenceProvider.fromConfig(config)`,
@@ -244,7 +244,7 @@ The rules the engine enforces:
 - A `tee-delegated` proof server without an adapter is refused.
 - A recognised TEE host configured as an ordinary HTTP prover is refused, even when an adapter exists.
 - An attestation failure never falls back to HTTP.
-- Temenos supports `prove`; its attested channel does not support `check`, which rejects.
+- Veritee supports `prove`; its attested channel does not support `check`, which rejects.
 - In-process and paired-device proving are not supported.
 
 ### Worker mode
@@ -747,10 +747,15 @@ SDK's API and can change with a wallet SDK update.
   fails, the coins the earlier steps reserved are released and the step's error is returned, for transfers, batches
   and the connector primitives alike, so a failed build never holds coins you cannot discard. If a transfer's or
   an intent's release fails as well, the error is an `AggregateError` of both failures; a release that fails elsewhere leaves
-  the coins reserved until a sync reset (`resetSyncState`) clears the unshielded ones. DUST registration releases
-  its NIGHT when it finds too little DUST for its fee, but not when the fee query of a first registration fails,
-  which the wallet library does not handle: that NIGHT stays reserved until a sync reset. Check
-  `estimateMidnightFee` first to avoid building what cannot be paid.
+  the coins reserved until a sync reset (`resetSyncState`). A sync reset that completes deletes the account's saved
+  state and starts a new engine, so it frees every reservation, of NIGHT, DUST and shielded coins alike. A reset that
+  cannot delete the saved state does not free the reservations saved in it: the account's next engine, which Worker
+  mode starts at once, restores them. Such a reset reads Failed in the account's sync operation, as does one that
+  deleted the state but whose new engine failed to start. In Worker mode, a reset that waited for a submission to
+  settle and then failed reads Failed only in the pages that run the account's engine when it ends; elsewhere it
+  completes. DUST registration releases its NIGHT when it finds too little DUST for its fee, but not when the fee query
+  of a first registration fails, which the wallet library does not handle: that NIGHT stays reserved until a sync
+  reset. Check `estimateMidnightFee` first to avoid building what cannot be paid.
 - **Pre-binding balancing.** `balanceMidnightUnsealedTransaction` adds the wallet's unshielded inputs to the dApp's
   transaction without reserving them, as the wallet library does: until the wallet syncs that transaction from the
   chain, another build can select the same NIGHT, and the later submission fails.
@@ -808,7 +813,7 @@ SDK's API and can change with a wallet SDK update.
 | `proveMidnightTx(wallet, props)`                    | Prove a signed recipe through the configured proof server               |
 | `submitMidnightTx(wallet, props)`                   | Submit a proved transaction                                             |
 | `getMidnightProvingProvider(wallet, props)`         | Account-bound circuit `check` and `prove` through the configured prover |
-| `createTemenosAttestedProver(props)`                | Temenos adapter with a host-supplied verifier and trust roots           |
+| `createVeriteeAttestedProver(props)`                | Veritee adapter with a host-supplied verifier and trust roots           |
 | `balanceMidnightSealedTransaction(wallet, props)`   | Balance, sign and prove a binding connector transaction                 |
 | `balanceMidnightUnsealedTransaction(wallet, props)` | Balance, sign and prove a pre-binding connector transaction             |
 | `makeMidnightTransfer(wallet, props)`               | Build, sign and prove mixed-kind connector transfers                    |

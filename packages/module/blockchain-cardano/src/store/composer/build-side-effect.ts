@@ -10,7 +10,7 @@ import { refuseExtensionAccount } from '../account-guards';
 
 import { buildComposerTx, toPaymentAddress } from './build-composer-tx';
 
-import type { SideEffect } from '../../contracts';
+import type { SideEffect } from '../../sdk-contracts';
 import type { Cardano } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type {

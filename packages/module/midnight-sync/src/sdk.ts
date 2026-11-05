@@ -91,11 +91,11 @@ export const createMidnightSyncModule = (options: MidnightSyncSdkOptions) =>
     },
   });
 
-export { createTemenosAttestedProver } from '@lace-lib/vendor/temenos-attested-prover';
+export { createVeriteeAttestedProver } from '@lace-lib/vendor/veritee-attested-prover';
 export type {
-  TemenosTrustRoots,
-  TemenosVerifier,
-} from '@lace-lib/vendor/temenos-attested-prover';
+  VeriteeTrustRoots,
+  VeriteeVerifier,
+} from '@lace-lib/vendor/veritee-attested-prover';
 export type {
   AttestedProverProvider,
   AttestedProvingSession,

@@ -1,5 +1,5 @@
 // The contracts the SDK's Cardano module implements and depends on, and the
-// types its store is written against in the stable SDK build (contracts.stable.ts).
+// types its store and in-memory wallet integration are written against.
 import { addressBookAddressValidatorAddonContract } from '@lace-contract/address-book';
 import { addressesStoreContract } from '@lace-contract/addresses';
 import {

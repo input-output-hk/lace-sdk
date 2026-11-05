@@ -16,7 +16,7 @@ import { createBlockchainNetworkTargetResolver } from '@lace-contract/network';
 import { SecretBox } from '@lace-lib/core';
 import { HexBytes } from '@lace-lib/util';
 
-import type { AvailableAddons } from './contracts';
+import type { AvailableAddons } from './sdk-contracts';
 import type { SerializableInMemoryKeyAgentData } from '@cardano-sdk/key-management';
 import type {
   CardanoBip32AccountProps,

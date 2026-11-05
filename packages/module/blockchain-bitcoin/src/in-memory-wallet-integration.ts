@@ -13,7 +13,7 @@ import * as bip39 from 'bip39';
 
 import { getExtendedPubKeys } from './common';
 
-import type { AvailableAddons } from '.';
+import type { AvailableAddons } from './sdk-contracts';
 import type {
   BitcoinBip32AccountProps,
   BitcoinSpecificInMemoryWalletData,

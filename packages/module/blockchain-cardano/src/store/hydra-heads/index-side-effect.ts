@@ -52,7 +52,7 @@ import type {
   HeadHistoryReader,
   HeadHistoryStart,
 } from './head-history';
-import type { SideEffect } from '../../contracts';
+import type { SideEffect } from '../../sdk-contracts';
 import type { Cardano } from '@cardano-sdk/core';
 import type {
   Activity,

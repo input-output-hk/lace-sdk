@@ -15,8 +15,6 @@
     "@hugeicons/react-native": "^1.0.11",
     "@lace-contract/cardano-context": "*",
     "@lace-contract/i18n": "*",
-    "@lace-lib/image-url": "*",
-    "@lace-lib/ur-transport": "*",
     "@lace-lib/util": "*",
     "@lace-lib/util-render": "*",
     "@lodev09/react-native-true-sheet": "3.11.18",

@@ -574,7 +574,7 @@ describe('engine-host-sessions', () => {
               proofServer: {
                 kind: 'tee-delegated',
                 url: 'https://api.proofserver.wastedp.io',
-                label: 'Temenos',
+                label: 'Veritee',
               },
             },
           }),

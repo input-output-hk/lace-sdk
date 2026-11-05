@@ -4,7 +4,7 @@ import {
   makeNightDesignationIndexSettling,
 } from './night-designation/index-side-effect';
 
-import type { SideEffect } from '../contracts';
+import type { SideEffect } from '../sdk-contracts';
 
 // =====================================================================
 // cNIGHT-on-Cardano DUST designation — build half (SDK-safe).

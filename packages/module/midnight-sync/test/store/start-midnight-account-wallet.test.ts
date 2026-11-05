@@ -771,11 +771,11 @@ describe('startMidnightAccountWallet', () => {
         expect(WalletFacadeInitMock).not.toHaveBeenCalled();
       });
 
-      it("proves through the Temenos prover in the app's own dependencies", async () => {
-        // The Temenos prover only attests its baked deployments, so the test
+      it("proves through the Veritee prover in the app's own dependencies", async () => {
+        // The Veritee prover only attests its baked deployments, so the test
         // server reaching its check shows the app supplies it.
         await expect(start(midnightSideEffectDependencies)).rejects.toThrow(
-          'No baked Temenos attestation config',
+          'No baked Veritee attestation config',
         );
       });
 

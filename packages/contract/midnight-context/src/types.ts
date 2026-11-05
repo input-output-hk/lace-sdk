@@ -391,13 +391,13 @@ export type AccountKeyManager = {
   destroy: () => void;
 };
 
-/** Provider-owned phase/check IDs. Temenos keeps its existing wire values. */
+/** Provider-owned phase/check IDs. Veritee keeps its existing wire values. */
 export type AttestationPhaseId = string;
 export type AttestationCheckId = string;
 
 export type AttestationCheckResult = {
   id: AttestationCheckId;
-  /** Owning phase; absent on legacy Temenos events (verify-locally). */
+  /** Owning phase; absent on legacy Veritee events (verify-locally). */
   phase?: AttestationPhaseId;
   status: 'failed' | 'passed';
   detail?: string;
@@ -444,8 +444,8 @@ export type AttestationProgressState = {
 };
 
 export type StartMidnightAccountWalletParams = {
-  /** Reads the Temenos ledger indexer URL, resolved afresh for each attestation run. */
-  getTemenosLedgerIndexerUrl?: () => Promise<string>;
+  /** Reads the Veritee ledger indexer URL, resolved afresh for each attestation run. */
+  getVeriteeLedgerIndexerUrl?: () => Promise<string>;
   config: MidnightNetworkConfig;
   store: CollectionStorage<SerializedMidnightWallet>;
   account: InMemoryWalletAccount<MidnightAccountProps>;

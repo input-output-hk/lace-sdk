@@ -1,10 +1,7 @@
 // The contracts the Cardano module implements and depends on in the apps, and
-// the types its store is written against.
-// The stable SDK build resolves contracts.stable.ts in place of this file, which
-// types the store against the contracts the SDK's module loads.
-// Keep the two files' exports in step, apart from the names the variant
-// declares on stable-omits lines; the SDK's stable variant parity check
-// enforces it.
+// the types its hooks and the store parts only the apps run (store/full.ts)
+// are written against. Anything the SDK's module reaches takes its types from
+// sdk-contracts.ts instead, so the SDK's builds never reach the apps' contracts.
 import { activitiesItemCustomizationsAddonContract } from '@lace-contract/activities';
 import { addressBookAddressValidatorAddonContract } from '@lace-contract/address-book';
 import { addressesStoreContract } from '@lace-contract/addresses';

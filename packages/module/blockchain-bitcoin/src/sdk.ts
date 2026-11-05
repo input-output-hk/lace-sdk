@@ -1,27 +1,9 @@
 import './augmentations';
 
-import { activitiesStoreContract } from '@lace-contract/activities';
-import { addressBookAddressValidatorAddonContract } from '@lace-contract/address-book';
-import { addressesStoreContract } from '@lace-contract/addresses';
-import {
-  BITCOIN_FEATURE_FLAG,
-  bitcoinFeeMarketProvider,
-  bitcoinProviderContract,
-} from '@lace-contract/bitcoin-context';
-import { inMemoryIntegrationAddonContract } from '@lace-contract/in-memory';
-import {
-  combineContracts,
-  inferModuleContext,
-  ModuleName,
-} from '@lace-contract/module';
-import { networkStoreContract } from '@lace-contract/network';
-import { signerFactoryAddonContract } from '@lace-contract/signer';
-import { syncStoreContract } from '@lace-contract/sync';
-import { tokenIdMapperAddonContract } from '@lace-contract/token-pricing';
-import { tokensStoreContract } from '@lace-contract/tokens';
-import { walletActiveStateDependencyContract } from '@lace-contract/wallet-active-state';
-import { walletRepoStoreContract } from '@lace-contract/wallet-repo';
+import { BITCOIN_FEATURE_FLAG } from '@lace-contract/bitcoin-context';
+import { inferModuleContext, ModuleName } from '@lace-contract/module';
 
+import { dependsOnContracts, implementsContracts } from './sdk-contracts';
 import store from './store';
 
 export { DUST_THRESHOLD, getExtendedPubKeys } from './common';
@@ -34,26 +16,6 @@ export {
 export type { BuildBitcoinPaymentParams } from './tx-builder';
 export { bitcoinAccountWallets$, SyncStatus } from './wallet';
 export type { BitcoinWallet } from './wallet';
-
-const implementsContracts = combineContracts([
-  inMemoryIntegrationAddonContract,
-  tokensStoreContract,
-  addressesStoreContract,
-  syncStoreContract,
-  addressBookAddressValidatorAddonContract,
-  tokenIdMapperAddonContract,
-  signerFactoryAddonContract,
-] as const);
-
-const dependsOnContracts = combineContracts([
-  bitcoinProviderContract,
-  bitcoinFeeMarketProvider,
-  networkStoreContract,
-  walletRepoStoreContract,
-  walletActiveStateDependencyContract,
-  activitiesStoreContract,
-  tokensStoreContract,
-] as const);
 
 /**
  * Bitcoin accounts: their addresses, tokens and sync, in-memory wallet
