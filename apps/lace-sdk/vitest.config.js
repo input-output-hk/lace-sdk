@@ -29,6 +29,9 @@ export default defineConfig({
   },
   test: {
     ...baseConfig.test,
+    // Compiler-heavy suites also run beside other Nx projects in CI, so
+    // keep their competing heaps and CPU work bounded.
+    maxWorkers: 4,
     coverage: {
       ...baseConfig.test.coverage,
       reportsDirectory: __dirname + '/coverage',

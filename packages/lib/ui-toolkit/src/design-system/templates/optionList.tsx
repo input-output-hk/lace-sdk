@@ -1,7 +1,12 @@
 import type { ImageSourcePropType } from 'react-native';
 
 import React, { useCallback, useMemo } from 'react';
-import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import {
+  Platform,
+  StyleSheet,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -162,7 +167,6 @@ export const OptionList = ({
               testID="option-list-scroll-view"
               style={[styles.scrollFrame, scrollFrameStyle]}
               contentContainerStyle={styles.listContent}
-              showsVerticalScrollIndicator={false}
               removeClippedSubviews={false}
               onScroll={onScroll}
               scrollEventThrottle={16}>
@@ -186,7 +190,6 @@ export const OptionList = ({
             keyExtractor={item => item.id}
             ItemSeparatorComponent={ItemSeparator}
             contentContainerStyle={styles.listContent}
-            showsVerticalScrollIndicator={false}
             onScroll={onScroll}
             scrollEventThrottle={16}
           />
@@ -201,7 +204,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollClip: { flex: 1, overflow: 'hidden' },
-  scrollFrame: { position: 'absolute', left: 0, right: 0 },
+  scrollFrame: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    // Match the header's center when a web scrollbar consumes layout width.
+    ...Platform.select({ web: { scrollbarGutter: 'stable both-edges' } }),
+  },
   listContent: {
     paddingBottom: spacing.XXXXL,
   },

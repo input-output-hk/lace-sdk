@@ -219,7 +219,6 @@ export const Pagination = ({
         data={paginationIndicators}
         renderItem={renderItem}
         horizontal
-        showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.indicatorsContainer}
         style={paginationStyle}
       />

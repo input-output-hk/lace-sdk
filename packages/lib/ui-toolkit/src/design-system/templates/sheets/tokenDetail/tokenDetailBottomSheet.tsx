@@ -1014,9 +1014,7 @@ const PortfolioTokenDetailContent = ({
   globalState: GlobalStateProps;
   isTokenPricingEnabled: boolean;
 }) => (
-  <Sheet.Scroll
-    testID="token-details-sheet-scroll"
-    showsVerticalScrollIndicator={false}>
+  <Sheet.Scroll testID="token-details-sheet-scroll">
     <Column style={defaultStyles.content} gap={spacing.M}>
       {staticContent}
       <Divider />
@@ -1136,7 +1134,6 @@ const PerAccountTokenDetailContent = ({
       }
       ListFooterComponent={loadMoreFooter}
       ListEmptyComponent={emptyState}
-      showsVerticalScrollIndicator={false}
     />
   );
 };

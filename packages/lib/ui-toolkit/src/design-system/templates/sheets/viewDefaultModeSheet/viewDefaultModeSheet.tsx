@@ -44,7 +44,7 @@ export const ViewDefaultModeTemplate = ({
   const { options, selectedMode } = utils;
 
   return (
-    <Sheet.Scroll showsVerticalScrollIndicator={false}>
+    <Sheet.Scroll>
       <Column style={styles.container} alignItems="flex-start" gap={spacing.L}>
         <Text.M testID={'default-view-mode-sheet-title'}>{title}</Text.M>
         <RadioGroup

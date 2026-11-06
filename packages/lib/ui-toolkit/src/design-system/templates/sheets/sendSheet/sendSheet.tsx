@@ -122,7 +122,7 @@ export const SendSheet = ({
   );
 
   return (
-    <Sheet.Scroll showsVerticalScrollIndicator={false} keyboardAware>
+    <Sheet.Scroll keyboardAware>
       <Column
         justifyContent="space-between"
         gap={spacing.M}

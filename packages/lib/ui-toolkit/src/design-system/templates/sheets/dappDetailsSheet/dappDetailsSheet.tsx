@@ -86,9 +86,7 @@ export const DappDetailsSheet = ({
   );
 
   return (
-    <Sheet.Scroll
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.scrollContainer}>
+    <Sheet.Scroll contentContainerStyle={styles.scrollContainer}>
       <Column style={staticStyles.defaultGap} testID={testID}>
         <Row alignItems="center" style={staticStyles.headerRow}>
           <Avatar

@@ -172,7 +172,6 @@ export const ActivityHistory: React.FC<ActivityHistoryProps> = ({
       renderItem={renderItem}
       keyExtractor={keyExtractor}
       getItemType={getItemType}
-      showsVerticalScrollIndicator={false}
       ListHeaderComponent={ActivityListHeader}
       ListFooterComponent={ActivityListFooter}
       renderScrollComponent={renderScrollComponent}

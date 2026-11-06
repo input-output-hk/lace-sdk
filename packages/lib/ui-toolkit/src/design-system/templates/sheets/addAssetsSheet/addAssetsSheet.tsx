@@ -165,10 +165,7 @@ export const AddAssetsTemplate = ({
   );
 
   return (
-    <Sheet.Scroll
-      showsVerticalScrollIndicator={false}
-      scrollEnabled={availableTokens.length !== 0}
-      keyboardAware>
+    <Sheet.Scroll scrollEnabled={availableTokens.length !== 0} keyboardAware>
       <Column style={styles.container}>
         <Row justifyContent="center">
           <Text.M variant="secondary" testID="add-assets-count">

@@ -12,6 +12,7 @@ import { useTrueSheet } from '@lodev09/react-native-true-sheet';
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -30,6 +31,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { spacing, useTheme } from '../../../design-tokens';
 import {
   Avatar,
+  WebBlurProvider,
   Button,
   Column,
   Divider,
@@ -60,6 +62,8 @@ type SheetScrollProps = Omit<ScrollViewProps, 'ref'> & {
   children: ReactNode | ReactNode[];
   /** Pads scroll content by keyboard height to keep inputs visible. Enable only when TrueSheet can't auto-manage the scroll (nested deep under a navigator). Default `false`. */
   keyboardAware?: boolean;
+  /** Measured floating footer space for native content padding; web reserves it through `Sheet.Footer`. The sheet must use `insetAdjustment: 'never'`. */
+  footerInset?: number;
 };
 
 type HeaderAvatar = {
@@ -101,6 +105,7 @@ interface SheetFooterProps {
   showDivider?: boolean;
   titleRow?: ReactNode;
   testID?: string;
+  onLayout?: ViewProps['onLayout'];
 }
 
 /**
@@ -123,7 +128,7 @@ const SheetContainer = ({ children, style, ...props }: ViewProps) => {
 
   return (
     <SheetGestureRoot {...props} style={containerStyle}>
-      {children}
+      <WebBlurProvider enabled={false}>{children}</WebBlurProvider>
     </SheetGestureRoot>
   );
 };
@@ -166,54 +171,59 @@ const Header = ({
     // Unconditional, unlike the other slots: this root predates the Android
     // fix and every platform's header has always had it.
     <GestureHandlerRootView testID={testID} style={styles.headerContainer}>
-      <Row alignItems="center" justifyContent="center" style={styles.headerRow}>
-        {leftIconOnPress && (
-          <IconButton.Static
-            icon={<Icon name="CaretLeft" size={24} />}
-            onPress={leftIconOnPress}
-            containerStyle={styles.leftIcon}
-            testID={`${testID}-left-icon`}
-          />
-        )}
+      <WebBlurProvider enabled={false}>
         <Row
           alignItems="center"
           justifyContent="center"
-          style={styles.titleContainer}
-          gap={spacing.S}>
-          {!!headerIcon && <Icon name={headerIcon} />}
-          {!!headerAvatar && (
-            <Avatar
-              size={AVATAR_SIZE}
-              shape="rounded"
-              content={avatarContent}
+          style={styles.headerRow}>
+          {leftIconOnPress && (
+            <IconButton.Static
+              icon={<Icon name="CaretLeft" size={24} />}
+              onPress={leftIconOnPress}
+              containerStyle={styles.leftIcon}
+              testID={`${testID}-left-icon`}
             />
           )}
-          <Text.S numberOfLines={1} align="center" testID={`${testID}-title`}>
-            {title}
-          </Text.S>
+          <Row
+            alignItems="center"
+            justifyContent="center"
+            style={styles.titleContainer}
+            gap={spacing.S}>
+            {!!headerIcon && <Icon name={headerIcon} />}
+            {!!headerAvatar && (
+              <Avatar
+                size={AVATAR_SIZE}
+                shape="rounded"
+                content={avatarContent}
+              />
+            )}
+            <Text.S numberOfLines={1} align="center" testID={`${testID}-title`}>
+              {title}
+            </Text.S>
+          </Row>
+          {showCloseButton && (
+            <IconButton.Static
+              icon={<Icon name="Cancel" size={20} />}
+              onPress={onClosePress}
+              containerStyle={headerStyles.closeButton}
+              testID={'side-sheet-close-button'}
+            />
+          )}
         </Row>
-        {showCloseButton && (
-          <IconButton.Static
-            icon={<Icon name="Cancel" size={20} />}
-            onPress={onClosePress}
-            containerStyle={headerStyles.closeButton}
-            testID={'side-sheet-close-button'}
-          />
+        {showDivider && (
+          <View style={styles.divider}>
+            <Divider />
+          </View>
         )}
-      </Row>
-      {showDivider && (
-        <View style={styles.divider}>
-          <Divider />
-        </View>
-      )}
-      {subtitle && (
-        <Text.S
-          align="center"
-          style={styles.subtitle}
-          testID={`${testID}-subtitle`}>
-          {subtitle}
-        </Text.S>
-      )}
+        {subtitle && (
+          <Text.S
+            align="center"
+            style={styles.subtitle}
+            testID={`${testID}-subtitle`}>
+            {subtitle}
+          </Text.S>
+        )}
+      </WebBlurProvider>
     </GestureHandlerRootView>
   );
 };
@@ -252,10 +262,49 @@ const Footer = ({
   showDivider = true,
   titleRow,
   testID = 'sheet-footer',
+  onLayout,
 }: SheetFooterProps) => {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const footerStyles = getFooterStyles({ insets, theme });
+
+  const floatingWrapper = useRef<HTMLElement | null>(null);
+  const callerOnLayout = useRef(onLayout);
+  callerOnLayout.current = onLayout;
+  const handleLayout = useCallback<NonNullable<ViewProps['onLayout']>>(
+    event => {
+      const target = (
+        event.nativeEvent as typeof event.nativeEvent & {
+          target?: HTMLElement;
+        }
+      ).target;
+      const wrapper =
+        target && !target.closest('[data-vaul-drawer]')
+          ? target.closest<HTMLElement>('[data-vaul-detached-wrapper]')
+          : null;
+      if (floatingWrapper.current !== wrapper) {
+        floatingWrapper.current?.style.removeProperty(
+          '--lace-sheet-footer-height',
+        );
+        floatingWrapper.current = wrapper;
+      }
+      wrapper?.style.setProperty(
+        '--lace-sheet-footer-height',
+        `${event.nativeEvent.layout.height}px`,
+      );
+      callerOnLayout.current?.(event);
+    },
+    [],
+  );
+  useLayoutEffect(
+    () => () => {
+      // Clear before a replacement footer's initial layout publishes its height.
+      floatingWrapper.current?.style.removeProperty(
+        '--lace-sheet-footer-height',
+      );
+    },
+    [],
+  );
 
   const PrimaryButtonComponent =
     primaryVariant === 'critical' ? Button.Critical : Button.Primary;
@@ -264,48 +313,54 @@ const Footer = ({
   const ButtonsContainer = vertical ? Column : Row;
 
   return (
-    <Column style={footerStyles.footer} gap={spacing.S} testID={testID}>
-      {showDivider && <Divider />}
-      {titleRow}
-      <ButtonsContainer
-        alignItems={vertical ? 'stretch' : 'center'}
-        gap={spacing.S}>
-        {!vertical && secondaryButton && (
-          <SecondaryButtonComponent
-            flex={1}
-            label={secondaryButton.label}
-            onPress={secondaryButton.onPress}
-            loading={secondaryButton.loading}
-            disabled={secondaryButton.disabled}
-            preIconName={secondaryButton.preIconName}
-            iconColor={secondaryButton.iconColor}
-            testID={secondaryButton.testID}
-          />
-        )}
-        {primaryButton && (
-          <PrimaryButtonComponent
-            flex={vertical ? undefined : 1}
-            label={primaryButton.label}
-            onPress={primaryButton.onPress}
-            loading={primaryButton.loading}
-            disabled={primaryButton.disabled}
-            preIconName={primaryButton.preIconName}
-            iconColor={primaryButton.iconColor}
-            testID={primaryButton.testID}
-          />
-        )}
-        {vertical && secondaryButton && (
-          <SecondaryButtonComponent
-            label={secondaryButton.label}
-            onPress={secondaryButton.onPress}
-            loading={secondaryButton.loading}
-            disabled={secondaryButton.disabled}
-            preIconName={secondaryButton.preIconName}
-            iconColor={secondaryButton.iconColor}
-            testID={secondaryButton.testID}
-          />
-        )}
-      </ButtonsContainer>
+    <Column
+      style={footerStyles.footer}
+      gap={spacing.S}
+      testID={testID}
+      onLayout={isWeb ? handleLayout : onLayout}>
+      <WebBlurProvider enabled={false}>
+        {showDivider && <Divider />}
+        {titleRow}
+        <ButtonsContainer
+          alignItems={vertical ? 'stretch' : 'center'}
+          gap={spacing.S}>
+          {!vertical && secondaryButton && (
+            <SecondaryButtonComponent
+              flex={1}
+              label={secondaryButton.label}
+              onPress={secondaryButton.onPress}
+              loading={secondaryButton.loading}
+              disabled={secondaryButton.disabled}
+              preIconName={secondaryButton.preIconName}
+              iconColor={secondaryButton.iconColor}
+              testID={secondaryButton.testID}
+            />
+          )}
+          {primaryButton && (
+            <PrimaryButtonComponent
+              flex={vertical ? undefined : 1}
+              label={primaryButton.label}
+              onPress={primaryButton.onPress}
+              loading={primaryButton.loading}
+              disabled={primaryButton.disabled}
+              preIconName={primaryButton.preIconName}
+              iconColor={primaryButton.iconColor}
+              testID={primaryButton.testID}
+            />
+          )}
+          {vertical && secondaryButton && (
+            <SecondaryButtonComponent
+              label={secondaryButton.label}
+              onPress={secondaryButton.onPress}
+              loading={secondaryButton.loading}
+              disabled={secondaryButton.disabled}
+              preIconName={secondaryButton.preIconName}
+              iconColor={secondaryButton.iconColor}
+              testID={secondaryButton.testID}
+            />
+          )}
+        </ButtonsContainer>
+      </WebBlurProvider>
     </Column>
   );
 };
@@ -386,6 +441,7 @@ const Scroll = (props: SheetScrollProps) => {
     ref,
     contentContainerStyle,
     keyboardAware: isKeyboardAware = false,
+    footerInset = 0,
     onScroll,
     // Default to 'handled' so a tap on an in-scroll control while an input is
     // focused activates the control instead of being swallowed to dismiss the
@@ -421,12 +477,14 @@ const Scroll = (props: SheetScrollProps) => {
     scrollOffsetY,
   );
 
+  const contentFooterInset = isWeb ? 0 : footerInset;
+
   const mergedContentContainerStyle = useMemo(() => {
     const base: StyleProp<ViewStyle> = [
       styles.scrollContentContainer,
       contentContainerStyle,
     ];
-    if (keyboardInset <= 0) return base;
+    if (keyboardInset <= 0 && contentFooterInset <= 0) return base;
 
     // Add keyboard inset + footer height on top of the existing bottom padding
     // (paddingBottom > paddingVertical > padding), not overwriting it.
@@ -442,11 +500,11 @@ const Scroll = (props: SheetScrollProps) => {
       {
         paddingBottom:
           (typeof basePaddingBottom === 'number' ? basePaddingBottom : 0) +
-          keyboardInset +
-          footerHeight.vertical,
+          contentFooterInset +
+          (keyboardInset > 0 ? keyboardInset + footerHeight.vertical : 0),
       },
     ];
-  }, [contentContainerStyle, keyboardInset]);
+  }, [contentContainerStyle, contentFooterInset, keyboardInset]);
 
   return (
     <ScrollView
@@ -454,19 +512,20 @@ const Scroll = (props: SheetScrollProps) => {
       onScroll={handleScroll}
       scrollEventThrottle={16}
       contentContainerStyle={mergedContentContainerStyle}
-      showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps={keyboardShouldPersistTaps}
       {...restProps}>
       {/* Inside the ScrollView, never around it: a wrapping root has to pick one
           sizing and the detents need opposite ones — 'auto' collapses under its
           `flex: 1`, `scrollable` clips without it. See SheetGestureRoot. */}
-      {isAndroid ? (
-        <GestureHandlerRootView style={styles.gestureRoot}>
-          {children}
-        </GestureHandlerRootView>
-      ) : (
-        children
-      )}
+      <WebBlurProvider enabled={false}>
+        {isAndroid ? (
+          <GestureHandlerRootView style={styles.gestureRoot}>
+            {children}
+          </GestureHandlerRootView>
+        ) : (
+          children
+        )}
+      </WebBlurProvider>
     </ScrollView>
   );
 };

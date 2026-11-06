@@ -25,9 +25,7 @@ export const NotificationDetailsPageTemplate = ({
 }: NotificationDetailsPageTemplateProps) => {
   return (
     <PageContainerTemplate testID={testID}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContainer}>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
         <Row alignItems="center" style={styles.headerContent}>
           <View style={styles.headerPageTitle}>
             <PageHeader title={headerTitle} onBackPress={onBackPress} compact />

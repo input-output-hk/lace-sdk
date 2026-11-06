@@ -407,7 +407,6 @@ export const TabBar: React.FC<TabBarProps> = React.memo(
                     data={accountData}
                     renderItem={renderAccountRow}
                     scrollEnabled={accountData.length > 3}
-                    showsVerticalScrollIndicator={false}
                     keyExtractor={(item, index) =>
                       `${item.accountName}-${index}`
                     }

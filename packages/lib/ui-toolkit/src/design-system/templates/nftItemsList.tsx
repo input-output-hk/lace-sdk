@@ -82,7 +82,6 @@ export const NftItemsList = ({
         data={nfts}
         renderItem={renderNFTItem}
         numColumns={columns}
-        showsVerticalScrollIndicator={false}
         columnWrapperStyle={columns > 1 ? styles.columnWrapper : undefined}
         scrollEnabled={false}
         nestedScrollEnabled={false}

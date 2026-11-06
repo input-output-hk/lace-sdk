@@ -118,7 +118,6 @@ export const ActivityList: React.FC<ActivityListProps> = ({
       data={data}
       renderItem={renderItem}
       getItemType={getItemType}
-      showsVerticalScrollIndicator={false}
       ListFooterComponent={ListFooterComponent}
       {...props}
     />

@@ -296,7 +296,6 @@ export const WalletHierarchy: React.FC<WalletHierarchyProps> = ({
         renderItem={renderItem}
         keyExtractor={keyExtractor}
         scrollEnabled={false}
-        showsVerticalScrollIndicator={false}
       />
 
       {showAddButton && onAddButtonPress && (

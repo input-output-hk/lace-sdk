@@ -107,7 +107,7 @@ export const ReviewTransactionTemplate = ({
       : 'negative';
 
   return (
-    <Sheet.Scroll showsVerticalScrollIndicator={false} keyboardAware>
+    <Sheet.Scroll keyboardAware>
       <Column style={styles.container} gap={spacing.L}>
         <Row justifyContent="space-between">
           <Text.M variant="secondary" testID="review-transaction-account-label">

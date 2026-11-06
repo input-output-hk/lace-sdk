@@ -279,9 +279,7 @@ export const PortfolioSkeleton = () => {
   const skeletonStyles = getStyles({ isSideMenu });
 
   return (
-    <ScrollView
-      contentContainerStyle={skeletonStyles.scrollContent}
-      showsVerticalScrollIndicator={false}>
+    <ScrollView contentContainerStyle={skeletonStyles.scrollContent}>
       <Column gap={spacing.L}>
         <Shimmer.Header width="medium" />
         <Shimmer.L width="short" />
@@ -435,8 +433,7 @@ export const CompactPortfolioSkeleton = () => {
       contentContainerStyle={[
         styles.scrollContent,
         shouldCenterForExtensionTab && styles.centeredContent,
-      ]}
-      showsVerticalScrollIndicator={false}>
+      ]}>
       <Column gap={spacing.M}>
         <Column
           style={[

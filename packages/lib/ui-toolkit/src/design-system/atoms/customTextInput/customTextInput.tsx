@@ -272,8 +272,6 @@ export const CustomTextInput = forwardRef<RnTextInputRef, CustomTextInputProps>(
         ...restProps,
         style: textstyles,
         testID: testID ? `${testID}-value` : 'input-value',
-        showsVerticalScrollIndicator: false,
-        showsHorizontalScrollIndicator: false,
       }),
       [
         handleFocus,
@@ -490,7 +488,6 @@ const getStyles = (
       outlineStyle: 'solid',
       outlineWidth: 0,
       outlineColor: 'transparent',
-      scrollbarWidth: 'none',
     } as TextStyle,
   });
 };

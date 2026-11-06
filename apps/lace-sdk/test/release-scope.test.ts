@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   binaryOwners,
@@ -17,7 +17,7 @@ import {
   signatureChanges,
   type Lockfile,
 } from '../scripts/dependency-scope';
-import { reachedOwnSource } from '../scripts/reach.mjs';
+import * as reach from '../scripts/reach.mjs';
 import { internalTermFindings } from '../scripts/release-notes-check';
 import {
   cleanTitle,
@@ -170,21 +170,30 @@ describe("a channel's release", () => {
         'apps/lace-sdk/src/midnight-worker/engine-host.ts',
         'apps/lace-sdk/src/midnight-worker/serve-engine-host.ts',
       ];
-      const stable = packageScope('apps/lace-sdk', ['stable']);
-      const canary = packageScope('apps/lace-sdk', ['canary']);
+      // SDK-owned files use the real channel exclusion; compiling workspace
+      // dependencies again adds no evidence about which channel ships them.
+      const workspaceReach = vi
+        .spyOn(reach, 'reachedWorkspaceFiles')
+        .mockReturnValue([]);
+      try {
+        const stable = packageScope('apps/lace-sdk', ['stable']);
+        const canary = packageScope('apps/lace-sdk', ['canary']);
 
-      expect(workerOnly.map(file => isInScope(file, stable))).toEqual(
-        workerOnly.map(() => false),
-      );
-      expect(workerOnly.map(file => isInScope(file, canary))).toEqual(
-        workerOnly.map(() => true),
-      );
+        expect(workerOnly.map(file => isInScope(file, stable))).toEqual(
+          workerOnly.map(() => false),
+        );
+        expect(workerOnly.map(file => isInScope(file, canary))).toEqual(
+          workerOnly.map(() => true),
+        );
+      } finally {
+        workspaceReach.mockRestore();
+      }
     },
   );
 
   it("finds the canary entries in the canary build's own source alone", () => {
-    const stable = reachedOwnSource('stable');
-    const canaryEntries = [...reachedOwnSource('canary')].filter(file =>
+    const stable = reach.reachedOwnSource('stable');
+    const canaryEntries = [...reach.reachedOwnSource('canary')].filter(file =>
       file.endsWith('.canary.ts'),
     );
     expect(canaryEntries.length).toBeGreaterThan(0);

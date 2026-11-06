@@ -1,5 +1,6 @@
 export * from './sheet/sheet';
 export * from './sheet/sheetSubmit';
+export * from './sheet/useSheetFooter';
 export * from './tabBar';
 export * from './activityList/activityList';
 export * from './genericFlashList';

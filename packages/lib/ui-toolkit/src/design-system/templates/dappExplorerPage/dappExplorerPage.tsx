@@ -298,7 +298,6 @@ export const DappExplorerPageTemplate = ({
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             scrollEnabled
-            showsVerticalScrollIndicator={false}
             maintainVisibleContentPosition={{ disabled: true }}
             contentContainerStyle={[
               styles.itemsList,

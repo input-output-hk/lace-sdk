@@ -84,9 +84,7 @@ export const NotificationsPageTemplate = ({
 
   return (
     <PageContainerTemplate testID={testID}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContainer}>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
         <Column style={styles.content}>
           <Row
             alignItems="center"

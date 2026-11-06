@@ -37,8 +37,7 @@ export const AddWalletPageTemplate = ({
     <ScrollView
       testID={testID}
       style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-      showsVerticalScrollIndicator={false}>
+      contentContainerStyle={styles.contentContainer}>
       <View style={styles.contentWrapper}>
         <PageHeader
           title={title}

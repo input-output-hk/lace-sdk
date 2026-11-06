@@ -98,10 +98,7 @@ export const NetworkSelectionSheet = ({
   );
 
   return (
-    <Sheet.Scroll
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.container}
-      testID={testID}>
+    <Sheet.Scroll contentContainerStyle={styles.container} testID={testID}>
       <Text.S testID={`${testID}-description`}>{description}</Text.S>
       <RadioGroup
         options={filteredNetworkTypeOptions}

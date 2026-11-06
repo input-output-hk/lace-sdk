@@ -168,10 +168,7 @@ export const SendResultTemplate = ({
   const isSuccess = transactionState.status === 'success';
 
   return (
-    <Sheet.Scroll
-      showsVerticalScrollIndicator={false}
-      keyboardAware
-      testID={testID}>
+    <Sheet.Scroll keyboardAware testID={testID}>
       <Column>
         <Column
           gap={spacing.M}

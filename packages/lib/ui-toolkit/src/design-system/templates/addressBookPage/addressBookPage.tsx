@@ -190,7 +190,6 @@ export const AddressBookPageTemplate = ({
             )}
             ListEmptyComponent={ListEmptyComponent}
             contentContainerStyle={styles.contactList}
-            showsVerticalScrollIndicator={false}
             onScroll={onScroll}
             scrollEventThrottle={16}
           />

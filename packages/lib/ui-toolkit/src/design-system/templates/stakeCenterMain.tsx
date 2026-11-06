@@ -153,7 +153,6 @@ export const StakeCenterMain = ({
             keyExtractor={keyExtractor}
             ListHeaderComponent={ListHeaderComponent}
             ListEmptyComponent={ListEmptyComponent}
-            showsVerticalScrollIndicator={false}
             ItemSeparatorComponent={() => <View style={styles.itemSeparator} />}
             contentContainerStyle={styles.listContent}
             onScroll={onScroll}

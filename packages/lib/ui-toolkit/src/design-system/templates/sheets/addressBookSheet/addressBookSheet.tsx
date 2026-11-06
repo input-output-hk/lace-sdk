@@ -128,7 +128,6 @@ const ContactsSection = ({
           )}
           data={contacts}
           keyExtractor={item => item.name}
-          showsVerticalScrollIndicator={false}
         />
       </Column>
     </>

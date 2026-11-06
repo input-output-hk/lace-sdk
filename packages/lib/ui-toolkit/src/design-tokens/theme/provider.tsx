@@ -14,6 +14,7 @@ import { isCompactWidth, isMediumWidth } from '../../design-system';
 
 import { darkTheme } from './dark';
 import { lightTheme } from './light';
+import { ScrollbarStyles } from './scrollbar-styles';
 
 import type { ThemeContextType, LayoutSize, FontFamily } from './types';
 
@@ -44,6 +45,7 @@ export const ThemeProvider: React.FC<{
   featureFlags = [],
   tracksSystemColorScheme = true,
 }) => {
+  const parentTheme = useContext(ThemeContext);
   const [themeChoice, setThemeChoice] = useState<ColorSchemeName>(
     () => defaultTheme ?? Appearance.getColorScheme() ?? 'dark',
   );
@@ -140,6 +142,7 @@ export const ThemeProvider: React.FC<{
         setTemporaryThemeChoice,
         clearTemporaryTheme,
       }}>
+      {!parentTheme && <ScrollbarStyles theme={theme} />}
       {children}
     </ThemeContext.Provider>
   );

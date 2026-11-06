@@ -26,7 +26,6 @@ export const RecoveryPhraseVerificationSheet = ({
 }: RecoveryPhraseVerificationSheetProps) => {
   return (
     <Sheet.Scroll
-      showsVerticalScrollIndicator={false}
       testID={testID}
       contentContainerStyle={styles.contentContainer}>
       <Text.S align="center">{description}</Text.S>
