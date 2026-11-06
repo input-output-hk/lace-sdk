@@ -173,6 +173,11 @@ export const TxInId = ({ txId, index }: Cardano.TxIn) =>
   `${txId}_${index}` as TxInId;
 
 export type TxInKeyPathMap = Partial<Record<TxInId, AccountKeyDerivationPath>>;
+
+/** The address of the output each input spends, by input. */
+export type SpentOutputAddressMap = Partial<
+  Record<TxInId, Cardano.PaymentAddress>
+>;
 export type RewardAccountKeyPathMap = Partial<
   Record<Cardano.RewardAccount, AccountKeyDerivationPath>
 >;
@@ -206,13 +211,35 @@ export interface SignTransactionOptions {
   stubSign?: boolean;
 }
 
+/** Options for signing a sub transaction. */
+export interface SignSubTransactionOptions {
+  /** Key paths to sign with besides the ones the sub transaction body needs. */
+  additionalKeyPaths?: AccountKeyDerivationPath[];
+}
+
 export interface SignTransactionContext {
   txInKeyPathMap: TxInKeyPathMap;
   knownAddresses: GroupedAddress[];
   handleResolutions?: HandleResolution[];
   dRepKeyHashHex?: Crypto.Ed25519KeyHashHex;
   sender?: MessageSender;
+  /**
+   * Scripts whose required keys the signer signs with, such as native scripts
+   * read from reference inputs. Witnessers also consider the native scripts the
+   * transaction or sub transaction carries in its witness set, so a script
+   * passed here and carried as well is signed for once. A native script counts
+   * only when the body needs it: it locks an input the body spends, or its
+   * hash names a withdrawal, certificate, voter or guard credential, a minting
+   * policy, or a guard a sub transaction requires of the top level. While the
+   * body spends an input in neither `txInKeyPathMap` nor
+   * `spentOutputAddresses`, any script may lock it, so every one counts.
+   */
   scripts?: Cardano.Script[];
+  /**
+   * The address of the output each input spends, which tells the native
+   * script that locks it. `util.createSpentOutputAddresses` builds it.
+   */
+  spentOutputAddresses?: SpentOutputAddressMap;
 }
 
 export type SignDataContext = Cip8SignDataContext & { sender?: MessageSender };
@@ -239,12 +266,47 @@ export interface KeyAgent {
   signCip8Data(request: Cip8SignDataContext): Promise<Cip30DataSignature>;
 
   /**
+   * Signs a transaction body with the own keys it needs and the keys required
+   * by the native scripts it needs in `context.scripts` or in the witness sets
+   * of its sub transactions. A body does not carry its own witness set, so
+   * callers holding the whole transaction pass its native scripts there, as
+   * {@link Witnesser.witness} does.
+   *
+   * @param txBody The transaction body to sign.
+   * @param context The signing context.
+   * @param options Additional key paths and extra signers.
+   * @returns The signatures by public key.
    * @throws AuthenticationError
    */
   signTransaction(
     txBody: Serialization.TransactionBody,
     context: SignTransactionContext,
     options?: SignTransactionOptions,
+  ): Promise<Cardano.Signatures>;
+
+  /**
+   * Signs the id of a sub transaction (CIP-0118 nested transactions), the
+   * hash of its body, with the own keys its body needs: those of the inputs
+   * it spends, withdrawals, certificates, votes, required signers and key
+   * hash guards, and of the native scripts in its witness set or the
+   * context. Native scripts read from reference inputs are not seen;
+   * callers pass them through `context.scripts`. The enclosing transaction
+   * carries a sub transaction byte for byte, so its parties sign it before
+   * it is batched.
+   *
+   * @param subTransaction The sub transaction to sign.
+   * @param context The signing context, with the key paths of the inputs the
+   *   sub transaction spends.
+   * @param options Additional key paths to sign with.
+   * @returns The signatures by public key.
+   * @throws AuthenticationError
+   * @throws NotImplementedError If the key agent cannot sign sub
+   *   transactions, as hardware devices cannot.
+   */
+  signSubTransaction(
+    subTransaction: Serialization.SubTransaction,
+    context: SignTransactionContext,
+    options?: SignSubTransactionOptions,
   ): Promise<Cardano.Signatures>;
   /**
    * @throws AuthenticationError
@@ -276,6 +338,7 @@ export type AsyncKeyAgent = Pick<
   | 'derivePublicKey'
   | 'signBlob'
   | 'signCip8Data'
+  | 'signSubTransaction'
   | 'signTransaction'
 > &
   Shutdown & {
@@ -295,10 +358,20 @@ export interface WitnessedTx {
   };
 }
 
+/** A sub transaction with the vkey witnesses of its signers. */
+export interface WitnessedSubTransaction {
+  /** The sub transaction CBOR, its body bytes as they were given. */
+  cbor: HexBlob;
+  /** The sub transaction id, the hash of its body, that the witnesses sign. */
+  id: Cardano.TransactionId;
+}
+
 /** Interface for an entity capable of generating witness data for a transaction. */
 export interface Witnesser {
   /**
-   * Generates the witness data for a given transaction.
+   * Generates the witness data for a given transaction, signing for the
+   * native scripts it carries in its witness set as well as those in
+   * `context.scripts`, each key once.
    *
    * @param transaction The transaction along with its hash for which the witness data is to be generated.
    * @param context The witness sign transaction context
@@ -310,6 +383,29 @@ export interface Witnesser {
     context: SignTransactionContext,
     options?: WitnessOptions,
   ): Promise<WitnessedTx>;
+
+  /**
+   * Signs a sub transaction (CIP-0118 nested transactions) and adds the
+   * signatures to the vkey witnesses it already carries, such as those of
+   * other parties. Its body bytes, and so its id, stay as they were.
+   *
+   * A sub transaction must be signed before it is batched: the enclosing
+   * transaction carries it byte for byte, so signing it afterwards would
+   * change the batch.
+   *
+   * @param subTransaction The sub transaction to sign.
+   * @param context The witness sign transaction context, with the key paths
+   *   of the inputs the sub transaction spends.
+   * @param options Additional key paths to sign with.
+   * @returns A promise that resolves to the signed sub transaction.
+   * @throws NotImplementedError If the key agent cannot sign sub
+   *   transactions, as hardware devices cannot.
+   */
+  witnessSubTransaction(
+    subTransaction: Serialization.SubTransaction,
+    context: SignTransactionContext,
+    options?: SignSubTransactionOptions,
+  ): Promise<WitnessedSubTransaction>;
 
   /**
    * @throws AuthenticationError

@@ -1,5 +1,5 @@
 /**
- * CIP-19 Cardano address encoding — credentials → bech32, via `@cardano-sdk/core`'s
+ * CIP-19 Cardano address encoding: credentials to bech32, via `@lace-lib/cardano-core`'s
  * `*Address.fromCredentials(...).toAddress().toBech32()` through the `@lace-lib/vendor`
  * seam (ADR 37) — and the reverse read of an address's payment credential. Callers pass `Cardano.Credential` / `Cardano.CredentialType` (reachable
  * through the seam) directly — core does not mirror them.

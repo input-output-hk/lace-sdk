@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -440,7 +440,7 @@ describe('inspectCustodyTransaction on revision 3', () => {
       ).toEqual(['custody-unsupported-operation/duplicate-withdrawal']);
     });
 
-    it('refuses a body that repeats its withdrawal map', () => {
+    it('is never handed a body that repeats its withdrawal map, which the decoder refuses', () => {
       const shape = deviceRewrite(grantedState, grantedState);
       const built = buildTransaction(shape);
       const body = built.transaction.body().toCbor();
@@ -448,9 +448,9 @@ describe('inspectCustodyTransaction on revision 3', () => {
       const repeated = `a${(fields + 1).toString(16)}${body.slice(
         2,
       )}05a1${zeroWithdrawalEntry(LOGIC_REWARD_ACCOUNT)}`;
-      expect(
-        reasonsOf(inspectBuilt(patchedBody(shape, body, repeated))),
-      ).toEqual(['custody-unsupported-operation/duplicate-withdrawal']);
+      expect(() => patchedBody(shape, body, repeated)).toThrow(
+        /Duplicate transaction body map key: 5/,
+      );
     });
   });
 

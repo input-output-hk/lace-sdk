@@ -1,4 +1,4 @@
-import { Serialization } from '@cardano-sdk/core';
+import { serializeTransaction } from '@lace-lib/cardano-tx-builder';
 
 import { failCustodyBuild } from './build-failure';
 import {
@@ -15,8 +15,8 @@ import { evaluateCustodyTransaction } from './custody-chain';
 import type { AssembleWithFundsParams } from './custody-assembly';
 import type { CustodyChain } from './custody-chain';
 import type { CustodyReseed } from './custody-execution-estimate';
-import type { Cardano } from '@cardano-sdk/core';
-import type { TxEvaluator } from '@cardano-sdk/tx-construction';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
+import type { TxEvaluator } from '@lace-lib/cardano-tx-builder';
 
 /** Rebuilds allowed after the final transaction measures above its budgets. */
 const MAX_EVALUATION_ROUNDS = 3;
@@ -31,7 +31,7 @@ export const createProviderEvaluator = (
 ): TxEvaluator => ({
   evaluate: async tx => {
     const measured = await evaluateCustodyTransaction(
-      Serialization.Transaction.fromCore(tx),
+      serializeTransaction(tx),
       chain,
     );
     return (tx.witness.redeemers ?? []).map(({ purpose, index }) => {

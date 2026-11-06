@@ -11,11 +11,11 @@ import type {
   CardanoCustodySponsor,
   CardanoCustodySponsorLease,
 } from './cardano-custody-sponsor';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyBuildResult,
   CardanoCustodyFeeFunding,
 } from '@lace-contract/cardano-context';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type { Result } from '@lace-lib/util';
 
 /** The service no longer holds a lease it reports so; releasing it fails. */

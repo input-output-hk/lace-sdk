@@ -5,13 +5,13 @@ import {
 
 import { CardanoCustodyEnrollmentInvalidError } from './cardano-custody-errors';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { CardanoCustodyDeviceChannel } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type {
   Bip32PublicKeyHex,
   Ed25519KeyHashHex,
   Ed25519PublicKeyHex,
-} from '@cardano-sdk/crypto';
-import type { CardanoCustodyDeviceChannel } from '@lace-contract/cardano-context';
+} from '@lace-lib/cardano-crypto';
 
 /**
  * One custody device key, `m/1854'/1815'/a'/0/index` (CIP-1854). Its key

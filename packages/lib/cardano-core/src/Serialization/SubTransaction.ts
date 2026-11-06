@@ -91,8 +91,8 @@ export class SubTransaction {
    * never for sub transactions.
    *
    * @param cbor The CBOR encoded SubTransaction object.
-   * @param options Deserialization options. When `strict` is true, throws on unknown map keys
-   * instead of skipping them.
+   * @param options Deserialization options forwarded to the body and witness set. See
+   * {@link DeserializationOptions} for the checks `strict` adds.
    * @returns The new SubTransaction instance.
    */
   static fromCbor(

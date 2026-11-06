@@ -1,9 +1,9 @@
-import { Percent } from '@cardano-sdk/util';
 import {
   AccountId,
   WalletId,
   walletsActions,
 } from '@lace-contract/wallet-repo';
+import { Percent } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 import { beforeEach, describe, expect, it } from 'vitest';
 

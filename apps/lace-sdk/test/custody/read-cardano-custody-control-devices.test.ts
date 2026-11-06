@@ -1,7 +1,7 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import { CardanoCustodyRequestRefusedError } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import { readCardanoCustodyControlDevices } from '../../src/custody/read-cardano-custody-control-devices';

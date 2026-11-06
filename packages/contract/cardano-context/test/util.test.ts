@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { COLLATERAL_AMOUNT_LOVELACES } from '../src/const';

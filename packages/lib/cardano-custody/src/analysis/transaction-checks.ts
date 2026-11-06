@@ -5,7 +5,7 @@
 // placement and the shape of a mint, are checked over a whole transaction,
 // beside refusals for shapes Lace never builds.
 
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { isCustodyReserveDatum } from '../codecs/reserve';
 import { SUPPORTED_CUSTODY_CONTRACT_VERSIONS } from '../contract-version';
@@ -38,7 +38,7 @@ import type {
   CustodyUnsupportedBodyField,
 } from './refusals';
 import type { TransactionFacts } from './transaction-facts';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 const UNSUPPORTED_BODY_FIELDS: readonly CustodyUnsupportedBodyField[] = [
   'accountBalanceIntervals',

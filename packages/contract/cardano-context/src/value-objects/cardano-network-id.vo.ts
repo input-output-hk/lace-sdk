@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { BlockchainNetworkId } from '@lace-contract/network';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import type { Tagged } from 'type-fest';
 

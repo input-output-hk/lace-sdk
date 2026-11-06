@@ -8,7 +8,7 @@ import type {
 import type { KeyValueStorageDependencies } from './storage';
 import type { Environment, ViewId, ContractName } from './value-objects';
 import type { ModuleName } from './value-objects/module-name.vo';
-import type { WithLogger } from '@cardano-sdk/util';
+import type { WithLogger } from '@lace-lib/cardano-util';
 import type {
   Middleware,
   ReducersMapObject,

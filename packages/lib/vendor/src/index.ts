@@ -2,17 +2,18 @@
  * `@lace-lib/vendor` — the single re-export seam over the trusted external SDK
  * surface ([ADR 37](../../../../docs/adr/37-host-supply-chain-isolation.md)).
  *
- * The privileged host closure (ADR 37) depends on `@cardano-sdk/*` **only**
- * through this lib, which it vendors as a committed,
- * **no-minify built bundle** (`npm run build` → `dist/`, the `@cardano-sdk` surface inlined)
- * so an SDK bump shows up as one reviewable diff of the actual production code — the audit
- * chokepoint. Workspace members resolve this `src` directly; the privileged
- * closure consumes the built bundle (ADR 37). cardano-js-sdk is Lace-maintained and in
- * maintenance mode (rare updates) ⇒ very low supply-chain risk, which is what justifies
- * depending on it directly rather than re-deriving it.
+ * The privileged host closure (ADR 37) depends on the workspace Cardano
+ * packages (`@lace-lib/cardano-*`) **only** through this lib, which it vendors
+ * as a committed, **no-minify built bundle** (`npm run build` into `dist/`, the
+ * Cardano packages inlined) so a change to them shows up as one reviewable diff
+ * of the actual production code - the audit chokepoint. Workspace members
+ * resolve this `src` directly; the privileged closure consumes the built bundle
+ * (ADR 37). The Cardano packages are Lace's own port of cardano-js-sdk, kept in
+ * this repository, which is what justifies depending on them directly rather
+ * than re-deriving them.
  *
  * Keep this an **exact-surface** re-export — add only the symbols consumers
- * actually need; never re-export a package wholesale. Besides the `@cardano-sdk`
+ * actually need; never re-export a package wholesale. Besides the Cardano
  * namespaces (seam-cardano.ts), this seam is also the host's SINGLE admission point for the few
  * **non-SDK** externals it admits — `buffer` (runtime) and type-fest's `Tagged`
  * (type-only) for the first-party libs, plus the Bitcoin signing/derivation libs

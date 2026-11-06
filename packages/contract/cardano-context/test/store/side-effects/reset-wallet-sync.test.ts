@@ -1,10 +1,10 @@
-import { Cardano } from '@cardano-sdk/core';
 import { activitiesActions, ActivityType } from '@lace-contract/activities';
 import { uiActions } from '@lace-contract/app';
 import { failuresActions } from '@lace-contract/failures';
 import { syncActions } from '@lace-contract/sync';
 import { syncReducers } from '@lace-contract/sync/src/store/slice';
 import { tokensActions, TokenId } from '@lace-contract/tokens';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Timestamp, Ok, BigNumber } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import {

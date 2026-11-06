@@ -1,9 +1,9 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 import { describe, expect, it } from 'vitest';
 
 import { applyVkeyWitnesses } from '../../src/signing/apply-vkey-witnesses';
 
-import type { Ed25519PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Ed25519PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 // Well-formed hex of the right lengths: a vkey is 32 bytes, a signature 64.
 const vkey = (fill: string) => fill.repeat(64) as Ed25519PublicKeyHex;

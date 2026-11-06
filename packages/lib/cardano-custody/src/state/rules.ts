@@ -13,7 +13,7 @@ import type {
   CustodyAsset,
   CustodyGrant,
 } from '../codecs/account-state';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export const CUSTODY_MAX_DEVICES = 8;
 /** Most grants an account may hold outstanding: minted and not yet burned, live or dead. */

@@ -1,10 +1,10 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { minAdaRequired } from '@cardano-sdk/tx-construction';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   custodyRecipientFromAddress,
   parseCustodyRequestedGrantScope,
   serializeCustodyRequestedGrantScope,
 } from '@lace-lib/cardano-custody';
+import { minAdaRequired } from '@lace-lib/cardano-tx-builder';
 
 import { failCustodyBuild } from './build-failure';
 

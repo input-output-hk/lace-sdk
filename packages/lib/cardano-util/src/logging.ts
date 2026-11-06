@@ -54,7 +54,9 @@ export const contextLogger = (
 
   const contextStr = contextStringify(derivedLogger.contextArray);
 
-  return { ...derivedLogger, ...(<Logger>(<unknown>Object.fromEntries(
+  return {
+    ...derivedLogger,
+    ...(Object.fromEntries(
       loggerMethodNames.map<[keyof Logger, Logger['info']]>(method => [
         method,
 
@@ -66,5 +68,6 @@ export const contextLogger = (
           );
         },
       ]),
-    ))) };
+    ) as unknown as Logger),
+  };
 };

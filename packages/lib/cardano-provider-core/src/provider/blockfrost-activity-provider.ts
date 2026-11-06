@@ -1,9 +1,12 @@
+/* eslint-disable max-params */
+
 import {
   Cardano,
   ProviderError,
   ProviderFailure,
   Serialization,
-} from '@cardano-sdk/core';
+  createBatchInputResolver,
+} from '@lace-lib/cardano-core';
 import { Err, Ok, Timestamp } from '@lace-lib/util';
 import { isNotFoundError } from '@lace-lib/util-provider';
 import {
@@ -12,6 +15,7 @@ import {
   forkJoin,
   from,
   map,
+  mergeMap,
   type Observable,
   of,
 } from 'rxjs';
@@ -20,6 +24,7 @@ import { BlockfrostProvider } from '../blockfrost-provider';
 import { BlockfrostToCardanoSDK } from '../blockfrost-to-cardano-sdk';
 import { MAX_TRANSACTION_DEPTH, isCborWithinLimits } from '../cbor-limits';
 
+import { BlockfrostInputResolverProvider } from './blockfrost-input-resolver-provider';
 import { BlockfrostTxProvider } from './blockfrost-tx-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
@@ -36,18 +41,42 @@ import type { Logger } from 'ts-log';
 type BlockfrostAddressTxList = Responses['address_transactions_content'];
 
 /**
+ * A transaction decoded from its CBOR together with the ids of its sub transactions in batch
+ * order, each the hash of the sub transaction body bytes as they appear on chain.
+ */
+interface DecodedTx {
+  /** The transaction in its core form. */
+  tx: Cardano.Tx;
+  /** The id of each sub transaction, in batch order. */
+  subTransactionIds: Cardano.TransactionId[];
+}
+
+/**
  * Provider responsible for fetching transaction history and details.
  */
 export class BlockfrostActivityProvider extends BlockfrostProvider {
   readonly #txProvider: BlockfrostTxProvider;
+  readonly #inputResolver: BlockfrostInputResolverProvider;
 
+  /**
+   * @param client - Blockfrost HTTP client
+   * @param logger - Logger
+   * @param txProvider - Fetches the transaction details
+   * @param inputResolver - Fetches the outputs of the transactions that produced
+   * the sub transaction inputs Blockfrost does not list among the transaction utxos
+   */
   public constructor(
     client: HttpClient,
     logger: Logger,
     txProvider: BlockfrostTxProvider = new BlockfrostTxProvider(client, logger),
+    inputResolver: BlockfrostInputResolverProvider = new BlockfrostInputResolverProvider(
+      client,
+      logger,
+    ),
   ) {
     super(client, logger);
     this.#txProvider = txProvider;
+    this.#inputResolver = inputResolver;
   }
 
   /**
@@ -167,6 +196,13 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
    * which is returned inside a tuple together with the tx details which holds
    * additional info not stored in the HydratedTx.
    *
+   * The sub transactions of a Dijkstra batch carry their ids and their inputs
+   * and reference inputs carry the address of the output they spend or
+   * reference. Those outputs are looked up in the batch itself first, then in
+   * the inputs Blockfrost lists for the transaction and last in the
+   * transaction that produced them. The details fail when one cannot be
+   * found.
+   *
    * @param txId - Cardano.TransactionId
    */
   public getTransactionDetails(
@@ -178,7 +214,8 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
       this.#fetchTxFromCbor(txId),
       this.#fetchUtxos(txId),
     ]).pipe(
-      map(([txDetails, blockfrostTxCBOR, blockFrostUtxos]) => {
+      mergeMap(async ([txDetails, decodedTx, blockFrostUtxos]) => {
+        const blockfrostTxCBOR = decodedTx.tx;
         // We can't use txFromCBOR.body.inputs since it misses HydratedTxIn.address
         const { inputs, outputs, collaterals } =
           BlockfrostToCardanoSDK.transactionUtxos(
@@ -209,7 +246,9 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
                 outputs,
               }),
           certificates: blockfrostTxCBOR.body.certificates ?? [],
+          directDeposits: blockfrostTxCBOR.body.directDeposits,
           donation: blockfrostTxCBOR.body.donation,
+          guards: blockfrostTxCBOR.body.guards,
           mint: blockfrostTxCBOR.body.mint
             ? new Map([...blockfrostTxCBOR.body.mint].sort())
             : undefined,
@@ -219,6 +258,24 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
             : { invalidBefore: undefined, invalidHereafter: undefined },
           votingProcedures: blockfrostTxCBOR.body.votingProcedures,
           withdrawals: blockfrostTxCBOR.body.withdrawals,
+          ...(blockfrostTxCBOR.body.requiredTopLevelGuards && {
+            requiredTopLevelGuards:
+              blockfrostTxCBOR.body.requiredTopLevelGuards,
+          }),
+          ...(blockfrostTxCBOR.body.accountBalanceIntervals && {
+            accountBalanceIntervals:
+              blockfrostTxCBOR.body.accountBalanceIntervals,
+          }),
+          ...(blockfrostTxCBOR.body.startingAccountBalanceIntervals && {
+            startingAccountBalanceIntervals:
+              blockfrostTxCBOR.body.startingAccountBalanceIntervals,
+          }),
+          ...(blockfrostTxCBOR.body.subTransactions && {
+            subTransactions: await this.#hydrateSubTransactions(
+              decodedTx,
+              blockFrostUtxos,
+            ),
+          }),
         };
         const hydratedTx: Cardano.HydratedTx = {
           auxiliaryData: blockfrostTxCBOR.auxiliaryData,
@@ -251,7 +308,7 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
    * looks like one of the account's, could otherwise stall every reader of
    * its details with deeply nested metadata.
    */
-  #fetchTxFromCbor(txId: Cardano.TransactionId): Observable<Cardano.Tx> {
+  #fetchTxFromCbor(txId: Cardano.TransactionId): Observable<DecodedTx> {
     return from(
       this.request<Responses['tx_content_cbor']>(`txs/${txId}/cbor`),
     ).pipe(
@@ -263,10 +320,98 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
             `Transaction ${txId} is larger or nests deeper than can be decoded`,
           );
         }
-        return Serialization.Transaction.fromCbor(
+        const transaction = Serialization.Transaction.fromCbor(
           Serialization.TxCBOR(cbor),
-        ).toCore();
+        );
+        return {
+          subTransactionIds:
+            transaction
+              .body()
+              .subTransactions()
+              ?.values()
+              .map(subTransaction => subTransaction.getId()) ?? [],
+          tx: transaction.toCore(),
+        };
       }),
+    );
+  }
+
+  /**
+   * The sub transactions of a batch, each with its id and with the address of
+   * the output every input and reference input spends or references.
+   *
+   * @param decodedTx - The batch transaction and its sub transaction ids
+   * @param blockFrostUtxos - The utxos Blockfrost lists for the batch transaction
+   * @throws `ProviderError` when an input cannot be resolved
+   */
+  async #hydrateSubTransactions(
+    { tx, subTransactionIds }: DecodedTx,
+    blockFrostUtxos: Responses['tx_content_utxo'],
+  ): Promise<Cardano.HydratedSubTransaction[]> {
+    const subTransactions = (tx.body.subTransactions ?? []).map(
+      (subTransaction, index) => ({
+        ...subTransaction,
+        id: subTransactionIds[index],
+      }),
+    );
+    const producerOutputs = new Map<
+      Cardano.TransactionId,
+      Promise<Map<number, Cardano.TxOut> | null>
+    >();
+    const resolver = createBatchInputResolver(
+      { ...tx, body: { ...tx.body, subTransactions } },
+      {
+        resolveInput: async txIn => {
+          const listed = blockFrostUtxos.inputs.find(
+            input =>
+              input.tx_hash === txIn.txId && input.output_index === txIn.index,
+          );
+          if (listed) return BlockfrostToCardanoSDK.txOut(listed);
+          if (!producerOutputs.has(txIn.txId)) {
+            producerOutputs.set(
+              txIn.txId,
+              this.#inputResolver.resolveTransactionOutputs(txIn.txId),
+            );
+          }
+          const outputs = await producerOutputs.get(txIn.txId);
+          return outputs?.get(txIn.index) ?? null;
+        },
+      },
+    );
+
+    /**
+     * Pairs each input with the address of the output it spends or references.
+     *
+     * @throws `ProviderError` when an input cannot be resolved
+     */
+    const hydrateInputs = async (inputs: Cardano.TxIn[]) =>
+      Promise.all(
+        inputs.map(async (txIn): Promise<Cardano.HydratedTxIn> => {
+          const txOut = await resolver.resolveInput(txIn);
+          if (!txOut) {
+            throw new ProviderError(
+              ProviderFailure.NotFound,
+              undefined,
+              `Input ${txIn.txId}#${txIn.index} of transaction ${tx.id} could not be resolved`,
+            );
+          }
+          return { address: txOut.address, index: txIn.index, txId: txIn.txId };
+        }),
+      );
+
+    return Promise.all(
+      subTransactions.map(
+        async ({ body: { inputs, referenceInputs, ...body }, ...rest }) => ({
+          ...rest,
+          body: {
+            ...body,
+            inputs: await hydrateInputs(inputs),
+            ...(referenceInputs && {
+              referenceInputs: await hydrateInputs(referenceInputs),
+            }),
+          },
+        }),
+      ),
     );
   }
 

@@ -1,5 +1,5 @@
-import { createSlotTimeCalc } from '@cardano-sdk/core';
 import { markParameterizedSelector } from '@lace-contract/module';
+import { createSlotTimeCalc } from '@lace-lib/cardano-core';
 import { createSelector } from '@reduxjs/toolkit';
 
 import { selectCardanoCustodyAccounts } from '../../extensions/custody-account-ids';
@@ -16,8 +16,8 @@ import type {
 import type { CardanoCustodyAccount } from '../account';
 import type { CardanoCustodyAccountState } from '../account-state';
 import type { CardanoCustodyGrantWithStatus } from '../grant-status';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * The custody account selectors: `selectCardanoCustodyAccountState`,

@@ -1,8 +1,8 @@
-import { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import {
   InvalidStringError,
   assertIsBech32WithPrefix,
-} from '@cardano-sdk/util';
+} from '@lace-lib/cardano-util';
 import * as BaseEncoding from '@scure/base';
 
 import type { Tagged } from 'type-fest';

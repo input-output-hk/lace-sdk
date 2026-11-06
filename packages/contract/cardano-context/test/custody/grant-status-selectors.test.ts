@@ -1,6 +1,6 @@
-import { Cardano, Milliseconds } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { WalletType } from '@lace-contract/wallet-repo';
+import { Cardano, Milliseconds } from '@lace-lib/cardano-core';
 import { classifyCustodyAccountUtxos } from '@lace-lib/cardano-custody';
 import { Timestamp } from '@lace-lib/util';
 import { Serializable } from '@lace-lib/util-store';
@@ -27,9 +27,9 @@ import type {
   CardanoContextSliceState,
   RequiredProtocolParameters,
 } from '../../src';
-import type { EraSummary } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { WalletEntity } from '@lace-contract/wallet-repo';
+import type { EraSummary } from '@lace-lib/cardano-core';
 import type {
   CustodyAccountState,
   CustodyGrant,

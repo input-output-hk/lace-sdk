@@ -17,7 +17,6 @@ import type {
   MidnightUnshieldedAddress,
   SerialisedWalletState,
 } from './value-objects';
-import type { Percent } from '@cardano-sdk/util';
 import type { CollectionStorage } from '@lace-contract/storage';
 import type {
   AccountId,
@@ -25,6 +24,7 @@ import type {
   InMemoryWalletAccount,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { Percent } from '@lace-lib/cardano-util';
 import type {
   BigNumber,
   ByteArray,

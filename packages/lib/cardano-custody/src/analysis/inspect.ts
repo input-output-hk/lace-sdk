@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { parseCustodyAccountRecord } from '../record';
 import { fail, ok } from '../result';
@@ -49,8 +49,8 @@ import type { CustodyRefusal } from './refusals';
 import type { CustodyStateChange } from './state-change';
 import type { InputView } from './transaction-facts';
 import type { CustodyValueDelta } from './value';
-import type { Serialization } from '@cardano-sdk/core';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Serialization } from '@lace-lib/cardano-core';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export interface CustodyInspectionOptions {
   /** The network the caller names; every custody address must be on it. */

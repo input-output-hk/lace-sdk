@@ -1,5 +1,5 @@
-import { contextLogger } from '@cardano-sdk/util';
 import { BitcoinNetwork } from '@lace-contract/bitcoin-context';
+import { contextLogger } from '@lace-lib/cardano-util';
 import { toProviderError } from '@lace-lib/util-provider';
 
 import type { MempoolSpaceFeeEstimateResponse } from './mempool-api-schema';

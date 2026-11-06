@@ -1,4 +1,4 @@
-import { BigIntMath } from '@cardano-sdk/util';
+import { BigIntMath } from '@lace-lib/cardano-util';
 import { BigNumber } from '@lace-lib/util';
 
 import { TokenId } from '../../value-objects';

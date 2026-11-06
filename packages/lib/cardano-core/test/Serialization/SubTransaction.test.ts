@@ -2,11 +2,7 @@ import * as Crypto from '@lace-lib/cardano-crypto';
 import { HexBlob } from '@lace-lib/cardano-util';
 
 import * as Cardano from '../../src/Cardano';
-import {
-  SubTransaction,
-  SubTransactionBody,
-  TransactionBody,
-} from '../../src/Serialization';
+import { SubTransaction, SubTransactionBody } from '../../src/Serialization';
 
 import { vectorsForRule } from './dijkstraVectors';
 import { signature, vkey } from './testData';
@@ -72,6 +68,25 @@ describe('SubTransaction', () => {
     });
   });
 
+  describe('repeated map keys', () => {
+    it.each([
+      [
+        'a repeated witness set key',
+        HexBlob(`83${minimalBodyCbor}a200800080f6`),
+        'Duplicate transaction witness set map key: 0',
+      ],
+      [
+        'a repeated output key',
+        HexBlob(
+          '83a200d90102800181a300583900537ba48a023f0a3c65e54977ffc2d78c143fb418ef6db058e006d78a7c16240714ea0e12b41a914f2945784ac494bb19573f0ca61a08afa8010a0114a0f6',
+        ),
+        'Duplicate transaction output map key: 1',
+      ],
+    ])('rejects %s', (_, cbor, error) => {
+      expect(() => SubTransaction.fromCbor(cbor)).toThrow(error);
+    });
+  });
+
   describe('frame arity', () => {
     it('rejects a 2-element frame', () => {
       expect(() => SubTransaction.fromCbor(twoElementCbor)).toThrowError(
@@ -87,11 +102,14 @@ describe('SubTransaction', () => {
   });
 
   describe('getId', () => {
-    it('derives the id like the top level transaction id for identical body bytes', () => {
+    it('derives the id as the Blake2b-256 hash of the body bytes', () => {
       const subTx = SubTransaction.fromCbor(minimalCbor);
-      const topLevelId = TransactionBody.fromCbor(minimalBodyCbor).hash();
 
-      expect(subTx.getId()).toEqual(topLevelId);
+      expect(subTx.getId()).toEqual(
+        Cardano.TransactionId(
+          'da4603f4488d798af667794ab542f130a4bd1c20c7ed950c4648aaa95d0be4f4',
+        ),
+      );
     });
 
     it('changes the id when the body changes', () => {

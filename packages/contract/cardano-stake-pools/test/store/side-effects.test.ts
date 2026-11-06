@@ -1,5 +1,9 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import { CardanoNetworkId } from '@lace-contract/cardano-context';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
 import { Err, Ok } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { of } from 'rxjs';

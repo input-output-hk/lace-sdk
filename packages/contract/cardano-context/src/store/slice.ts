@@ -83,7 +83,6 @@ import type {
   RewardAccountDetailsCacheKey,
   UtxoCacheKey,
 } from '../value-objects';
-import type { Cardano, EraSummary } from '@cardano-sdk/core';
 import type {
   Activity,
   BlockchainSpecificActivityMetadata,
@@ -91,6 +90,7 @@ import type {
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { TokenId } from '@lace-contract/tokens';
 import type { AnyAccount } from '@lace-contract/wallet-repo';
+import type { Cardano, EraSummary } from '@lace-lib/cardano-core';
 import type { HexBytes } from '@lace-lib/util';
 import type {
   PayloadAction,

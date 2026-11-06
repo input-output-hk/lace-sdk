@@ -1,12 +1,16 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { createTestScheduler } from '@cardano-sdk/util-dev';
 import { ActivityType } from '@lace-contract/activities';
 import {
   FEATURE_FLAG_HYDRA_HEADS,
   hydraHeadsIndexActions,
   hydraHeadsIndexReducers,
 } from '@lace-contract/cardano-context';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import {
   HYDRA_HEAD_HISTORY_LIMITS,
   getHydraScriptRegistry,

@@ -2,13 +2,11 @@
 // (LW-15725), but only when the caller allows it and the ledger would accept
 // the withdrawal. Uses the real TransactionBuilder: the assertions are on the
 // built transaction body, not on a mocked build result.
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import {
-  TransactionBuilder,
-  pendingRewardWithdrawalKey,
-} from '@lace-contract/cardano-context';
+import { pendingRewardWithdrawalKey } from '@lace-contract/cardano-context';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
 import { BigNumber } from '@lace-lib/util';
 import { firstValueFrom, of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';

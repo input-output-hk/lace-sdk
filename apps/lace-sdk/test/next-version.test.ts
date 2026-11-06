@@ -188,13 +188,36 @@ describe('nextStableVersion', () => {
     expect(stableAfter('1.2.3', REMOVED_DEPRECATED).version).toBe('2.0.0');
   });
 
-  it('takes a breaking bump for a changed export, and names it undeprecated', () => {
-    const before = stableAfter('0.1.4', CHANGED);
-    expect(before).toMatchObject({
+  it('takes a breaking bump for a changed export, and names it undeprecated from 1.0 only', () => {
+    expect(stableAfter('0.1.4', CHANGED)).toMatchObject({
       version: '0.2.0',
       bump: 'breaking',
       changed: ['index:createWallet'],
+      breaking: ['index:createWallet'],
+      undeprecated: [],
+    });
+    expect(stableAfter('1.2.3', CHANGED)).toMatchObject({
+      version: '2.0.0',
+      bump: 'breaking',
+      changed: ['index:createWallet'],
       undeprecated: ['index:createWallet'],
+    });
+  });
+
+  it('before 1.0, takes a breaking bump for an undeprecated removal and names nothing undeprecated', () => {
+    const removed = stableAfter(
+      '0.1.1',
+      `
+declare function openWallet(name: string): Promise<void>;
+export { openWallet };
+`,
+    );
+    expect(removed).toMatchObject({
+      version: '0.2.0',
+      bump: 'breaking',
+      removed: ['index:createWallet'],
+      breaking: ['index:createWallet'],
+      undeprecated: [],
     });
   });
 
@@ -450,18 +473,41 @@ describe('nextRelease', () => {
     ]);
   });
 
-  it('refuses an undeprecated breaking change in stable, and warns in a canary', () => {
+  it('before 1.0, accepts an undeprecated breaking change in its minor release, with no warning in a canary', () => {
     const stable = stableAfter('0.1.0', CHANGED);
     expect(
-      nextRelease({ channel: 'stable', releases: history, previous, stable })
-        .problems,
-    ).toEqual([
-      'index:createWallet changes or is removed without being @deprecated in lace-sdk@0.1.0',
-    ]);
+      nextRelease({ channel: 'stable', releases: history, previous, stable }),
+    ).toMatchObject({ tag: 'lace-sdk@0.2.0', problems: [], warnings: [] });
+    expect(
+      nextRelease({ channel: 'canary', releases: history, previous, stable }),
+    ).toMatchObject({
+      tag: 'lace-sdk@0.2.0-canary.0',
+      problems: [],
+      warnings: [],
+    });
+  });
+
+  it('from 1.0, refuses an undeprecated breaking change in stable, and warns in a canary', () => {
+    const released = tags('lace-sdk@1.0.0');
+    const from = previousStable(released);
+    const stable = stableAfter('1.0.0', CHANGED);
+    expect(
+      nextRelease({
+        channel: 'stable',
+        releases: released,
+        previous: from,
+        stable,
+      }),
+    ).toMatchObject({
+      tag: 'lace-sdk@2.0.0',
+      problems: [
+        'index:createWallet changes or is removed without being @deprecated in lace-sdk@1.0.0',
+      ],
+    });
     const canary = nextRelease({
       channel: 'canary',
-      releases: history,
-      previous,
+      releases: released,
+      previous: from,
       stable,
     });
     expect(canary.problems).toEqual([]);
@@ -726,6 +772,40 @@ describe('the family', () => {
     expect(() => readFamilyExports(root, '@laceio/other')).toThrow(
       /not a package of the SDK's family/,
     );
+  });
+
+  it('counts the exports of an entry a release removed as removed', () => {
+    const tree = (files: Record<string, string>) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'family-'));
+      for (const [file, text] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), text);
+      }
+      return root;
+    };
+    const core = {
+      'apps/lace-cardano/dist/core.d.ts':
+        'declare const core: number;\nexport { core };\n',
+    };
+    const baseline = tree({
+      ...core,
+      'apps/lace-cardano/dist/input-selection.d.ts':
+        'declare const select: number;\nexport { select };\n',
+    });
+    const previous = readFamilyExports(baseline, '@laceio/cardano');
+    expect(previous.has('@laceio/cardano/input-selection:select')).toBe(true);
+    expect(
+      nextStableVersion({
+        previousVersion: '0.1.0',
+        previous,
+        next: readFamilyExports(tree(core), '@laceio/cardano'),
+        overrides: [],
+      }),
+    ).toMatchObject({
+      version: '0.2.0',
+      bump: 'breaking',
+      removed: ['@laceio/cardano/input-selection:select'],
+    });
   });
 });
 

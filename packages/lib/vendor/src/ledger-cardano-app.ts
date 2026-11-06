@@ -6,7 +6,7 @@
  * CONSUMERS: the pairing (`surfaces/hw-pair.ts`) and verify-address
  * (`surfaces/ledger-verify-address.ts`) surfaces, which probe the device and
  * extract the xpub / show an address through the `Ada` app DIRECTLY — never
- * through `@cardano-sdk/hardware-ledger`'s `LedgerKeyAgent` (ADR 44). The split
+ * through `@lace-lib/cardano-hardware-ledger`'s `LedgerKeyAgent` (ADR 44). The split
  * is STRUCTURAL, not a tree-shaking hope: this entry must NEVER pull the
  * key-agent signing tree (pinned by the build's `LIGHT_ENTRY_EXCLUSIONS`), so a
  * pairing / verify document loads without the signer + its libsodium WASM.

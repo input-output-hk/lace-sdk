@@ -1,4 +1,4 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { describe, expect, it } from 'vitest';
 
 import {

@@ -7,7 +7,7 @@ import {
   reseededExecutionUnits,
 } from '../../../src/store/custody/custody-execution-estimate';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const LIMIT = { memory: 14_000_000, steps: 10_000_000_000 };
 

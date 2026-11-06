@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 
-import { Percent } from '@cardano-sdk/util';
 import { addressesActions } from '@lace-contract/addresses';
 import { failuresActions } from '@lace-contract/failures';
 import {
@@ -14,6 +13,7 @@ import {
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { syncActions } from '@lace-contract/sync';
 import { TokenId, tokensActions } from '@lace-contract/tokens';
+import { Percent } from '@lace-lib/cardano-util';
 import { BigNumber, HexBytes, Timestamp } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';

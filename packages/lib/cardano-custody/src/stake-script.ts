@@ -3,12 +3,12 @@
 // for Lace: a dependency-free flat splice replaces the UPLC library, and the
 // result is a byte template with the owner substituted at a fixed offset.
 
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
 import { bytesToHex, HASH_28_BYTE_LENGTH, hexToBytes } from './hex';
 
 import type { CustodyContractVersion } from './contract-version';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** Flat-encoded program version 1.1.0: three one-byte naturals. */
 const PROGRAM_VERSION = [1, 1, 0];

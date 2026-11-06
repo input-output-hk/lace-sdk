@@ -1,6 +1,4 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
-import { assertWithinTransactionLimits } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   custodyGrantAfterSpend,
   custodyRecipientFromAddress,
@@ -8,20 +6,20 @@ import {
   findCustodyScopeViolations,
   inspectCustodyTransaction,
 } from '@lace-lib/cardano-custody';
+import { assertWithinTransactionLimits } from '@lace-lib/cardano-tx-builder';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it, vi } from 'vitest';
 
 import { changeReserveAt } from '../../../src/store/custody/custody-assembly';
 import { custodyExecutionEstimate } from '../../../src/store/custody/custody-execution-estimate';
 
 import {
-  MEASURED,
-  RUN_REDEEMER_CBOR,
-  TESTNET_BYRON_ADDRESS,
   accountId,
   accountState,
   chainId,
   collateralFunding,
   collateralUtxo,
+  compareInputs,
   controlUtxo,
   currentLogic,
   custodyAccount,
@@ -30,24 +28,26 @@ import {
   expectSuccess,
   fakeProvider,
   fundUtxo,
-  grantUtxo,
   granteeKeyHash,
+  grantUtxo,
   identity,
   logicRewardAccountOf,
   lovelaceGrant,
+  MEASURED,
   otherGranteeKeyHash,
   otherRecipientAddress,
   parkedScriptUtxos,
   protocolParameters,
   recipientAddress,
+  RUN_REDEEMER_CBOR,
   runBuild,
+  TESTNET_BYRON_ADDRESS,
   transactionOf,
   unparkedChainId,
   version,
 } from './fixtures';
 
 import type { ChainFixture, StoreFixture } from './fixtures';
-import type * as Crypto from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyBuildError,
   CardanoCustodyBuildRequest,
@@ -55,6 +55,7 @@ import type {
   CardanoCustodyCollateralFunding,
   RedeemerExecutionUnits,
 } from '@lace-contract/cardano-context';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountState,
   CustodyGrant,
@@ -384,11 +385,11 @@ describe('custody grant spends', () => {
       const result = expectSuccess(await run());
       const body = bodyOf(result);
 
-      // The control UTxO, then the parked proxy and logic.
-      expect(body.referenceInputs?.map(keyOf)).toEqual([
-        keyOf(control[0]),
-        ...parkedScriptUtxos.map(([input]) => keyOf(input)),
-      ]);
+      expect(body.referenceInputs?.map(keyOf)).toEqual(
+        [control[0], ...parkedScriptUtxos.map(([input]) => input)]
+          .sort(compareInputs)
+          .map(keyOf),
+      );
       expect(inputKeysOf(result).sort()).toEqual(
         [keyOf(grantUtxos[0][0]), keyOf(fundUtxo(1, 0n)[0])].sort(),
       );
@@ -1261,10 +1262,11 @@ describe('custody grant spends', () => {
       expect(fundsOf(otherSpend)).toEqual([keyOf(second[0])]);
       expect(inputKeysOf(otherSpend)).toContain(keyOf(grantUtxos[1][0]));
       for (const result of [agentSpend, otherSpend]) {
-        expect(bodyOf(result).referenceInputs?.map(keyOf)).toEqual([
-          keyOf(control[0]),
-          ...parkedScriptUtxos.map(([input]) => keyOf(input)),
-        ]);
+        expect(bodyOf(result).referenceInputs?.map(keyOf)).toEqual(
+          [control[0], ...parkedScriptUtxos.map(([input]) => input)]
+            .sort(compareInputs)
+            .map(keyOf),
+        );
       }
     });
 

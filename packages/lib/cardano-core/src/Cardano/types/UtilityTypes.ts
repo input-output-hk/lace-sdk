@@ -1,5 +1,9 @@
 import FractionJs from 'fraction.js';
 
+/**
+ * Numerator and denominator are numbers. Decoded values above 2^53, which only arbitrary 64 bit
+ * rationals reach, are rounded; use UnitInterval.toCbor for exact data.
+ */
 export interface Fraction {
   numerator: number;
   denominator: number;

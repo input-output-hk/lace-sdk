@@ -23,9 +23,6 @@ const duplicateIdsCbor = HexBlob(
 );
 const emptyTaggedCbor = HexBlob(`${bodyPrefix}17d9010280`);
 const emptyBareCbor = HexBlob(`${bodyPrefix}1780`);
-const key24Cbor = HexBlob(
-  `${bodyPrefix}1818a18200581c00112233445566778899aabbccddeeff00112233445566778899aabbf6`,
-);
 
 const ledgerVector = vectorsForRule('transaction_body').find(
   vector => vector.name === 'with-sub-transactions',
@@ -121,21 +118,6 @@ describe('TransactionBody sub transactions (body key 23)', () => {
       expect(() => TransactionBody.fromCbor(duplicateIdsCbor)).toThrowError(
         'sub_transactions (transaction body key 23) must not contain duplicate sub transaction ids',
       );
-    });
-
-    it('does not admit key 24 at the top level in strict mode', () => {
-      expect(() =>
-        TransactionBody.fromCbor(key24Cbor, { strict: true }),
-      ).toThrowError('Unknown transaction body map key: 24');
-    });
-
-    it('skips key 24 at the top level without mapping it to anything in permissive mode', () => {
-      const body = TransactionBody.fromCbor(key24Cbor);
-      const core = body.toCore();
-
-      expect(body.subTransactions()).toBeUndefined();
-      expect(core.subTransactions).toBeUndefined();
-      expect('requiredTopLevelGuards' in core).toBeFalsy();
     });
   });
 

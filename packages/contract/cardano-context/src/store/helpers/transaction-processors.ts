@@ -8,10 +8,10 @@ import type {
   ExtendedTxDetails,
   RequiredProtocolParameters,
 } from '../../types';
-import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { TokenId } from '@lace-contract/tokens';
 import type { TokenMetadata } from '@lace-contract/tokens';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 import type { Logger } from 'ts-log';

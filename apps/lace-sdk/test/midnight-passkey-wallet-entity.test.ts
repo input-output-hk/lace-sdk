@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import { FEATURE_FLAG_CARDANO } from '@lace-contract/cardano-context';
 import {
   MidnightAccountId,
@@ -7,6 +6,7 @@ import {
 } from '@lace-contract/midnight-context';
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
 import { WalletType } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Milliseconds } from '@lace-lib/util';
 import { FEATURE_FLAG_MIDNIGHT } from '@lace-module/midnight-sync/sdk';
 import { expect, it, vi } from 'vitest';

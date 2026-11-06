@@ -3,13 +3,13 @@
 // Lace: built on @cardano-sdk/core Plutus data, and decoding reports a typed
 // result naming where the value broke the expected shape.
 
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { bytesToHex, hexToBytes } from '../hex';
 import { fail, ok } from '../result';
 
 import type { CustodyResult } from '../result';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** Plutus data that does not have the shape the contract's types declare. */
 export interface CustodyDecodeError {

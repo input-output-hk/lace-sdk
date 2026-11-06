@@ -1,5 +1,5 @@
-import { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import { deriveCardanoCustodyAccountPublicKeyFromWords } from '@lace-contract/cardano-context';
+import { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import { CURRENT_CUSTODY_CONTRACT_VERSION } from '@lace-lib/cardano-custody';
 
 import { RemoteSignerResultError } from '../cardano-remote-signer-factory';
@@ -10,8 +10,8 @@ import { requestCustodySigner } from './cardano-custody-device-signer';
 
 import type { CardanoCustodyDeviceKey } from './cardano-custody-device';
 import type { RemoteSignerRequester } from '../cardano-remote-signer-factory';
-import type { Cardano } from '@cardano-sdk/core';
 import type { CardanoCustodyDeviceChannel } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { PasskeyKeySource } from '@lace-lib/passkey';
 
 /**

@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getFallbackAsset } from '../../../src/store/helpers/get-fallback-asset';
@@ -21,10 +21,10 @@ import type {
   CardanoTokenMetadata,
   CardanoAddressData,
 } from '../../../src/types';
-import type { Asset } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type { TokenMetadata } from '@lace-contract/tokens';
+import type { Asset } from '@lace-lib/cardano-core';
 
 vi.mock('../../../src/store/helpers/get-fallback-asset', () => ({
   getFallbackAsset: vi.fn(),

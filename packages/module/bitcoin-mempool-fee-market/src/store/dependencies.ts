@@ -5,7 +5,6 @@ import { from } from 'rxjs';
 
 import { MempoolFeeMarketProvider } from '../mempool';
 
-import type { ProviderError } from '@cardano-sdk/core';
 import type {
   BitcoinEstimatedFees,
   BitcoinFeeMarketProviderDependencies,
@@ -13,6 +12,7 @@ import type {
   BitcoinProviderContext,
 } from '@lace-contract/bitcoin-context';
 import type { LaceInit } from '@lace-contract/module';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { Logger } from 'ts-log';
 
 /** The mempool.space API of one Bitcoin network. */

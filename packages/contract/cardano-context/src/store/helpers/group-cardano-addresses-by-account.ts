@@ -3,9 +3,9 @@ import groupBy from 'lodash/groupBy';
 import { isCardanoAddressOfSupportedNetwork } from '../../util';
 
 import type { CardanoAddressData } from '../../types';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Filters a list of addresses, returning only Cardano addresses that

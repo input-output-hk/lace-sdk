@@ -1,6 +1,6 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
-import type { Ed25519PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Ed25519PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 /**
  * Sets the vkey witnesses on a transaction witness set from a collection of

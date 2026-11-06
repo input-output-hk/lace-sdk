@@ -1,17 +1,17 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 import {
   Ed25519PublicKey,
   Ed25519PublicKeyHex,
   Ed25519Signature,
   Ed25519SignatureHex,
   ready,
-} from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+} from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { hashEd25519PublicKey } from '@lace-lib/core';
 import { HexBytes } from '@lace-lib/util';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 
 /** One vkey witness: an Ed25519 public key and its signature over a body hash. */
 export type CardanoVkeyWitness = {

@@ -1,4 +1,4 @@
-import { InvalidStringError } from '@cardano-sdk/util';
+import { InvalidStringError } from '@lace-lib/cardano-util';
 import { Err, Ok } from '@lace-lib/util';
 
 import type { Result } from '@lace-lib/util';

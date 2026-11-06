@@ -1,8 +1,8 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Ed25519PublicKey } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Ed25519PublicKey } from '@lace-lib/cardano-crypto';
 
 import type { CardanoPaymentAddress, CardanoRewardAccount } from '../types';
-import type * as Crypto from '@cardano-sdk/crypto';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 
 export const computeOwnKeyHashes = (
   accountAddresses: CardanoPaymentAddress[],

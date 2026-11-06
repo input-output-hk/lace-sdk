@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { UTXO_SYNC_CONFIRMATION_DEPTH } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { parseCustodyAccountTokenName } from '@lace-lib/cardano-custody';
 import { Err, Ok } from '@lace-lib/util';
 import { combineLatest, filter, firstValueFrom, map, timeout } from 'rxjs';

@@ -1,7 +1,5 @@
-import {
-  TransactionBuilder,
-  cardanoContextSelectors,
-} from '@lace-contract/cardano-context';
+import { cardanoContextSelectors } from '@lace-contract/cardano-context';
+import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
 import { Err, Ok } from '@lace-lib/util';
 import {
   type Observable,
@@ -12,9 +10,9 @@ import {
   timeout,
 } from 'rxjs';
 
-import type { Cardano } from '@cardano-sdk/core';
 import type { RequiredProtocolParameters } from '@lace-contract/cardano-context';
 import type { State, StateObservables } from '@lace-contract/module';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Milliseconds, Result } from '@lace-lib/util';
 
 // Resolved concretely (not generic) so StateObservables can evaluate the

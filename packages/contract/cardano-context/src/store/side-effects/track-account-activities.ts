@@ -45,10 +45,10 @@ import type {
   MissingActivityData,
 } from '../helpers';
 import type { MapRewardToActivityParams } from '../helpers/map-reward-to-activity';
-import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { Failure, FailureId } from '@lace-contract/failures';
 import type { TranslationKey } from '@lace-contract/i18n';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 

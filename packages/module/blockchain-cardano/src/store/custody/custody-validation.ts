@@ -1,24 +1,24 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { minAdaRequired } from '@cardano-sdk/tx-construction';
-import {
-  TransactionLimitsExceededError,
-  assertWithinTransactionLimits,
-} from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   encodeCustodyAccountState,
   encodeCustodyGrant,
   findCustodySponsorRuleViolations,
   inspectCustodyTransaction,
 } from '@lace-lib/cardano-custody';
+import {
+  TransactionLimitsExceededError,
+  assertWithinTransactionLimits,
+  minAdaRequired,
+} from '@lace-lib/cardano-tx-builder';
 
 import { failCustodyBuild } from './build-failure';
 
 import type { CustodyChain } from './custody-chain';
-import type * as Crypto from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyBuildResult,
   CardanoCustodyFundingContext,
 } from '@lace-contract/cardano-context';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountInspection,
   CustodyAccountRecord,

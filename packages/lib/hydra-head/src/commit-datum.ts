@@ -8,7 +8,7 @@ import {
 } from './plutus-data';
 
 import type { HydraCommitDatum, HydraCommittedOutput } from './types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Decodes the inline datum of a commit UTxO, which releases up to 1.3.0

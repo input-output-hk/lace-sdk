@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -32,7 +32,7 @@ import type {
   CustodyRecipient,
   CustodyRequestedGrantScope,
 } from '../src';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 const keyCredential = (hash: string): Cardano.Credential => ({
   type: Cardano.CredentialType.KeyHash,

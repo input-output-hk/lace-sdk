@@ -1,5 +1,5 @@
 import type { CustodyAccountState } from '../codecs/account-state';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** A counter of the control state that a rewrite moves. */
 interface CustodyCounterChange {

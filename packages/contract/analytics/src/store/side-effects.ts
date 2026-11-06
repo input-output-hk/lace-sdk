@@ -1,5 +1,5 @@
-import { isNotNil } from '@cardano-sdk/util';
-import { toEmpty, blockingWithLatestFrom } from '@cardano-sdk/util-rxjs';
+import { isNotNil } from '@lace-lib/cardano-util';
+import { toEmpty, blockingWithLatestFrom } from '@lace-lib/cardano-util-rxjs';
 import {
   mergeMap,
   filter,

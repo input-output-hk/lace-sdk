@@ -11,6 +11,7 @@ import { CborReader, CborWriter } from '../../CBOR';
 import { ExUnits } from '../../Common';
 import { PlutusData } from '../../PlutusData';
 
+import { readRedeemerKey } from './readRedeemerKey';
 import { RedeemerTag } from './RedeemerTag';
 
 import type * as Cardano from '../../../Cardano';
@@ -88,8 +89,7 @@ export class Redeemer {
         `Expected an array of ${REDEEMER_ARRAY_SIZE} elements, but got an array of ${length} elements`,
       );
 
-    const tag = Number(reader.readUInt()) as RedeemerTag;
-    const index = reader.readUInt();
+    const { tag, index } = readRedeemerKey(reader);
     const data = PlutusData.fromCbor(
       HexBlob.fromBytes(reader.readEncodedValue()),
     );

@@ -25,6 +25,11 @@ export interface Prices {
   memory: number;
   steps: number;
 }
+/**
+ * Memory and steps are numbers. The ledger caps the execution units of a transaction with the
+ * maxTxExecutionUnits protocol parameter, far below 2^53, so the units of a valid transaction are
+ * exact. Decoded values above 2^53 are rounded; use ExUnits.toCbor for exact data.
+ */
 export interface ExUnits {
   memory: number;
   steps: number;
@@ -78,6 +83,10 @@ type NewProtocolParamsInShelley = {
   decentralizationParameter: string;
   minUtxoValue: number;
   minPoolCost: number;
+  /**
+   * Only legal before the Babbage era. An empty string or 'neutral' is the neutral nonce,
+   * and any other value is the hex of the seed hash.
+   */
   extraEntropy: string | 'neutral';
   protocolVersion: ProtocolVersion;
 };
@@ -146,6 +155,44 @@ type NewProtocolParamsInDijkstra = {
   maxRefScriptSizePerTx: number;
   refScriptCostStride: number;
   refScriptCostMultiplier: string;
+  /** Maximum pledge leverage of a stake pool, or null for no leverage cap. */
+  maxPledgeLeverage: string | null;
+  /** Minimum margin a stake pool can declare. */
+  minPoolMargin: string;
+  /** Length of the Leios announcement period in milliseconds. */
+  leiosAnnouncementPeriodLength: number;
+  /** Length of the Leios vote period in milliseconds. */
+  leiosVotePeriodLength: number;
+  /** Length of the Leios diffusion period in milliseconds. */
+  leiosDiffusionPeriodLength: number;
+  /** Size of the Leios voting committee. */
+  leiosCommitteeSize: number;
+  /** Minimum fraction of active stake the votes of a Leios certificate must represent. */
+  leiosQuorumStakeThreshold: string;
+  /** Maximum size in bytes of the transaction references of a Leios endorser block. */
+  maxEndorserBlockReferencesSize: number;
+  /** Maximum total size in bytes of the transactions endorsed by a Leios endorser block. */
+  maxEndorserBlockTxsSize: number;
+  /** Maximum execution units the scripts of a Leios endorser block can consume. */
+  maxEndorserBlockExecutionUnits: ExUnits;
+  /** Maximum total size in bytes of the reference scripts a Leios endorser block can use. */
+  maxRefScriptSizePerEndorserBlock: number;
+  /** Minimum age in slots of a block to be eligible for voting in a Peras round. */
+  perasMinCandidateBlockAge: number;
+  /** Coefficient used to derive the length of a Peras cooldown period. */
+  perasHealingFactor: string;
+  /** Extra chain weight a Peras certificate gives to the block it boosts. */
+  perasCertBoost: number;
+  /** Target size of the Peras voting committee. */
+  perasTargetCommitteeSize: number;
+  /** Peras round used to bootstrap voting, or null for no bootstrap round. */
+  perasBootstrapRound: number | null;
+  /** Safety margin added to the 75% Peras quorum threshold, between 0 and 0.25. */
+  perasQuorumThresholdSafetyMargin: string;
+  /** Fee in lovelace per multi-asset policy in the values of the reference inputs of a transaction. */
+  refInputsCostPerMultiAssetPolicy: number;
+  /** Fee in lovelace per datum byte in the reference inputs of a transaction. */
+  refInputsCostPerDatumByte: number;
 };
 
 export type ProtocolParameters = BabbageProtocolParameters &
@@ -158,6 +205,13 @@ export type ConwayProtocolParameters = Omit<
 
 // Even tho extraEntropy was deprecated on babbage era, and protocolVersion was deprecated in conway era,
 // they are still present in the ProtocolParametersUpdate structure since this structure is backward compatible with all eras.
+/**
+ * Rational parameters, such as poolInfluence or monetaryExpansion, are decimal text. Real
+ * parameters and simple fractions convert back to the same value in lowest terms (15/10 becomes
+ * 3/2). A rational with a large numerator or denominator is approximated, and fromCore throws a
+ * RangeError when the approximation does not fit 64 bits. Use ProtocolParamUpdate.toCbor for exact
+ * data.
+ */
 export type ProtocolParametersUpdate = Partial<
   Pick<AlonzoProtocolParams, 'decentralizationParameter' | 'extraEntropy'> &
     ProtocolParameters

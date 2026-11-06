@@ -4,13 +4,14 @@ import {
   InvalidStateError,
 } from '@lace-lib/cardano-util';
 
-import { CborReader, CborWriter } from '../CBOR';
+import { CborReader, CborTag, CborWriter } from '../CBOR';
 import { PlutusData } from '../PlutusData';
 
 import type * as Cardano from '../../Cardano';
 import type * as Crypto from '@lace-lib/cardano-crypto';
 
 const DATUM_ARRAY_SIZE = 2;
+const DATUM_HASH_SIZE = 32;
 
 /**
  * Gets whether the given datum is a datum hash.
@@ -96,7 +97,8 @@ export class Datum {
     if (this.#datumKind === DatumKind.DataHash) {
       writer.writeByteString(Buffer.from(this.#dataHash!, 'hex').valueOf());
     } else {
-      writer.writeEncodedValue(
+      writer.writeTag(CborTag.EncodedCborDataItem);
+      writer.writeByteString(
         Buffer.from(this.#inlineData!.toCbor(), 'hex').valueOf(),
       );
     }
@@ -106,6 +108,8 @@ export class Datum {
 
   /**
    * Deserializes the Datum from a CBOR byte array.
+   *
+   * A datum hash must be 32 bytes long.
    *
    * @param cbor The CBOR encoded Datum object.
    * @returns The new Datum instance.
@@ -127,16 +131,34 @@ export class Datum {
     let inlineDatum: PlutusData | undefined;
 
     switch (kind) {
-      case DatumKind.DataHash:
+      case DatumKind.DataHash: {
+        const hash = reader.readByteString();
+
+        if (hash.length !== DATUM_HASH_SIZE)
+          throw new InvalidArgumentError(
+            'cbor',
+            `Expected a datum hash of ${DATUM_HASH_SIZE} bytes, but got ${hash.length} bytes`,
+          );
+
         datumHash = HexBlob.fromBytes(
-          reader.readByteString(),
+          hash,
         ) as unknown as Crypto.Hash32ByteBase16;
         break;
-      case DatumKind.InlineData:
+      }
+      case DatumKind.InlineData: {
+        const tag = reader.readTag();
+
+        if (tag !== CborTag.EncodedCborDataItem)
+          throw new InvalidArgumentError(
+            'cbor',
+            `Expected tag ${CborTag.EncodedCborDataItem} but got ${tag}`,
+          );
+
         inlineDatum = PlutusData.fromCbor(
-          HexBlob.fromBytes(reader.readEncodedValue()),
+          HexBlob.fromBytes(reader.readByteString()),
         );
         break;
+      }
       default:
         throw new InvalidArgumentError('cbor', `Unexpected datum kind ${kind}`);
     }

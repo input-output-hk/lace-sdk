@@ -1,8 +1,8 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import type { CardanoAddressData } from './types';
-import type * as Crypto from '@cardano-sdk/crypto';
 import type { AnyBlockchainAddress } from '@lace-contract/addresses';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 
 /**
  * Represents a payment credential extracted from a Cardano address.

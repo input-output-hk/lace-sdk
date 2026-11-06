@@ -5,7 +5,7 @@ import type {
   LacePartialStakePool,
   LaceStakePool,
 } from '../types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** Converts a Blockfrost fraction (e.g. 0–1) to a percentage with 2 decimal places (0–100 scale). */
 export const toPercentage = (value: number) =>

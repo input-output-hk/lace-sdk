@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   CardanoAccountId,
   CardanoCustodyDeviceKeyMismatchError,
@@ -7,6 +6,7 @@ import {
   derivePendingActivityFromCbor,
 } from '@lace-contract/cardano-context';
 import { WalletType } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

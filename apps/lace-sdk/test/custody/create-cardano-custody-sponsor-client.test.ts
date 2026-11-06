@@ -1,10 +1,10 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   Ed25519PublicKeyHex,
   Ed25519SignatureHex,
   Hash28ByteBase16,
-} from '@cardano-sdk/crypto';
-import { Base64Blob, HexBlob } from '@cardano-sdk/util';
+} from '@lace-lib/cardano-crypto';
+import { Base64Blob, HexBlob } from '@lace-lib/cardano-util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CardanoCustodySponsorError } from '../../src/custody/cardano-custody-sponsor';

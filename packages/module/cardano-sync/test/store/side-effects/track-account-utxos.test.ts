@@ -1,5 +1,3 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
 import { ActivityType } from '@lace-contract/activities';
 import {
   CardanoPaymentAddress,
@@ -25,6 +23,12 @@ import {
 } from '@lace-contract/cardano-context/test/mocks';
 import { multiSigAccount } from '@lace-contract/cardano-context/test/multisig-mocks';
 import { failuresActions } from '@lace-contract/failures';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import { Err, Ok, Timestamp } from '@lace-lib/util';
 import { testSideEffect as baseTestSideEffect } from '@lace-lib/util-dev';
 import { BehaviorSubject, defer, of } from 'rxjs';

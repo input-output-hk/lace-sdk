@@ -1,7 +1,11 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
-import { createTestScheduler } from '@cardano-sdk/util-dev';
 import { ACTIVITIES_PER_PAGE } from '@lace-contract/activities';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { Err, Ok, Timestamp } from '@lace-lib/util';
 import { defer, of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

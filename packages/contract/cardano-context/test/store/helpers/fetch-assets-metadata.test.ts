@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { createTestScheduler } from '@cardano-sdk/util-dev';
 import { TokenId } from '@lace-contract/tokens';
+import { Cardano } from '@lace-lib/cardano-core';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { Err, Ok, Timestamp } from '@lace-lib/util';
 import { EMPTY } from 'rxjs';
 import { describe, it, vi, expect } from 'vitest';
@@ -8,11 +8,11 @@ import { describe, it, vi, expect } from 'vitest';
 import { fetchAssetsMetadata } from '../../../src/store/helpers/transaction-inspectors';
 
 import type { CardanoTokenMetadata } from '../../../src/types';
+import type { TokenMetadata } from '@lace-contract/tokens';
 import type {
   AssetInfoWithAmount,
   TransactionSummaryInspection,
-} from '@cardano-sdk/core';
-import type { TokenMetadata } from '@lace-contract/tokens';
+} from '@lace-lib/cardano-core';
 
 describe('fetchAssetsMetadata', () => {
   it('should emit empty map when summary.assets is empty', () => {

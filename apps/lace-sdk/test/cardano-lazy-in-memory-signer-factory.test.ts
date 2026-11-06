@@ -1,9 +1,9 @@
-import { Cardano as CardanoCore, Serialization } from '@cardano-sdk/core';
 import {
   CardanoInMemoryTransactionSigner,
   createCardanoKeyAgentFromMnemonic,
   createInputResolver,
 } from '@lace-contract/cardano-context';
+import { Cardano as CardanoCore, Serialization } from '@lace-lib/cardano-core';
 import { expectCollateralGuardRefusesCaseB } from '@lace-lib/util-dev-cardano';
 import { firstValueFrom, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -12,8 +12,6 @@ import { CardanoLazyInMemorySignerFactory } from '../src/cardano-lazy-in-memory-
 import { LazyWalletMismatchError } from '../src/lazy-wallet-mismatch-error';
 import { createPasskeyVaultModule } from '../src/passkey-vault-module';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { CardanoTransactionSignerContext } from '@lace-contract/cardano-context';
 import type {
   AccountId,
@@ -21,6 +19,8 @@ import type {
   AnyWallet,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { PasskeyKeySource } from '@lace-lib/passkey';
 
 const accountId = 'wallet-1-0-1' as AccountId;

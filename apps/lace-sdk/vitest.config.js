@@ -4,8 +4,6 @@ import { coverageConfigDefaults, defineConfig } from 'vitest/config';
 
 import { baseConfig } from '../../vitest.base.config';
 
-import { CARDANO_SUBPATHS } from './scripts/laceio-cardano.mjs';
-
 export default defineConfig({
   ...baseConfig,
   resolve: {
@@ -17,14 +15,6 @@ export default defineConfig({
           '../../node_modules/@scure/bip39/wordlists/english.js',
         ),
       },
-      // The tests run the domain layer the published SDK imports: each
-      // @cardano-sdk package @laceio/cardano publishes resolves to its source
-      // (scripts/laceio-cardano.mjs), as the bundle resolves it to the
-      // package.
-      ...[...CARDANO_SUBPATHS].map(subpath => ({
-        find: new RegExp(`^@cardano-sdk/${subpath}$`),
-        replacement: resolve(__dirname, `../lace-cardano/src/${subpath}.ts`),
-      })),
     ],
   },
   test: {

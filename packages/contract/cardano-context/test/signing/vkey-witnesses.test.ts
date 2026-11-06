@@ -1,10 +1,10 @@
-import { Cardano, Serialization, setInConwayEra } from '@cardano-sdk/core';
+import { Cardano, Serialization, setInConwayEra } from '@lace-lib/cardano-core';
 import {
   Ed25519PrivateKey,
   Hash32ByteBase16,
   ready,
-} from '@cardano-sdk/crypto';
-import { Base64Blob, HexBlob } from '@cardano-sdk/util';
+} from '@lace-lib/cardano-crypto';
+import { Base64Blob, HexBlob } from '@lace-lib/cardano-util';
 import { HexBytes } from '@lace-lib/util';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -18,7 +18,7 @@ import {
 import type {
   Ed25519PublicKeyHex,
   Ed25519SignatureHex,
-} from '@cardano-sdk/crypto';
+} from '@lace-lib/cardano-crypto';
 
 const ADDRESS = Cardano.PaymentAddress(
   'addr_test1qpfhhfy2qgls50r9u4yh0l7z67xpg0a5rrhkmvzcuqrd0znuzcjqw982pcftgx53fu5527z2cj2tkx2h8ux2vxsg475q9gw0lz',

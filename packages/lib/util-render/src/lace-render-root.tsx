@@ -1,5 +1,5 @@
-import { isNotNil } from '@cardano-sdk/util';
 import { areViewsEqual } from '@lace-contract/views';
+import { isNotNil } from '@lace-lib/cardano-util';
 import React, { memo, useState, useEffect } from 'react';
 
 import { IfLocationMatch } from './if-location-match';

@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { HexBytes } from '@lace-lib/util';
 
 import type {
@@ -7,8 +7,8 @@ import type {
   CardanoSignDataRequest,
   CardanoSignDataResult,
 } from './types';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 /**
  * The `signWith` identifier is well-formed but this account holds no key for

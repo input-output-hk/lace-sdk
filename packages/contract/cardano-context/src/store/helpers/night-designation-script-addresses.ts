@@ -1,5 +1,5 @@
 import type { NightDesignationAction } from '../night-designation-flow/types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 // =====================================================================
 // cNIGHT DUST designation script-address registry.

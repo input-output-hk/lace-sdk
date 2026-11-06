@@ -13,10 +13,9 @@
  * ONE entry for the whole signing interop, typed in the ported domain layer:
  * the agent plus the crypto / key-management symbols the signer constructs it
  * from, and the `Serialization` codec the signer reads the transaction body's
- * CBOR with. The build resolves the port's `@lace-lib/cardano-*` imports to
- * the `@cardano-sdk/*` copies `/index` already carries, so a document still
- * holds ONE domain-layer copy (the ADR 37 point) while these declarations stay
- * the port's own.
+ * CBOR with. The port imports the same `@lace-lib/cardano-*` packages `/index`
+ * carries, so with `splitting: true` a document still holds ONE domain-layer
+ * copy (the ADR 37 point).
  */
 export { TrezorKeyAgent } from '@lace-lib/cardano-hardware-trezor';
 export { Cardano, Serialization } from '@lace-lib/cardano-core';

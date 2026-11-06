@@ -4,7 +4,7 @@
 // decode only from their two canonical constructors, and conversion to an
 // address takes the account's network explicitly.
 
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { isHash28Hex } from '../hex';
 import { fail, ok } from '../result';
@@ -21,8 +21,8 @@ import {
 } from './plutus-data';
 
 import type { CustodyResult } from '../result';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * A payment or stake credential as the script context presents it. The hash

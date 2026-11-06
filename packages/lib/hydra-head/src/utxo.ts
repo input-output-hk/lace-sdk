@@ -1,4 +1,4 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
 import type {
   HydraBlockfrostUtxo,
@@ -6,7 +6,7 @@ import type {
   HydraUtxo,
   HydraValue,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** Blockfrost unit of the lovelace amount. */
 const LOVELACE_UNIT = 'lovelace';

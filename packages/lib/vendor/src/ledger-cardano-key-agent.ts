@@ -10,15 +10,22 @@
  * a pairing document has no reason to load the signer + its libsodium WASM.
  *
  * ONE entry for the whole signing interop: besides `LedgerKeyAgent` itself, the
- * signer constructs the agent from `@cardano-sdk/crypto` (`Bip32PublicKeyHex`,
- * `SodiumBip32Ed25519`) and `@cardano-sdk/key-management` (`CommunicationType`,
- * `KeyPurpose`, the `SignTransactionContext` type), so those interop symbols are
- * re-exported HERE — the surface consumes a single vendor entry instead of four
- * direct `@cardano-sdk` dynamic imports. With `splitting: true` these dedupe into
- * shared chunks with `/index`, so there is one `@cardano-sdk` copy per document
- * (the entrypoint-split point, ADR 37).
+ * signer constructs the agent from `@lace-lib/cardano-crypto`
+ * (`Bip32PublicKeyHex`, `SodiumBip32Ed25519`) and
+ * `@lace-lib/cardano-key-management` (`CommunicationType`, `KeyPurpose`, the
+ * `SignTransactionContext` type), so those interop symbols are re-exported
+ * HERE: the surface consumes a single vendor entry instead of four direct
+ * `@lace-lib/cardano-*` dynamic imports. With `splitting: true` these dedupe
+ * into shared chunks with `/index`, so there is one copy of each Cardano
+ * package per document (the entrypoint-split point, ADR 37).
  */
-export { LedgerKeyAgent } from '@cardano-sdk/hardware-ledger';
-export { Bip32PublicKeyHex, SodiumBip32Ed25519 } from '@cardano-sdk/crypto';
-export { CommunicationType, KeyPurpose } from '@cardano-sdk/key-management';
-export type { SignTransactionContext } from '@cardano-sdk/key-management';
+export { LedgerKeyAgent } from '@lace-lib/cardano-hardware-ledger';
+export {
+  Bip32PublicKeyHex,
+  SodiumBip32Ed25519,
+} from '@lace-lib/cardano-crypto';
+export {
+  CommunicationType,
+  KeyPurpose,
+} from '@lace-lib/cardano-key-management';
+export type { SignTransactionContext } from '@lace-lib/cardano-key-management';

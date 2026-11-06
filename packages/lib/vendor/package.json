@@ -35,6 +35,7 @@
   "dependencies": {
     "@lace-lib/cardano-core": "*",
     "@lace-lib/cardano-crypto": "*",
+    "@lace-lib/cardano-hardware-ledger": "*",
     "@lace-lib/cardano-hardware-trezor": "*",
     "@lace-lib/cardano-key-management": "*",
     "@lace-lib/cardano-util": "*",
@@ -42,12 +43,7 @@
   },
   "devDependencies": {
     "@bitcoinerlab/secp256k1": "1.2.0",
-    "@cardano-foundation/ledgerjs-hw-app-cardano": "7.1.4",
-    "@cardano-sdk/core": "0.47.1",
-    "@cardano-sdk/crypto": "0.4.7",
-    "@cardano-sdk/hardware-ledger": "0.16.28",
-    "@cardano-sdk/key-management": "0.29.18",
-    "@cardano-sdk/util": "0.17.2",
+    "@cardano-foundation/ledgerjs-hw-app-cardano": "8.0.0",
     "@keystonehq/bc-ur-registry": "0.8.0",
     "@keystonehq/bc-ur-registry-cardano": "0.5.0",
     "@ledgerhq/hw-transport-webhid": "6.31.0",

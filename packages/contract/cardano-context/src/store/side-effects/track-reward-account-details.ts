@@ -33,8 +33,8 @@ import type {
   RewardAccountInfo,
 } from '../../types';
 import type { TopOnChainActivity } from '../helpers/get-top-on-chain-activity-id';
-import type { Cardano } from '@cardano-sdk/core';
 import type { TranslationKey } from '@lace-contract/i18n';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 
 type FetchParams = {

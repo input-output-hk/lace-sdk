@@ -102,6 +102,9 @@ export class UnitInterval {
   /**
    * Creates a Core Fraction object from the current UnitInterval object.
    *
+   * A numerator or denominator above 2^53 is rounded in the core form, while toCbor keeps the
+   * decoded bytes.
+   *
    * @returns The Core Fraction object.
    */
   toCore(): Cardano.Fraction {

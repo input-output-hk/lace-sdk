@@ -7,7 +7,7 @@ import type { PoolId, VrfVkHex } from './primitives';
 import type { Relay } from './Relay';
 import type { RewardAccount } from '../../Address';
 import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
-import type { OpaqueString } from '@lace-lib/cardano-util';
+import type { HexBlob, OpaqueString } from '@lace-lib/cardano-util';
 
 export interface PoolMetadataJson {
   hash: Hash32ByteBase16;
@@ -63,6 +63,14 @@ export type StakePoolMetadata = APMetadataFields &
   StakePoolExtendedMetadataFields &
   StakePoolMainMetadataFields;
 
+/** BLS key of a stake pool, introduced in the Dijkstra era, with the proof that the operator holds its private key. */
+export interface PoolBlsKey {
+  /** 96 byte BLS12-381 public key. */
+  publicKey: HexBlob;
+  /** 48 byte proof of possession of the public key. */
+  proofOfPossession: HexBlob;
+}
+
 export interface PoolParameters {
   id: PoolId;
   rewardAccount: RewardAccount;
@@ -81,4 +89,6 @@ export interface PoolParameters {
 
   owners: RewardAccount[];
   vrf: VrfVkHex;
+  /** BLS key of the pool, missing when the pool has none. */
+  blsKey?: PoolBlsKey;
 }

@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { blake2b } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { blake2b } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { findHydraHeadMintingScriptTemplate } from './registry';
 

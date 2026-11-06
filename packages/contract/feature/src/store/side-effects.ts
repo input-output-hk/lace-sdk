@@ -1,4 +1,4 @@
-import { deepEquals } from '@cardano-sdk/util';
+import { deepEquals } from '@lace-lib/cardano-util';
 import isEqual from 'lodash/isEqual';
 import { distinctUntilChanged, filter, map, switchMap } from 'rxjs';
 

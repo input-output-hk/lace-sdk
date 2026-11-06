@@ -12,6 +12,7 @@ import type {
   KeyAgentDependencies,
   SerializableKeyAgentData,
   SignBlobResult,
+  SignSubTransactionOptions,
   SignTransactionContext,
   SignTransactionOptions,
 } from './types';
@@ -57,6 +58,11 @@ export abstract class KeyAgentBase implements KeyAgent {
     txBody: Serialization.TransactionBody,
     context: SignTransactionContext,
     signTransactionOptions?: SignTransactionOptions,
+  ): Promise<Cardano.Signatures>;
+  abstract signSubTransaction(
+    subTransaction: Serialization.SubTransaction,
+    context: SignTransactionContext,
+    options?: SignSubTransactionOptions,
   ): Promise<Cardano.Signatures>;
 
   constructor(

@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { FEATURE_FLAG_CARDANO } from '@lace-contract/cardano-context';
 import {
@@ -9,6 +8,7 @@ import {
 } from '@lace-contract/module';
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
 import { storageDependencyContract } from '@lace-contract/storage';
+import { Cardano } from '@lace-lib/cardano-core';
 import { HexBytes, Milliseconds, Timestamp } from '@lace-lib/util';
 import {
   InMemoryCollectionStore,

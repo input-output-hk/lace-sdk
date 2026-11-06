@@ -37,7 +37,6 @@ import {
 import { throwOnError } from './throw-on-error';
 
 import type { CardanoSyncAction, SideEffect } from '../../module';
-import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type {
@@ -52,6 +51,7 @@ import type {
   AccountId,
   MultiSigWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 
 type FetchParams = {

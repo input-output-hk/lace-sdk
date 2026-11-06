@@ -1,4 +1,4 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 import { CURRENT_CUSTODY_CONTRACT_VERSION } from '@lace-lib/cardano-custody';
 import { HexBytes } from '@lace-lib/util';
 
@@ -35,11 +35,11 @@ import type {
 } from './custody-sign-request';
 import type { CardanoSignDataResult, CardanoSignResult } from './types';
 import type { CardanoVkeyWitness } from './vkey-witnesses';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import type { CustodyDataSignature } from '@lace-lib/cardano-custody';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** Public account data every remote Cardano sign request carries. */
 type RemoteAccountPayload = {

@@ -84,6 +84,7 @@ export const makeCustodyTransactionBuilding =
             snapshot,
             provider: cardanoProvider,
             now: Date.now(),
+            logger,
           }),
         };
       } catch (error) {

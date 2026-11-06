@@ -6,7 +6,7 @@
 // reserves are split by datum format, datum-hash deposits are stranded, and
 // liveness names why a grant is dead.
 
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { decodeCustodyGrant } from './codecs/account-state';
 import { isCustodyReserveDatum } from './codecs/reserve';
@@ -15,7 +15,7 @@ import { parseCustodyAccountTokenName } from './tokens';
 
 import type { CustodyAccountState, CustodyGrant } from './codecs/account-state';
 import type { CustodyDecodeError } from './codecs/plutus-data';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /** Where an account lives and which tokens are its own. */
 interface CustodyAccountLocation {

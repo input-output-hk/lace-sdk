@@ -1,11 +1,11 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { blake2b } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
-import { logger } from '@cardano-sdk/util-dev';
 import {
   CardanoRewardAccount,
   type CardanoPaymentAddress,
 } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { blake2b } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
+import { logger } from '@lace-lib/cardano-util-dev';
 import { HttpClientError } from '@lace-lib/util-provider';
 import { firstValueFrom } from 'rxjs';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';

@@ -37,6 +37,7 @@ export const mapAdditionalWitnessRequests: Transform<
       context.txInKeyPathMap,
       undefined,
       context.scripts,
+      context.spentOutputAddresses,
     )
     .filter(path => path.role === KeyRole.Stake)
     .map(path =>

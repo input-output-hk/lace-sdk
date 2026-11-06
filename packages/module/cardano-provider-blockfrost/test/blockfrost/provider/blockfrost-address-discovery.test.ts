@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { AddressType, KeyRole } from '@cardano-sdk/key-management';
+import { Cardano } from '@lace-lib/cardano-core';
+import { AddressType, KeyRole } from '@lace-lib/cardano-key-management';
 import { HttpClientError } from '@lace-lib/util-provider';
 import { firstValueFrom, toArray } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

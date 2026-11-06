@@ -1,10 +1,10 @@
 // hoisted from @cardano-sdk/wallet
-import { Cardano, nativeScriptPolicyId } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
+import { Cardano, nativeScriptPolicyId } from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { encodeBaseAddress, encodeRewardAddress } from '@lace-lib/core';
 
-import type * as Crypto from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type * as Crypto from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 /**
  * Method to derive the wallet's grouped address from the script and network ID.

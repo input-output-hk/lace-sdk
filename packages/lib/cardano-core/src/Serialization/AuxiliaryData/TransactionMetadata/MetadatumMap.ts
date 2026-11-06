@@ -2,21 +2,49 @@ import { HexBlob } from '@lace-lib/cardano-util';
 
 import { bytesToHex, hexToBytes } from '../../../util/misc';
 import { CborReader, CborReaderState, CborWriter } from '../../CBOR';
+import {
+  containerEdits,
+  recordContainerEdit,
+} from '../../Common/ContainerEdits';
 
 import { MetadatumList } from './MetadatumList';
 import { TransactionMetadatum } from './TransactionMetadatum';
 
-/** Represents a Map of Metadatum. */
+/**
+ * Represents a Map of Metadatum.
+ *
+ * It keeps repeated keys. In the core form (Cardano.MetadatumMap) every entry of a repeated key
+ * takes the value of the first entry, and integer or text keys collapse into one entry. Use
+ * TransactionMetadatum.toCbor for the exact decoded bytes.
+ */
 export class MetadatumMap {
   readonly #map = new Map<TransactionMetadatum, TransactionMetadatum>();
   #useIndefiniteEncoding = false;
+  #originalBytes: HexBlob | undefined = undefined;
+  #decodedEntries: HexBlob[] = [];
+  #verifiedAt = -1;
 
   /**
    * Serializes this MetadatumMap instance into its CBOR representation as a HexBlob.
+   * An instance decoded from CBOR returns the bytes it was decoded from while its keys and
+   * values still encode as they did when decoded.
    *
    * @returns The CBOR representation of this instance as a HexBlob.
    */
   toCbor(): HexBlob {
+    if (this.#originalBytes && this.#verifiedAt === containerEdits())
+      return this.#originalBytes;
+
+    const entries = new Array<HexBlob>();
+
+    for (const [key, value] of this.#map.entries())
+      entries.push(key.toCbor(), value.toCbor());
+
+    if (this.#originalBytes && this.#entriesUnchanged(entries)) {
+      this.#verifiedAt = containerEdits();
+      return this.#originalBytes;
+    }
+
     const writer = new CborWriter();
 
     if (this.#useIndefiniteEncoding) {
@@ -25,9 +53,8 @@ export class MetadatumMap {
       writer.writeStartMap(this.#map.size);
     }
 
-    for (const [key, value] of this.#map.entries()) {
-      writer.writeEncodedValue(hexToBytes(key.toCbor()));
-      writer.writeEncodedValue(hexToBytes(value.toCbor()));
+    for (const entry of entries) {
+      writer.writeEncodedValue(hexToBytes(entry));
     }
 
     if (this.#useIndefiniteEncoding) writer.writeEndMap();
@@ -49,18 +76,23 @@ export class MetadatumMap {
 
     if (size === null) map.#useIndefiniteEncoding = true;
 
-    while (reader.peekState() !== CborReaderState.EndMap) {
-      const key = TransactionMetadatum.fromCbor(
-        bytesToHex(reader.readEncodedValue()),
-      );
-      const value = TransactionMetadatum.fromCbor(
-        bytesToHex(reader.readEncodedValue()),
-      );
+    const decodedEntries: HexBlob[] = [];
 
-      map.insert(key, value);
+    while (reader.peekState() !== CborReaderState.EndMap) {
+      const key = bytesToHex(reader.readEncodedValue());
+      const value = bytesToHex(reader.readEncodedValue());
+      decodedEntries.push(key, value);
+      map.#map.set(
+        TransactionMetadatum.fromCbor(key),
+        TransactionMetadatum.fromCbor(value),
+      );
     }
 
     reader.readEndMap();
+
+    map.#originalBytes = cbor;
+    map.#decodedEntries = decodedEntries;
+    map.#verifiedAt = containerEdits();
 
     return map;
   }
@@ -81,6 +113,8 @@ export class MetadatumMap {
    * @param value The value of the element.
    */
   insert(key: TransactionMetadatum, value: TransactionMetadatum) {
+    recordContainerEdit();
+    this.#originalBytes = undefined;
     this.#map.set(key, value);
   }
 
@@ -138,5 +172,18 @@ export class MetadatumMap {
     }
 
     return true;
+  }
+
+  /**
+   * Indicates whether the keys and values still encode as they did when this map was decoded.
+   *
+   * @param entries The current CBOR of each key followed by its value.
+   * @returns true if every key and value encodes as it did when decoded; otherwise false.
+   */
+  #entriesUnchanged(entries: HexBlob[]): boolean {
+    return (
+      entries.length === this.#decodedEntries.length &&
+      entries.every((entry, index) => entry === this.#decodedEntries[index])
+    );
   }
 }

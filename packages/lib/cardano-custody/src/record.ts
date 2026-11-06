@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { findCustodyContractVersion } from './contract-version';
 import { isHash28Hex } from './hex';
@@ -11,7 +11,10 @@ import { fail, ok } from './result';
 
 import type { CustodyAccountIdentity } from './identity';
 import type { CustodyResult } from './result';
-import type { Ed25519KeyHashHex, Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type {
+  Ed25519KeyHashHex,
+  Hash28ByteBase16,
+} from '@lace-lib/cardano-crypto';
 
 export const CUSTODY_ACCOUNT_RECORD_TYPE = 'cardano-custody-account';
 

@@ -7,8 +7,6 @@ import {
 } from '@lace-contract/cardano-context';
 import { defer, from, switchMap } from 'rxjs';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import type {
   CardanoBip32AccountProps,
   CardanoDataSigner,
@@ -23,6 +21,8 @@ import type {
   InMemoryWallet,
   InMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import type { HexBytes } from '@lace-lib/util';
 
 /**

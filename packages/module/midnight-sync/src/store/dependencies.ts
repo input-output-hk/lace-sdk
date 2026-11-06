@@ -1,4 +1,3 @@
-import { deepEquals } from '@cardano-sdk/util';
 import {
   convertHttpUrlToWebsocket,
   getProofServerEndpoint,
@@ -11,6 +10,7 @@ import {
   toUnshieldedTokenType,
 } from '@lace-contract/midnight-context';
 import { AuthenticationCancelledError } from '@lace-contract/signer';
+import { deepEquals } from '@lace-lib/cardano-util';
 import { BigNumber, Milliseconds } from '@lace-lib/util';
 import { withReservationRelease } from '@lace-lib/vendor/midnight-facade-reservations';
 import { assertProofServerRouting } from '@lace-lib/vendor/midnight-proof-servers';

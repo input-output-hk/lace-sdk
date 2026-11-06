@@ -2,6 +2,10 @@ import { HexBlob } from '@lace-lib/cardano-util';
 
 import { bytesToHex, hexToBytes } from '../../../util/misc';
 import { CborReader, CborReaderState, CborWriter } from '../../CBOR';
+import {
+  containerEdits,
+  recordContainerEdit,
+} from '../../Common/ContainerEdits';
 
 import { TransactionMetadatum } from './TransactionMetadatum';
 
@@ -9,13 +13,30 @@ import { TransactionMetadatum } from './TransactionMetadatum';
 export class MetadatumList {
   readonly #array = new Array<TransactionMetadatum>();
   #useIndefiniteEncoding = false;
+  #originalBytes: HexBlob | undefined = undefined;
+  #decodedElements: HexBlob[] = [];
+  #verifiedAt = -1;
 
   /**
    * Serializes this MetadatumList instance into its CBOR representation as a HexBlob.
+   * An instance decoded from CBOR returns the bytes it was decoded from while its elements
+   * still encode as they did when decoded.
    *
    * @returns The CBOR representation of this instance as a HexBlob.
    */
   toCbor(): HexBlob {
+    if (this.#originalBytes && this.#verifiedAt === containerEdits())
+      return this.#originalBytes;
+
+    const elements = new Array<HexBlob>();
+
+    for (const elem of this.#array) elements.push(elem.toCbor());
+
+    if (this.#originalBytes && this.#elementsUnchanged(elements)) {
+      this.#verifiedAt = containerEdits();
+      return this.#originalBytes;
+    }
+
     const writer = new CborWriter();
 
     if (this.#useIndefiniteEncoding) {
@@ -24,8 +45,8 @@ export class MetadatumList {
       writer.writeStartArray(this.#array.length);
     }
 
-    for (const elem of this.#array) {
-      writer.writeEncodedValue(hexToBytes(elem.toCbor()));
+    for (const elem of elements) {
+      writer.writeEncodedValue(hexToBytes(elem));
     }
 
     if (this.#useIndefiniteEncoding) writer.writeEndArray();
@@ -47,13 +68,19 @@ export class MetadatumList {
 
     if (length === null) list.#useIndefiniteEncoding = true;
 
+    const decodedElements: HexBlob[] = [];
+
     while (reader.peekState() !== CborReaderState.EndArray) {
-      list.add(
-        TransactionMetadatum.fromCbor(bytesToHex(reader.readEncodedValue())),
-      );
+      const element = bytesToHex(reader.readEncodedValue());
+      decodedElements.push(element);
+      list.#array.push(TransactionMetadatum.fromCbor(element));
     }
 
     reader.readEndArray();
+
+    list.#originalBytes = cbor;
+    list.#decodedElements = decodedElements;
+    list.#verifiedAt = containerEdits();
 
     return list;
   }
@@ -82,6 +109,8 @@ export class MetadatumList {
    * @param elem The element to be added.
    */
   add(elem: TransactionMetadatum): void {
+    recordContainerEdit();
+    this.#originalBytes = undefined;
     this.#array.push(elem);
   }
 
@@ -99,5 +128,18 @@ export class MetadatumList {
     }
 
     return true;
+  }
+
+  /**
+   * Indicates whether the elements still encode as they did when this list was decoded.
+   *
+   * @param elements The current CBOR of each element.
+   * @returns true if every element encodes as it did when decoded; otherwise false.
+   */
+  #elementsUnchanged(elements: HexBlob[]): boolean {
+    return (
+      elements.length === this.#decodedElements.length &&
+      elements.every((elem, index) => elem === this.#decodedElements[index])
+    );
   }
 }

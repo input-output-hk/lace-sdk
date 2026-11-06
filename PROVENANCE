@@ -1,14 +1,14 @@
 Lace public source snapshot
 ===========================
 
-release-tag:         @laceio/sdk@0.1.2-canary.5
+release-tag:         @laceio/cardano@0.2.0-canary.0
 source-repo:         input-output-hk/lace-platform (private)
-source-commit:       8f724ff316c0dc4b0cc57b4147d19c86ab52154e
-snapshot-utc:        2026-11-06T04:01:35.076Z
+source-commit:       4ee73484495b710f60dfb7798d358977be286a42
+snapshot-utc:        2026-11-06T13:06:58.088Z
 
-allowlist-sha256:    987483227b030aafcf3f2dc9989e90e0464346f3e60f5d6034afd82b4fddd1cd
+allowlist-sha256:    8682b1b32109e267f9282db9e7e89f190cdddfbe21349843d03f75d9d4d41115
 excludelist-sha256:  0b25ad5695856971d04851a91dda85aeec13b00ac0600b1a7adc47af07b0ceec
-templates-sha256:    e7df799fbddcc4a2590bad345386b64a1f801842adf18edd2ffd2217ce48b8a6
+templates-sha256:    4117fba3cff45785d1f5cd4253f57c163fb322e2eca494ccd8bdea0893c64a53
 
 This snapshot was generated from the private source of truth by
 sdk-release.yml. The hashes above bind it to specific

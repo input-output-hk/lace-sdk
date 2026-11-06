@@ -1,5 +1,8 @@
-import { Serialization } from '@cardano-sdk/core';
-import { Ed25519PublicKeyHex, Ed25519SignatureHex } from '@cardano-sdk/crypto';
+import { Serialization } from '@lace-lib/cardano-core';
+import {
+  Ed25519PublicKeyHex,
+  Ed25519SignatureHex,
+} from '@lace-lib/cardano-crypto';
 import { describe, expect, it } from 'vitest';
 
 import { encodeCborSet } from '../../src/serialization/cbor-set-encoding';

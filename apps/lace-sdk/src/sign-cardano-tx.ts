@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import { AuthSecret } from '@lace-contract/authentication-prompt';
 import {
   createInputResolver,
@@ -13,10 +12,10 @@ import {
   type InMemoryWallet,
   type LazyInMemoryWallet,
 } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { ByteArray, Err, HexBytes, Ok } from '@lace-lib/util';
 import { firstValueFrom, of, throwError } from 'rxjs';
 
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { Address, addressesSelectors } from '@lace-contract/addresses';
 import type {
   CardanoAddressData,
@@ -30,6 +29,7 @@ import type { networkSelectors } from '@lace-contract/network';
 import type { SignerAuth, SignerFactory } from '@lace-contract/signer';
 import type { AccountId } from '@lace-contract/wallet-repo';
 import type { walletsSelectors } from '@lace-contract/wallet-repo';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { Result } from '@lace-lib/util';
 
 type RequiredObservables = StateObservables<

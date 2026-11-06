@@ -1,12 +1,12 @@
+import { ActivityType } from '@lace-contract/activities';
 import {
   Cardano,
   ProviderError,
   ProviderFailure,
   Serialization,
-} from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { mockProviders } from '@cardano-sdk/util-dev';
-import { ActivityType } from '@lace-contract/activities';
+} from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
+import { mockProviders } from '@lace-lib/cardano-util-dev';
 import {
   CardanoDustNetwork,
   CardanoStakeKeyHash,

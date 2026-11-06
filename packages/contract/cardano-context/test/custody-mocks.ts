@@ -1,11 +1,10 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { BlockchainNetworkId } from '@lace-contract/network';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   Bip32PublicKeyHex,
   Ed25519KeyHashHex,
   Hash28ByteBase16,
-} from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
-import { BlockchainNetworkId } from '@lace-contract/network';
+} from '@lace-lib/cardano-crypto';
 import {
   ACCOUNT_VALIDATOR_HASH,
   custodyGrantAssetId,
@@ -13,6 +12,7 @@ import {
   encodeCustodyGrant,
   LOGIC_V1_HASH,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { CardanoAccountId, CardanoCustodyWalletId } from '../src';
 

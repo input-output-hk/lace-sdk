@@ -1,7 +1,7 @@
 import { HYDRA_METADATA_LABEL } from './constants';
 
 import type { HydraTxProtocol, HydraTxTag } from './types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** Metadata prefixes recognised as Hydra protocol generations. */
 const PROTOCOLS: readonly HydraTxProtocol[] = ['HydraV1', 'HydraV2'];

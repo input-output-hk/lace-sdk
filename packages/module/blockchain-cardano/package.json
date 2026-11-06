@@ -12,7 +12,6 @@
   },
   "main": "src/index.ts",
   "dependencies": {
-    "@cardano-sdk/core": "0.47.1",
     "@lace-contract/address-book": "*",
     "@lace-contract/addresses": "*",
     "@lace-contract/cardano-context": "*",
@@ -26,7 +25,9 @@
     "@lace-contract/tx-executor": "*",
     "@lace-contract/wallet-active-state": "*",
     "@lace-contract/wallet-repo": "*",
+    "@lace-lib/cardano-core": "*",
     "@lace-lib/cardano-custody": "*",
+    "@lace-lib/cardano-tx-builder": "*",
     "@lace-lib/cnight-dust-designation": "*",
     "@lace-lib/core": "*",
     "@lace-lib/extension-messaging": "*",

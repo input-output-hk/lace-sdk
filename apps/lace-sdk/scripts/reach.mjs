@@ -15,6 +15,7 @@ import {
   channelEntryNames,
   entrySource,
 } from './entries.mjs';
+import { isLaceioCardanoFile } from './laceio-cardano.mjs';
 
 export const packageDirectory = path.resolve(import.meta.dirname, '..');
 
@@ -90,9 +91,15 @@ export const reachedOwnSource = channel => {
  * The workspace source files reached from `roots`, plus the augmentations of
  * the packages reached, as real paths. Files under node_modules are excluded:
  * the compiler reaches workspace packages through their node_modules symlinks
- * and emits nothing for files it finds there, so callers list real paths.
+ * and emits nothing for files it finds there, so callers list real paths. The
+ * packages @laceio/cardano publishes are excluded too, as the SDK imports them
+ * from it, unless `withLaceioCardano` is set for a build that inlines them.
  */
-export const reachedWorkspaceFiles = (roots, options = compilerOptions()) => {
+export const reachedWorkspaceFiles = (
+  roots,
+  options = compilerOptions(),
+  { withLaceioCardano = false } = {},
+) => {
   const files = new Set(roots.map(root => fs.realpathSync(root)));
   const programRoots = new Set(files);
   let program;
@@ -102,6 +109,7 @@ export const reachedWorkspaceFiles = (roots, options = compilerOptions()) => {
     for (const source of program.getSourceFiles()) {
       const match = PACKAGE_SOURCE.exec(source.fileName);
       if (!match) continue;
+      if (!withLaceioCardano && isLaceioCardanoFile(source.fileName)) continue;
       if (
         /\.[cm]?tsx?$/.test(source.fileName) &&
         !source.fileName.endsWith('.d.ts')
@@ -195,7 +203,9 @@ export const cardanoReachedFiles = (apps = CARDANO_APPS) => {
       .filter(file => /\.tsx?$/.test(file))
       .map(file => path.join(repositoryRoot, app, 'src', file));
     const inlined = CARDANO_INLINED[app] ?? (() => true);
-    for (const file of reachedWorkspaceFiles(roots, parsed.options)) {
+    for (const file of reachedWorkspaceFiles(roots, parsed.options, {
+      withLaceioCardano: true,
+    })) {
       if (file.startsWith(own) || inlined(file)) reached.add(file);
     }
   }

@@ -6,11 +6,6 @@
   "sideEffects": false,
   "main": "src/index.ts",
   "dependencies": {
-    "@cardano-sdk/core": "0.47.1",
-    "@cardano-sdk/crypto": "0.4.7",
-    "@cardano-sdk/key-management": "0.29.19",
-    "@cardano-sdk/tx-construction": "0.29.1",
-    "@cardano-sdk/util": "0.17.2",
     "@lace-contract/activities": "*",
     "@lace-contract/addresses": "*",
     "@lace-contract/analytics": "*",
@@ -27,7 +22,12 @@
     "@lace-contract/tx-executor": "*",
     "@lace-contract/wallet-active-state": "*",
     "@lace-contract/wallet-repo": "*",
+    "@lace-lib/cardano-core": "*",
+    "@lace-lib/cardano-crypto": "*",
     "@lace-lib/cardano-custody": "*",
+    "@lace-lib/cardano-key-management": "*",
+    "@lace-lib/cardano-tx-builder": "*",
+    "@lace-lib/cardano-util": "*",
     "@lace-lib/core": "*",
     "@lace-lib/hydra-head": "*",
     "@lace-lib/util": "*",
@@ -37,7 +37,6 @@
     "ts-log": "^2.2.7"
   },
   "devDependencies": {
-    "@types/libsodium-wrappers-sumo": "^0.7.5",
-    "fast-check": "^3.23.1"
+    "@types/libsodium-wrappers-sumo": "^0.7.5"
   }
 }

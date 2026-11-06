@@ -1,4 +1,3 @@
-import { util } from '@cardano-sdk/key-management';
 import { createAddAccounts } from '@lace-contract/in-memory';
 import {
   MidnightAccountId,
@@ -7,6 +6,7 @@ import {
   supportedNetworkIds,
 } from '@lace-contract/midnight-context';
 import { createBlockchainNetworkTargetResolver } from '@lace-contract/network';
+import { util } from '@lace-lib/cardano-key-management';
 import { SecretBox } from '@lace-lib/core';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import { HDWallet, Roles } from '@midnightntwrk/wallet-sdk/hd';

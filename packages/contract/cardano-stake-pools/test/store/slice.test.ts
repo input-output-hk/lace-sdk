@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { CardanoNetworkId } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { describe, expect, it } from 'vitest';
 
 import { cardanoStakePoolsActions as actions } from '../../src';

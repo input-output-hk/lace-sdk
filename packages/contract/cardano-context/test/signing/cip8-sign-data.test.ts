@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cip8SignData } from '../../src/signing/cip8-sign-data';
@@ -8,8 +8,8 @@ import type {
   CardanoKeyAgent,
   CardanoSignDataRequest,
 } from '../../src/signing/types';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 const paymentAddress =
   'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp' as Cardano.PaymentAddress;

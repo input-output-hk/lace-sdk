@@ -1,7 +1,7 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { createTestScheduler } from '@cardano-sdk/util-dev';
 import { ActivityType } from '@lace-contract/activities';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import {
   CardanoDustNetwork,
   CardanoStakeKeyHash,

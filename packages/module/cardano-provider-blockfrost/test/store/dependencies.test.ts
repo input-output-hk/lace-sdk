@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { LOVELACE_TOKEN_ID } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Milliseconds } from '@lace-lib/util';
 import {
   measureRequestsUnderRetry,

@@ -22,6 +22,7 @@ import {
   poolId,
   poolParameters,
   pureAdaTxOut,
+  rewardAccount,
   stakeKeyHash,
   txIn,
   txOutWithDatum,
@@ -775,6 +776,64 @@ describe('LedgerKeyAgent', () => {
           bip32Ed25519: await Crypto.SodiumBip32Ed25519.create(),
           logger: dummyLogger,
         },
+      );
+    });
+
+    it.each([
+      {
+        body: {
+          subTransactions: [
+            {
+              body: { inputs: [], outputs: [] },
+              witness: { signatures: new Map() },
+            },
+          ],
+        },
+        field: 'subTransactions',
+      },
+      {
+        body: {
+          directDeposits: [{ quantity: 1n, stakeAddress: rewardAccount }],
+        },
+        field: 'directDeposits',
+      },
+      {
+        body: {
+          guards: [
+            { hash: stakeKeyHash, type: Cardano.CredentialType.ScriptHash },
+          ],
+        },
+        field: 'guards',
+      },
+    ] as { body: Partial<Cardano.TxBody>; field: string }[])(
+      'refuses a body with $field before reaching the device',
+      async ({ body, field }) => {
+        const checkDeviceConnection = vi.spyOn(
+          LedgerKeyAgent,
+          'checkDeviceConnection',
+        );
+        const txBody = Serialization.TransactionBody.fromCore({
+          fee: 10n,
+          inputs: [txIn],
+          outputs: [pureAdaTxOut],
+          ...body,
+        });
+
+        const signing = keyAgentMock.signTransaction(
+          txBody,
+          noAddressesOptions,
+        );
+
+        await expect(signing).rejects.toThrow(errors.HwMappingError);
+        await expect(signing).rejects.toThrow(field);
+        expect(checkDeviceConnection).not.toHaveBeenCalled();
+        checkDeviceConnection.mockRestore();
+      },
+    );
+
+    it('refuses to sign a sub transaction, which the Ledger Cardano app cannot sign', async () => {
+      await expect(keyAgentMock.signSubTransaction()).rejects.toThrow(
+        'Sub transaction signing is not supported by Ledger devices',
       );
     });
 

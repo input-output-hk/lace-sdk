@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { Ok, Err } from '@lace-lib/util';
 import { firstValueFrom, of } from 'rxjs';
 import { describe, expect, it } from 'vitest';

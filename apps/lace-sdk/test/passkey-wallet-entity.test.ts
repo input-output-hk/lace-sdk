@@ -1,9 +1,9 @@
-import { Cardano } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
-import { HexBlob } from '@cardano-sdk/util';
 import { BitcoinNetwork } from '@lace-contract/bitcoin-context';
 import { createCardanoKeyAgentFromMnemonic } from '@lace-contract/cardano-context';
 import { WalletId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { Bip32Account } from '@lace-lib/core';
 import { createPasskeyKeySource } from '@lace-lib/passkey';
 import { HDKey } from '@scure/bip32';

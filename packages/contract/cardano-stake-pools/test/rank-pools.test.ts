@@ -4,7 +4,7 @@ import { rankPoolsByNonMyopicReward } from '../src/rank-pools';
 
 import type { RankedPoolInput } from '../src/rank-pools';
 import type { StakePoolsNetworkData } from '../src/types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 // Mainnet-scale figures. `desiredNumberOfPools` is deliberately small so the
 // top-`k` cutoff can be exercised with a handful of pools. The ranking measures

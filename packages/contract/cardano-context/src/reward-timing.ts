@@ -1,6 +1,6 @@
-import { SLOT_CONFIG_NETWORK } from './common/time';
+import { SLOT_CONFIG_NETWORK } from '@lace-lib/cardano-tx-builder';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

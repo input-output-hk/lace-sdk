@@ -50,10 +50,9 @@
     "packages/lib/cardano-dapp-connector",
     "packages/lib/cardano-hardware-ledger",
     "packages/lib/cardano-hardware-trezor",
-    "packages/lib/cardano-input-selection",
     "packages/lib/cardano-key-management",
     "packages/lib/cardano-provider-core",
-    "packages/lib/cardano-tx-construction",
+    "packages/lib/cardano-tx-builder",
     "packages/lib/cardano-util",
     "packages/lib/cardano-util-rxjs",
     "packages/lib/cnight-dust-designation",
@@ -100,8 +99,6 @@
   },
   "dependencies": {
     "@blaze-cardano/data": "0.6.6",
-    "@cardano-sdk/util-dev": "0.25.38",
-    "@cardano-sdk/util-rxjs": "0.9.37",
     "@react-navigation/native": "7.1.31",
     "@tanstack/react-form": "^1.20.0",
     "@testing-library/react-native": "13.2.2",
@@ -114,6 +111,7 @@
     "dayjs": "1.11.19",
     "eslint": "^9.9.1",
     "eslint-plugin-react-native": "^5.0.0",
+    "eslint-plugin-tsdoc": "^0.5.4",
     "expo-camera": "57.0.6",
     "expo-haptics": "57.0.3",
     "expo-image": "~57.0.5",
@@ -199,9 +197,6 @@
     "picomatch@>=4 <4.0.4": "4.0.4",
     "@cardano-sdk/core": {
       "ip-address": "10.7.4"
-    },
-    "@cardano-sdk/wallet": {
-      "uuid": "^11.1.1"
     },
     "@sentry/webpack-plugin": {
       "uuid": "^11.1.1"

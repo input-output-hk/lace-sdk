@@ -1,8 +1,8 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import {
   BitcoinFeeEstimationMode,
   BitcoinNetwork,
 } from '@lace-contract/bitcoin-context';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 import { Milliseconds } from '@lace-lib/util';
 import { isRetriableError } from '@lace-lib/util-provider';
 import { dummyLogger } from 'ts-log';

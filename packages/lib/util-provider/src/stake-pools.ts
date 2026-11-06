@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Percent } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Percent } from '@lace-lib/cardano-util';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
 

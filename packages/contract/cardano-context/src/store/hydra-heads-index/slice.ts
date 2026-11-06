@@ -12,8 +12,8 @@ import type {
   HydraHeadsIndexUtxo,
   HydraHeadsIndexValue,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type {
   HydraAccountDeposit,
   HydraAccountHead,

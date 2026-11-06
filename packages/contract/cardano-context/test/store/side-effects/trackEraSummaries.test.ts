@@ -1,10 +1,10 @@
+import { failuresActions } from '@lace-contract/failures';
 import {
   type Cardano,
   Milliseconds,
   ProviderError,
   ProviderFailure,
-} from '@cardano-sdk/core';
-import { failuresActions } from '@lace-contract/failures';
+} from '@lace-lib/cardano-core';
 import { Ok } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { defer, of } from 'rxjs';
@@ -16,9 +16,9 @@ import { CardanoEraSummariesFailureId } from '../../../src/value-objects';
 import { chainId } from '../../mocks';
 
 import type { CardanoProviderDependencies } from '../../../src';
-import type { EraSummary } from '@cardano-sdk/core';
 import type { Failure, FailureId } from '@lace-contract/failures';
 import type { TranslationKey } from '@lace-contract/i18n';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 const actions = {
   ...cardanoContextActions,

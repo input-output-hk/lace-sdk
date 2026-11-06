@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   type EvaluateTxProps,
   type GetAccountRewardsProps,
@@ -12,6 +11,7 @@ import {
   getAdaTokenTickerByNetwork,
   toContractAddress,
 } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import {
   BlockfrostActivityProvider,
   BlockfrostAddressDiscovery,
@@ -41,11 +41,6 @@ import memoize from 'lodash/memoize';
 import { defer, from, map, of } from 'rxjs';
 
 import type {
-  ProviderError,
-  EraSummary,
-  SubmitTxArgs,
-} from '@cardano-sdk/core';
-import type {
   BlockfrostPartialStakePool,
   BlockfrostStakePool,
   BlockfrostStakePoolMetadata,
@@ -54,6 +49,11 @@ import type {
 } from '@lace-contract/cardano-stake-pools';
 import type { LaceInit } from '@lace-contract/module';
 import type { TokenMetadata } from '@lace-contract/tokens';
+import type {
+  ProviderError,
+  EraSummary,
+  SubmitTxArgs,
+} from '@lace-lib/cardano-core';
 import type { Logger } from 'ts-log';
 
 const getNetworkInfoProvider = memoize(

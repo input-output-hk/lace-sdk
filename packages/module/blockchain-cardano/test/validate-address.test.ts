@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
 import { CardanoNetworkId } from '@lace-contract/cardano-context';
 import { BlockchainNetworkId } from '@lace-contract/network';
+import { Cardano } from '@lace-lib/cardano-core';
 import { None, Some } from '@lace-lib/util';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,10 +13,10 @@ const { mockIsValid, mockFromString } = vi.hoisted(() => ({
 
 // The real module stays in place around the mocked address parsing:
 // modules loaded alongside the validator read other Cardano values at import.
-vi.mock('@cardano-sdk/core', async () => {
+vi.mock('@lace-lib/cardano-core', async () => {
   // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-  const actual = await vi.importActual<typeof import('@cardano-sdk/core')>(
-    '@cardano-sdk/core',
+  const actual = await vi.importActual<typeof import('@lace-lib/cardano-core')>(
+    '@lace-lib/cardano-core',
   );
   return {
     ...actual,

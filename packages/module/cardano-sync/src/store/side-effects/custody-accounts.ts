@@ -1,9 +1,9 @@
-import { AddressType } from '@cardano-sdk/key-management';
 import {
   CardanoPaymentAddress,
   toContractAddress,
   verifyCardanoCustodyAccountIdentity,
 } from '@lace-contract/cardano-context';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
 import { retryBackoff } from 'backoff-rxjs';
 import { map, of, throwError } from 'rxjs';
@@ -16,7 +16,6 @@ import type {
   CardanoSyncAction,
   SideEffect,
 } from '../../module';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type {
   CardanoAddressData,
@@ -26,6 +25,7 @@ import type {
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { SyncOperationId } from '@lace-contract/sync';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 
 type Logger = Parameters<SideEffect>[2]['logger'];

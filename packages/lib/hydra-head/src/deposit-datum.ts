@@ -1,4 +1,4 @@
-import { HexBlob } from '@cardano-sdk/util';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import {
   parsePlutusData,
@@ -11,7 +11,7 @@ import {
 } from './plutus-data';
 
 import type { HydraCommittedOutput, HydraDepositDatum } from './types';
-import type { Cardano, Serialization } from '@cardano-sdk/core';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
 
 /**
  * Reads one `Commit`: the spent output reference and the output itself,

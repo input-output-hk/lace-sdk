@@ -41,14 +41,14 @@ import type {
 import type { CardanoCustodySponsor } from './cardano-custody-sponsor';
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
 import type { CardanoCustodySubmission } from './submit-cardano-custody-transaction';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildResult,
   CardanoCustodyDeviceBinding,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type { CustodyAccountState } from '@lace-lib/cardano-custody';
 import type { Result } from '@lace-lib/util';
 

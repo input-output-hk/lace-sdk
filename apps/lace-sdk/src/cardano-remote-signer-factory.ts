@@ -2,8 +2,6 @@ import { withCollateralOwnershipGuard } from '@lace-contract/cardano-context';
 import { HexBytes } from '@lace-lib/util';
 import { defer, from, map } from 'rxjs';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import type {
   CardanoBip32AccountProps,
   CardanoDataSigner,
@@ -18,6 +16,8 @@ import type {
   AnyAccount,
   LazyInMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import type { SignerClient } from '@lace-lib/passkey';
 
 /** The part of the signer client that carries sign requests. */

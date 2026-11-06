@@ -10,9 +10,9 @@
 // fee that collateral cannot cover; and the script rule also refuses a
 // reference script other than the version's parked scripts.
 
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { blake2b, Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { blake2b, Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { bytesToHex, HASH_28_BYTE_LENGTH } from '../hex';
 import {
@@ -22,7 +22,7 @@ import {
 import { parseCustodyAccountTokenName } from '../tokens';
 
 import type { CustodyContractVersion } from '../contract-version';
-import type { Hash32ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /** The service's limit on the size of a transaction it inspects, in bytes. */
 const MAX_TRANSACTION_BYTES = 16 * 1024;

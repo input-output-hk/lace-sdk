@@ -15,13 +15,13 @@ import { paymentKeyHashOf } from './cardano-custody-witnesses';
 
 import type { CardanoCustodySponsorCollateral } from './cardano-custody-sponsor';
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyAccountState,
   CardanoCustodyCollateralFunding,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type { Result } from '@lace-lib/util';
 
 type LiveCardanoCustodyAccountState = Extract<

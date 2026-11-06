@@ -1,4 +1,4 @@
-import { isNotNil } from '@cardano-sdk/util';
+import { isNotNil } from '@lace-lib/cardano-util';
 import { distinctUntilChanged, filter, map, skip, withLatestFrom } from 'rxjs';
 
 import { isCardanoAccount } from '../../util';

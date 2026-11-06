@@ -6,9 +6,9 @@ import { from, type Observable } from 'rxjs';
 import { BlockfrostProvider } from '../blockfrost-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { ProviderError } from '@cardano-sdk/core';
 import type { GetTokensProps } from '@lace-contract/cardano-context';
 import type { RawTokenWithoutContext } from '@lace-contract/tokens';
+import type { ProviderError } from '@lace-lib/cardano-core';
 
 const amountToRawToken = (
   amount: Responses['address_content']['amount'][0],

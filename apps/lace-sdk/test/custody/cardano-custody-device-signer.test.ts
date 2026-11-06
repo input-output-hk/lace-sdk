@@ -1,15 +1,15 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import {
   CardanoCustodyDeviceKeyMismatchError,
   CardanoCustodyRequestRefusedError,
   verifyVkeyWitnesses,
 } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import {
   serializeCustodyRequestedGrantScope,
   verifyCustodyDataSignature,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { RemoteSignerError } from '@lace-lib/passkey';
 import { describe, expect, it, vi } from 'vitest';
 

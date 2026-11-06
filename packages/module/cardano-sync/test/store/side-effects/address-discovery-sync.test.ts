@@ -1,5 +1,3 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
 import { addressesActions } from '@lace-contract/addresses';
 import {
   CardanoPaymentAddress,
@@ -22,6 +20,12 @@ import { multiSigAccount as scriptAccount } from '@lace-contract/cardano-context
 import { BlockchainNetworkId } from '@lace-contract/network';
 import { syncActions } from '@lace-contract/sync';
 import { AccountId, WalletId } from '@lace-contract/wallet-repo';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { Timestamp } from '@lace-lib/util';
 import { Err, Ok } from '@lace-lib/util';
 import { testSideEffect as baseTestSideEffect } from '@lace-lib/util-dev';
@@ -35,7 +39,6 @@ import { addressDiscoverySync } from '../../../src/store/side-effects/address-di
 
 import type { CardanoSyncAction } from '../../../src';
 import type { Selectors, ActionCreators } from '../../../src/module';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type {
   CardanoProviderDependencies,
   CardanoAddressData,
@@ -47,6 +50,7 @@ import type {
   AnyAccount,
   MultiSigWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { RunHelpers } from 'rxjs/testing';
 
 const testSideEffect: typeof baseTestSideEffect<Selectors, ActionCreators> = (

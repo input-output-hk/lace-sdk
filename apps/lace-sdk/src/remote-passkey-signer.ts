@@ -3,7 +3,7 @@ import { createSignerClient } from '@lace-lib/passkey';
 import { requestRemoteCardanoAccountPublicKey } from './remote-cardano-account-public-key';
 import { createRemoteCardanoVaultModule } from './remote-cardano-vault-module';
 
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import type { CreateSignerClientProps, SignerClient } from '@lace-lib/passkey';
 
 /** The options of `createRemotePasskeySigner`. */

@@ -1,6 +1,6 @@
-import { HexBlob } from '@cardano-sdk/util';
 import { signCardanoCustodyDataWithWords } from '@lace-contract/cardano-context';
 import * as CustodyLibrary from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {

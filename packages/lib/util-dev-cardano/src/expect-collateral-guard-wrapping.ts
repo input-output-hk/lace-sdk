@@ -12,9 +12,9 @@ import {
   WALLET_ADDRESS,
 } from './collateral-guard-fixture';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { CardanoTransactionSigner } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 /**
  * The ownership authority under which {@link CASE_B_TX} is a case-(b)

@@ -39,9 +39,9 @@
  * the one this commit takes after the stable release below it, which holds a
  * release cut by hand to the same rules. Prints the result as JSON (`--out`
  * writes it to a file too, `--summary` a Markdown summary) and exits 1 on a
- * problem: an export removed or changed without being `@deprecated` in the
- * previous release, a version already released, or a canary before the first
- * stable release.
+ * problem: from 1.0, an export removed or changed without being `@deprecated`
+ * in the previous release; a version already released; or a canary before the
+ * first stable release. Before 1.0 the breaking bump alone is required.
  *
  * A canary's own changes are in its canary build, which the stable diff never
  * reads. With `--canary-previous`, the result also compares the canary builds
@@ -61,6 +61,7 @@ import {
   type DeclaredExport,
   readExports,
   readOverrides,
+  requiresDeprecation,
   type ExportMap,
   type ReleaseOverride,
 } from './release-compat.ts';
@@ -87,7 +88,10 @@ import {
  * The packages one release carries, each with the entries whose declarations
  * are its API. `@laceio/sdk`'s exports keep their `<entry>:<name>` keys; each
  * Cardano package's are `<package>/<entry>:<name>`, and their declarations
- * import shared chunks, which are part of the API compared.
+ * import shared chunks, which are part of the API compared. An entry a
+ * release removed stays listed until the previous stable release no longer
+ * declares it: a build without its declarations is read without it, so the
+ * exports of the release before count as removed.
  */
 export const FAMILY = [
   { name: '@laceio/sdk', directory: 'apps/lace-sdk', prefix: '' },
@@ -100,9 +104,10 @@ export const FAMILY = [
       'crypto',
       'util',
       'key-management',
+      'tx-builder',
+      'dapp-connector',
       'input-selection',
       'tx-construction',
-      'dapp-connector',
     ],
   },
   {
@@ -192,7 +197,10 @@ export interface StableVersion {
   compatible: string[];
   /** The removed and changed exports that make the release breaking. */
   breaking: string[];
-  /** Breaking exports that were not `@deprecated` in the previous release. */
+  /**
+   * Breaking exports that were not `@deprecated` in the previous release,
+   * when the version requires it (from 1.0); none before 1.0.
+   */
   undeprecated: string[];
   /**
    * The family packages this one depends on whose range moved to a new
@@ -308,7 +316,9 @@ export const nextStableVersion = ({
     changed,
     compatible,
     breaking,
-    undeprecated: breaking.filter(key => !previous.get(key)?.deprecated),
+    undeprecated: requiresDeprecation(parseVersion(version))
+      ? breaking.filter(key => !previous.get(key)?.deprecated)
+      : [],
     ...(moved.length > 0 && { dependencies: moved }),
   };
 };

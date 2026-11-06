@@ -1,7 +1,7 @@
 import {
   fromSerializableObject,
   toSerializableObject,
-} from '@cardano-sdk/util';
+} from '@lace-lib/cardano-util';
 
 declare const opaque: unique symbol;
 

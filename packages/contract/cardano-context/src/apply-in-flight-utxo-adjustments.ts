@@ -10,13 +10,13 @@ import type {
   CardanoPaymentAddress,
   CardanoRewardAccount,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
 import type {
   Activity,
   BlockchainSpecificActivityMetadata,
 } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const outpointKey = (ref: { txId: Cardano.TransactionId; index: number }) =>
   `${ref.txId}#${ref.index}`;

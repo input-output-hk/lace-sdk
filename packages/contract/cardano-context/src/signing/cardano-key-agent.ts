@@ -1,11 +1,11 @@
-import { SodiumBip32Ed25519 } from '@cardano-sdk/crypto';
+import { SodiumBip32Ed25519 } from '@lace-lib/cardano-crypto';
 import {
   InMemoryKeyAgent,
   KeyPurpose,
   KeyRole,
   type SerializableInMemoryKeyAgentData,
   util,
-} from '@cardano-sdk/key-management';
+} from '@lace-lib/cardano-key-management';
 import {
   deriveBip32PublicKey,
   hashEd25519PublicKey,
@@ -17,9 +17,12 @@ import { dummyLogger } from 'ts-log';
 import { createInputResolver } from '../util';
 
 import type { CardanoKeyAgent } from './types';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type { AuthSecret } from '@lace-contract/authentication-prompt';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519KeyHashHex,
+} from '@lace-lib/cardano-crypto';
 import type { HexBytes } from '@lace-lib/util';
 
 export type CreateCardanoKeyAgentFromMnemonicProps = {
@@ -139,15 +142,21 @@ export const deriveDRepKeyHash = async ({
 
 const wrapInMemoryKeyAgent = (keyAgent: InMemoryKeyAgent): CardanoKeyAgent => ({
   signTransaction: async (txBody, context) => {
+    const coreBody = txBody.toCore();
+    const inputResolver = createInputResolver(context.utxo);
     const txInKeyPathMap = await util.createTxInKeyPathMap(
-      txBody.toCore(),
+      coreBody,
       context.knownAddresses,
-      createInputResolver(context.utxo),
+      inputResolver,
     );
     return keyAgent.signTransaction(txBody, {
       knownAddresses: context.knownAddresses,
       txInKeyPathMap,
       scripts: context.scripts,
+      spentOutputAddresses: await util.createSpentOutputAddresses(
+        coreBody,
+        inputResolver,
+      ),
     });
   },
   signBlob: async (derivationPath, blob) =>

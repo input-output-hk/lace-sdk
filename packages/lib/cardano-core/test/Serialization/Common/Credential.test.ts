@@ -41,4 +41,14 @@ describe('Credential', () => {
       ),
     ).toThrow('Unexpected credential type value: 2');
   });
+
+  it('rejects a credential hash that is not 28 bytes long', () => {
+    expect(() =>
+      Credential.fromCbor(
+        HexBlob(
+          '8200581b0000000000000000000000000000000000000000000000000000000000',
+        ),
+      ),
+    ).toThrow('Expected a credential hash of 28 bytes, but got 27 bytes');
+  });
 });

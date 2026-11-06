@@ -1,9 +1,9 @@
-import { Cardano } from '@cardano-sdk/core';
 import { BITCOIN_FEATURE_FLAG } from '@lace-contract/bitcoin-context';
 import { FEATURE_FLAG_CARDANO } from '@lace-contract/cardano-context';
 import { FailureId } from '@lace-contract/failures';
 import { ModuleName } from '@lace-contract/module';
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Milliseconds } from '@lace-lib/util';
 import { firstValueFrom, isObservable } from 'rxjs';
 import { expect, it, vi } from 'vitest';

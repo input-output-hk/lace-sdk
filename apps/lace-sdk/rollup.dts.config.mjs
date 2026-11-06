@@ -99,14 +99,20 @@ const toRelative = (fromFile, targetPath) => {
  *
  * 1. @lace-* package specifiers  (from tsconfig paths)
  *    e.g. import("@lace-contract/module").State
+ *    The packages @laceio/cardano publishes keep their specifier, which
+ *    useLaceioCardano resolves to its subpath (scripts/laceio-cardano.mjs).
  *
  * 2. Repo-relative paths         (tsc expands complex inferred types)
  *    e.g. import("packages/contract/views/src").ViewsSliceState
  *    e.g. import("apps/lace-sdk/src").HexBytes
+ *    A path into a package @laceio/cardano publishes becomes its specifier,
+ *    the way pattern 3 rewrites a deep path, and stays external:
+ *    import("packages/lib/cardano-core/src/Cardano").PartialBlockHeader
+ *    → import("@lace-lib/cardano-core").Cardano.PartialBlockHeader
  *
  * 3. node_modules deep paths     (tsc resolves through real file paths)
- *    e.g. import("node_modules/@cardano-sdk/core/dist/esm/Cardano").PartialBlockHeader
- *    → rewritten to import("@cardano-sdk/core").Cardano.PartialBlockHeader
+ *    e.g. import("node_modules/@scope/pkg/dist/esm/Namespace").Type
+ *    → rewritten to import("@scope/pkg").Namespace.Type
  *    Works for any scoped or unscoped package; the last non-"index" path
  *    segment becomes a namespace accessor (e.g. .Cardano, .Serialization).
  *
@@ -133,11 +139,13 @@ const rewriteInternalImportsOnDisk = () => {
   // --- Pattern 2: repo-relative paths in `import("packages/...")` and `import("apps/...")` ---
   const repoRelativeDynamicPattern =
     /(import\(\s*["'])((?:packages|apps)\/[^"']+)(["']\s*\))/g;
+  const cardanoRepoRelativePattern =
+    /import\(\s*["']packages\/lib\/(cardano-[a-z-]+)\/src(\/[^"']+)?["']\s*\)/g;
 
   // --- Pattern 3: node_modules deep paths ---
   // tsc resolves through real file paths for packages that use namespace re-exports.
-  // e.g. import("node_modules/@cardano-sdk/core/dist/esm/Cardano").PartialBlockHeader
-  // → import("@cardano-sdk/core").Cardano.PartialBlockHeader
+  // e.g. import("node_modules/@scope/pkg/dist/esm/Namespace").Type
+  // → import("@scope/pkg").Namespace.Type
   // Handles both scoped (@scope/pkg) and unscoped (pkg) packages.
   // The last non-"index" path segment becomes a namespace accessor.
   const nodeModulesDeepPattern =
@@ -156,9 +164,12 @@ const rewriteInternalImportsOnDisk = () => {
       return groups[1] + toRelative(file, target) + groups[3];
     };
 
-    // Rewrite @lace-* specifiers to relative paths
+    // Rewrite @lace-* specifiers to relative paths, except the Cardano packages
+    // @laceio/cardano publishes, which stay external
     const rewriteLace = (...groups) =>
-      rewriteMatch(groups, resolveInternalSpecifier) ?? groups[0];
+      cardanoSubpathOf(groups[2])
+        ? groups[0]
+        : rewriteMatch(groups, resolveInternalSpecifier) ?? groups[0];
 
     // Rewrite repo-relative paths (packages/..., apps/...) to relative paths in .dts-work
     const rewriteRepoRelative = (...groups) =>
@@ -183,6 +194,12 @@ const rewriteInternalImportsOnDisk = () => {
       return `import("${packageName}").${lastSegment}`;
     };
 
+    // Rewrite paths into the packages @laceio/cardano publishes the same way
+    const rewriteCardanoRepoRelative = (match, name, deepPath) =>
+      cardanoSubpathOf(`@lace-lib/${name}`)
+        ? rewriteNodeModulesDeep(match, `@lace-lib/${name}`, deepPath)
+        : match;
+
     code = code
       // Inferred brands expose type-fest's private Tag through an extensionless
       // path. Tagged<unknown, ...> is the public equivalent and resolves in Node16.
@@ -195,6 +212,7 @@ const rewriteInternalImportsOnDisk = () => {
       )
       .replace(laceFromPattern, rewriteLace)
       .replace(laceDynamicPattern, rewriteLace)
+      .replace(cardanoRepoRelativePattern, rewriteCardanoRepoRelative)
       .replace(repoRelativeDynamicPattern, rewriteRepoRelative)
       .replace(nodeModulesDeepPattern, rewriteNodeModulesDeep);
 
@@ -311,9 +329,10 @@ const isInlinedTypePackage = source =>
   );
 
 // Every other npm package (rxjs, @reduxjs/toolkit, @laceio/cardano, etc.) is
-// external; the @cardano-sdk packages the domain layer publishes import its
-// subpaths (scripts/laceio-cardano.mjs).
-// All .dts-work/ files have been rewritten to relative paths — no internal specifiers remain.
+// external; the @lace-lib/cardano-* packages the domain layer publishes import
+// its subpaths (scripts/laceio-cardano.mjs).
+// All .dts-work/ files have been rewritten to relative paths, so no internal
+// specifiers remain but those Cardano packages.
 const external = source => {
   // Relative and absolute paths are always internal
   if (source.startsWith('.') || source.startsWith('/')) return false;

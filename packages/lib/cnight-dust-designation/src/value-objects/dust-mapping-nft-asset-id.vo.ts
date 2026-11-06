@@ -1,7 +1,7 @@
 import { getDustMappingNftAssetId } from '../plutus/script-address';
 
 import type { CardanoDustNetwork } from './network-id.vo';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Tagged } from 'type-fest';
 
 // =====================================================================

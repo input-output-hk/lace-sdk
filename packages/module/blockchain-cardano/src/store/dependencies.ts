@@ -1,9 +1,3 @@
-import { SodiumBip32Ed25519 } from '@cardano-sdk/crypto';
-import {
-  InMemoryKeyAgent,
-  KeyPurpose,
-  util,
-} from '@cardano-sdk/key-management';
 import {
   applyVkeyWitnesses,
   createInputResolver,
@@ -11,6 +5,12 @@ import {
   type SignInMemoryTransactionProps,
   type SigningError,
 } from '@lace-contract/cardano-context';
+import { SodiumBip32Ed25519 } from '@lace-lib/cardano-crypto';
+import {
+  InMemoryKeyAgent,
+  KeyPurpose,
+  util,
+} from '@lace-lib/cardano-key-management';
 import { SecretBox } from '@lace-lib/core';
 import { ByteArray, Err, Ok } from '@lace-lib/util';
 import { catchError, forkJoin, from, map, mergeMap, of } from 'rxjs';

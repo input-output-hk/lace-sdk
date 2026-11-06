@@ -62,6 +62,30 @@ describe('ProtocolVersion', () => {
     expect(ProtocolVersion.fromCore(version.toCore()).toCbor()).toEqual(cbor);
   });
 
+  it('decodes a minor version greater than the maximum uint32 value by default', () => {
+    const version = ProtocolVersion.fromCbor(HexBlob('820c1b0000000100000000'));
+
+    expect(version.minor()).toEqual(4_294_967_296);
+  });
+
+  it('throws when decoding a minor version greater than the maximum uint32 value in strict mode', () => {
+    expect(() =>
+      ProtocolVersion.fromCbor(HexBlob('820c1b0000000100000000'), {
+        strict: true,
+      }),
+    ).toThrow(
+      'Minor protocol version must be a uint of size 4 (0 to 4294967295), but got 4294967296',
+    );
+  });
+
+  it('accepts the maximum uint32 minor version in strict mode', () => {
+    const cbor = HexBlob('820c1affffffff');
+
+    expect(ProtocolVersion.fromCbor(cbor, { strict: true }).toCbor()).toEqual(
+      cbor,
+    );
+  });
+
   it('throws when encoding a minor version greater than the maximum uint32 value', () => {
     const version = new ProtocolVersion(12, 4_294_967_296);
 

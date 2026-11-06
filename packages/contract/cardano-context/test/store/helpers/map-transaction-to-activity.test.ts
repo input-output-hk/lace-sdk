@@ -1,14 +1,14 @@
+import { ActivityType } from '@lace-contract/activities';
+import { TokenId } from '@lace-contract/tokens';
+import { AccountId } from '@lace-contract/wallet-repo';
 import {
   Cardano,
   createTxInspector,
   Serialization,
   transactionSummaryInspector,
-} from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
-import { ActivityType } from '@lace-contract/activities';
-import { TokenId } from '@lace-contract/tokens';
-import { AccountId } from '@lace-contract/wallet-repo';
+} from '@lace-lib/cardano-core';
 import { ACCOUNT_VALIDATOR_HASH } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { BigNumber, Timestamp } from '@lace-lib/util';
 import { firstValueFrom, of } from 'rxjs';
 import { dummyLogger } from 'ts-log';
@@ -26,7 +26,7 @@ import type {
   ExtendedTxDetails,
   RequiredProtocolParameters,
 } from '../../../src/types';
-import type * as Core from '@cardano-sdk/core';
+import type * as Core from '@lace-lib/cardano-core';
 
 const logger = dummyLogger;
 
@@ -49,10 +49,11 @@ const summaryOf = (fields: Partial<Core.TransactionSummaryInspection>) =>
   } as Core.TransactionSummaryInspection);
 
 // Mock the Cardano SDK functions
-vi.mock('@cardano-sdk/core', async importActual => {
+vi.mock('@lace-lib/cardano-core', async importActual => {
   const module = await importActual<typeof Core>();
 
   return {
+    ...module,
     Cardano: {
       ...module.Cardano,
       AssetId: {
@@ -903,7 +904,7 @@ describe('mapTransactionToActivity', () => {
 
       beforeEach(async () => {
         const { Cardano: actual } = await vi.importActual<typeof Core>(
-          '@cardano-sdk/core',
+          '@lace-lib/cardano-core',
         );
         vi.mocked(Cardano.AssetId.getPolicyId).mockImplementation(
           actual.AssetId.getPolicyId,
@@ -1324,7 +1325,7 @@ describe('mapTransactionToActivity', () => {
 
       beforeEach(async () => {
         const { Cardano: actual } = await vi.importActual<typeof Core>(
-          '@cardano-sdk/core',
+          '@lace-lib/cardano-core',
         );
         vi.mocked(Cardano.AssetId.getPolicyId).mockImplementation(
           actual.AssetId.getPolicyId,

@@ -1,5 +1,5 @@
-import { Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Serialization } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { HexBytes } from '@lace-lib/util';
 import { describe, expect, it } from 'vitest';
 

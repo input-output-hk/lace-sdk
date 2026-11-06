@@ -1,5 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
-import { blockingWithLatestFrom } from '@cardano-sdk/util-rxjs';
 import {
   createInputResolver,
   isCardanoAddress,
@@ -10,6 +8,8 @@ import {
   type TxExecutorImplementation,
 } from '@lace-contract/tx-executor';
 import { isHardwareWallet } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { blockingWithLatestFrom } from '@lace-lib/cardano-util-rxjs';
 import { HexBytes } from '@lace-lib/util';
 import { mapHwSigningError } from '@lace-lib/util-hw';
 import { filterRedacted } from '@lace-lib/util-redacted';
@@ -18,7 +18,6 @@ import { catchError, combineLatest, map, of, switchMap } from 'rxjs';
 
 import { mergePreExistingVkeys } from './merge-pre-existing-vkeys';
 
-import type { AddressType } from '@cardano-sdk/key-management';
 import type {
   AccountUtxoMap,
   CardanoTransactionSignerContext,
@@ -26,6 +25,7 @@ import type {
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { SideEffectDependencies } from '@lace-contract/module';
 import type { AnyWallet } from '@lace-contract/wallet-repo';
+import type { AddressType } from '@lace-lib/cardano-key-management';
 import type { Observable } from 'rxjs';
 
 export const makeConfirmTx = (

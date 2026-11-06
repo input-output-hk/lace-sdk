@@ -61,6 +61,7 @@ describe('KeyManagement.util.stubSignTransaction', async () => {
       txInKeyPathMap,
       dRepKeyHash,
       undefined,
+      undefined,
     ] as const;
     expect(ownSignatureKeyPaths).toBeCalledWith(...expectedArgs);
   });

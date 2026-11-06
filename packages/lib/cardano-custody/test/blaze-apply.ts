@@ -1,5 +1,5 @@
 import { applyParams } from '@blaze-cardano/uplc';
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
 type BlazeHex = Parameters<typeof applyParams>[0];
 type BlazeData = Parameters<typeof applyParams>[1];

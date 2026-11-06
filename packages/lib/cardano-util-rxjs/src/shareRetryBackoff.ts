@@ -15,8 +15,8 @@ const defaultRetryBackoffConfig: RetryBackoffConfig = {
  * Calls `operator` function on each retry, causing it to re-subscribe to it's source, which re-emits
  * the last emitted value (the one which caused the error).
  *
- * @param operator re-subscribed on retry
- * @param retryBackoffConfig by default { initialInterval: 10, maxInterval: 5000, resetOnSuccess: true }
+ * @param operator - re-subscribed on retry
+ * @param retryBackoffConfig - by default `{ initialInterval: 10, maxInterval: 5000, resetOnSuccess: true }`
  */
 export const shareRetryBackoff =
   <In, Out>(

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment */
 // only tested in ../e2e tests
-import { toSerializableObject } from '@cardano-sdk/util';
+import { toSerializableObject } from '@lace-lib/cardano-util';
 
 import { isRequestMessage, tryParseNamespacedMethod } from './util';
 

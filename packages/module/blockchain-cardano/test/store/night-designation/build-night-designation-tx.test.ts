@@ -1,9 +1,9 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { mockProviders } from '@cardano-sdk/util-dev';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   InsufficientCollateralError,
-  createInputResolver,
-} from '@lace-contract/cardano-context';
+  TransactionBuilder,
+} from '@lace-lib/cardano-tx-builder';
+import { mockProviders } from '@lace-lib/cardano-util-dev';
 import {
   CardanoDustNetwork,
   CardanoPaymentKeyHash,
@@ -15,7 +15,8 @@ import {
   getDustGeneratorScriptHash,
   getDustMappingNftAssetId,
 } from '@lace-lib/cnight-dust-designation';
-import { describe, expect, it } from 'vitest';
+import { dummyLogger } from 'ts-log';
+import { describe, expect, it, vi } from 'vitest';
 
 import { boundedExUnitsEvaluator } from '../../../src/store/night-designation/bounded-ex-units-evaluator';
 import { buildNightDesignationTx } from '../../../src/store/night-designation/build-night-designation-tx';
@@ -102,20 +103,13 @@ const registrationUtxo: Cardano.Utxo = [
   },
 ];
 
-const makeDeps = (
-  extraResolvable: Cardano.Utxo[] = [],
-): NightDesignationTxBuilderDependencies => ({
+const makeDeps = (): NightDesignationTxBuilderDependencies => ({
   networkMagic: Cardano.NetworkMagics.Preprod,
   // ADA cover pool (cNIGHT UTxOs are forced separately); collateral defaults to
   // the same pool, the no-reservation case.
   coverUtxos: utxo,
   collateralUtxos: utxo,
   txEvaluator: boundedExUnitsEvaluator,
-  inputResolver: createInputResolver([
-    ...cnightUtxos,
-    ...utxo,
-    ...extraResolvable,
-  ]),
 });
 
 const sumAsset = (
@@ -176,6 +170,28 @@ const assertScriptDataHash = (tx: Cardano.Tx) => {
 };
 
 describe('buildNightDesignationTx', () => {
+  it('hands the logger to the transaction builder', async () => {
+    const logger = { ...dummyLogger };
+    const setLogger = vi.spyOn(TransactionBuilder.prototype, 'setLogger');
+
+    await buildNightDesignationTx(
+      {
+        network,
+        action: { kind: 'register', dustPubkey },
+        cnightUtxos,
+        paymentKeyHash,
+        stakeKeyHash,
+        changeAddress: ownAddress,
+        ttlSlot,
+        protocolParameters: plutusProtocolParameters,
+      },
+      { ...makeDeps(), logger },
+    );
+
+    expect(setLogger).toHaveBeenCalledWith(logger);
+    setLogger.mockRestore();
+  });
+
   it('register: mints the NFT, rotates all cNIGHT, conserves cNIGHT, valid script-data-hash', async () => {
     const result = await buildNightDesignationTx(
       {
@@ -246,7 +262,7 @@ describe('buildNightDesignationTx', () => {
         ttlSlot,
         protocolParameters: plutusProtocolParameters,
       },
-      makeDeps([registrationUtxo]),
+      makeDeps(),
     );
 
     expect(result.ok).toBe(true);
@@ -299,7 +315,7 @@ describe('buildNightDesignationTx', () => {
         ttlSlot,
         protocolParameters: plutusProtocolParameters,
       },
-      makeDeps([registrationUtxo]),
+      makeDeps(),
     );
 
     expect(result.ok).toBe(true);
@@ -370,38 +386,37 @@ describe('buildNightDesignationTx', () => {
           coverUtxos: [smallAda],
           collateralUtxos: [smallAda],
           txEvaluator: boundedExUnitsEvaluator,
-          inputResolver: createInputResolver([...cnightUtxos, smallAda]),
         },
       ),
     ).rejects.toThrow(InsufficientCollateralError);
   });
 
-  it('rejects when an input cannot be resolved instead of evaluating ex-units on a partial UTXO set', async () => {
-    // inputResolver deliberately omits the cNIGHT UTxOs. The builder must throw
-    // rather than silently drop them — a partial set would yield wrong redeemer
-    // budgets / a script-data-hash the ledger rejects on submit.
-    await expect(
-      buildNightDesignationTx(
-        {
-          network,
-          action: { kind: 'register', dustPubkey },
-          cnightUtxos,
-          paymentKeyHash,
-          stakeKeyHash,
-          changeAddress: ownAddress,
-          ttlSlot,
-          protocolParameters: plutusProtocolParameters,
-        },
-        {
-          networkMagic: Cardano.NetworkMagics.Preprod,
-          coverUtxos: utxo,
-          collateralUtxos: utxo,
-          txEvaluator: boundedExUnitsEvaluator,
-          // Missing cnightUtxos — every cNIGHT input is unresolvable.
-          inputResolver: createInputResolver([...utxo]),
-        },
-      ),
-    ).rejects.toThrow(/Cannot resolve transaction input/);
+  it('evaluates the designation over the cNIGHT UTxOs it spends, as given, without an input resolver', async () => {
+    const evaluate = vi.fn(boundedExUnitsEvaluator.evaluate);
+
+    const result = await buildNightDesignationTx(
+      {
+        network,
+        action: { kind: 'register', dustPubkey },
+        cnightUtxos,
+        paymentKeyHash,
+        stakeKeyHash,
+        changeAddress: ownAddress,
+        ttlSlot,
+        protocolParameters: plutusProtocolParameters,
+      },
+      { ...makeDeps(), txEvaluator: { evaluate } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(parse(result.value.cbor).body.scriptIntegrityHash).toBe(
+      '4b227858c3af67bab1b834cdd55cec969e97205462568950cd0df4bbd539d37a',
+    );
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(evaluate.mock.calls[0][1]).toEqual(
+      expect.arrayContaining(cnightUtxos),
+    );
   });
 
   it('rejects when the evaluator returns no budget for a redeemer instead of shipping seed max units', async () => {
@@ -427,7 +442,6 @@ describe('buildNightDesignationTx', () => {
           coverUtxos: utxo,
           collateralUtxos: utxo,
           txEvaluator: emptyEvaluator,
-          inputResolver: createInputResolver([...cnightUtxos, ...utxo]),
         },
       ),
     ).rejects.toThrow(/No ex-units evaluation/);
@@ -505,7 +519,6 @@ describe('buildNightDesignationTx', () => {
           coverUtxos: coverPool,
           collateralUtxos: coverPool,
           txEvaluator: boundedExUnitsEvaluator,
-          inputResolver: createInputResolver([tightCnightUtxo, ...coverPool]),
         },
       );
 
@@ -554,11 +567,6 @@ describe('buildNightDesignationTx', () => {
         coverUtxos: utxo,
         collateralUtxos: [collateralOnly],
         txEvaluator: boundedExUnitsEvaluator,
-        inputResolver: createInputResolver([
-          ...cnightUtxos,
-          ...utxo,
-          collateralOnly,
-        ]),
       },
     );
 

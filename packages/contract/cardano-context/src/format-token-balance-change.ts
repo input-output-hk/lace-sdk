@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber } from '@lace-lib/util';
 import { formatAmountRawToDenominated } from '@lace-lib/util-render';
 

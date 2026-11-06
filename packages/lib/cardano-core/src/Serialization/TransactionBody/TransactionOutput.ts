@@ -108,6 +108,8 @@ export class TransactionOutput {
   /**
    * Deserializes the TransactionOutput from a CBOR byte array.
    *
+   * A map key may appear only once.
+   *
    * @param cbor The CBOR encoded TransactionOutput object.
    * @param options Deserialization options. When `strict` is true, throws on unknown map keys
    * instead of skipping them.
@@ -132,10 +134,20 @@ export class TransactionOutput {
       //   , ? 2 : datum_option ; New; datum option
       //   , ? 3 : script_ref   ; New; script reference
       //   }
+      const seenKeys = new Set<bigint>();
+
       reader.readStartMap();
 
       while (reader.peekState() !== CborReaderState.EndMap) {
         const key = reader.readInt();
+
+        if (seenKeys.has(key))
+          throw new SerializationError(
+            SerializationFailure.InvalidType,
+            `Duplicate transaction output map key: ${key}`,
+          );
+
+        seenKeys.add(key);
 
         switch (key) {
           case 0n:
@@ -307,7 +319,7 @@ export class TransactionOutput {
       Value.fromCore(coreTransactionOutput.value),
     );
 
-    if (coreTransactionOutput.datum)
+    if (coreTransactionOutput.datum !== undefined)
       out.setDatum(Datum.fromCore(coreTransactionOutput.datum));
     if (coreTransactionOutput.datumHash)
       out.setDatum(Datum.fromCore(coreTransactionOutput.datumHash));

@@ -1,6 +1,8 @@
-import { Cardano } from '@cardano-sdk/core';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
 import { firstValueFrom, of } from 'rxjs';
+import { dummyLogger } from 'ts-log';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CardanoCustodyAccountRefusedError } from '../../src/store/custody/custody-account-guard';
@@ -295,6 +297,32 @@ describe('makeBuildDelegationTx', () => {
     );
 
     expect(result.success).toBe(true);
+  });
+
+  it('hands the dependency logger to the transaction builder', async () => {
+    const logger = { ...dummyLogger };
+    const setLogger = vi.spyOn(TransactionBuilder.prototype, 'setLogger');
+    const dependencies = {
+      logger,
+      txExecutorCardano: {
+        cardanoNetworkMagic$: of(764824073),
+        cardanoProtocolParameters$: of(mockProtocolParameters),
+        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
+        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoAddresses$: of([mockAddress]),
+        cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
+      },
+    } as unknown as SideEffectDependencies;
+
+    await firstValueFrom(
+      makeBuildDelegationTx(dependencies)({
+        accountId: testAccountId,
+        poolId: testPoolId,
+      }),
+    );
+
+    expect(setLogger).toHaveBeenCalledWith(logger);
+    setLogger.mockRestore();
   });
 
   it('refuses a Cardano custody account before building', async () => {

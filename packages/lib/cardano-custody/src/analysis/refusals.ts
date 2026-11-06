@@ -9,8 +9,8 @@ import type {
   CustodyGrantViolation,
   CustodyStateViolation,
 } from '../state/rules';
-import type { Cardano } from '@cardano-sdk/core';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** The body list an input belongs to. */
 export type CustodyInputSource = 'collaterals' | 'inputs' | 'referenceInputs';

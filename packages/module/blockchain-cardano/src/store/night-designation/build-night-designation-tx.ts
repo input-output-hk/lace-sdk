@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { TransactionBuilder } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
 import {
   buildNightDesignationTxBlueprint,
   Ok,
@@ -11,10 +11,10 @@ import {
   type Result,
 } from '@lace-lib/cnight-dust-designation';
 
-import type * as Crypto from '@cardano-sdk/crypto';
-import type { TxEvaluator } from '@cardano-sdk/tx-construction';
-import type { HexBlob } from '@cardano-sdk/util';
-import type { RequiredProtocolParameters } from '@lace-contract/cardano-context';
+import type * as Crypto from '@lace-lib/cardano-crypto';
+import type { TxEvaluator } from '@lace-lib/cardano-tx-builder';
+import type { HexBlob } from '@lace-lib/cardano-util';
+import type { Logger } from 'ts-log';
 
 // =====================================================================
 // buildNightDesignationTx — map a cNIGHT designation blueprint onto the
@@ -22,10 +22,10 @@ import type { RequiredProtocolParameters } from '@lace-contract/cardano-context'
 // unsigned tx.
 // =====================================================================
 // Pure over its injected `NightDesignationTxBuilderDependencies` (cover +
-// collateral UTxOs, input resolver, bounded ex-units evaluator) — no
-// network, no Redux — so it unit-tests with fakes. The build side-effect
-// assembles the dependencies from account state + the Cardano provider
-// and feeds the already-resolved registration UTxO in via `params.action`.
+// collateral UTxOs, bounded ex-units evaluator), with no network and no
+// Redux, so it unit-tests with fakes. The build side-effect assembles the
+// dependencies from account state + the Cardano provider and feeds the
+// already-resolved registration UTxO in via `params.action`.
 //
 // The deterministic Plutus parts (datum, redeemers, script, mint,
 // withdrawal, min-utxo) come from `buildNightDesignationTxBlueprint`
@@ -51,8 +51,7 @@ export type BuildNightDesignationTxParams = {
 
 /**
  * Dependencies the local builder needs that are NOT derivable from the
- * blueprint: the network magic, the UTxO pools, an input resolver covering
- * every input (script inputs included), and an ex-units evaluator.
+ * blueprint: the network magic, the UTxO pools and an ex-units evaluator.
  */
 export type NightDesignationTxBuilderDependencies = {
   networkMagic: Cardano.NetworkMagics;
@@ -60,10 +59,10 @@ export type NightDesignationTxBuilderDependencies = {
   coverUtxos: Cardano.Utxo[];
   /** UTxOs collateral may be drawn from; may be the cover pool itself. */
   collateralUtxos: Cardano.Utxo[];
-  /** Resolves every input (cNIGHT, cover, script registration) to its output. */
-  inputResolver: Cardano.InputResolver;
   /** Computes redeemer execution units (bounded fixed budget or provider-backed). */
   txEvaluator: TxEvaluator;
+  /** Receives the transaction builder's warnings. */
+  logger?: Logger;
 };
 
 export type BuildNightDesignationTxResult = {
@@ -100,8 +99,7 @@ export const buildNightDesignationTx = async (
 
   const builder = new TransactionBuilder(
     dependencies.networkMagic,
-    // Full protocol parameters are a structural superset of the pick.
-    params.protocolParameters as RequiredProtocolParameters,
+    params.protocolParameters,
   );
 
   builder
@@ -112,8 +110,9 @@ export const buildNightDesignationTx = async (
     .setPlutusContext({
       costModels: params.protocolParameters.costModels,
       txEvaluator: dependencies.txEvaluator,
-      inputResolver: dependencies.inputResolver,
     });
+
+  if (dependencies.logger) builder.setLogger(dependencies.logger);
 
   // One multi-purpose Plutus V3 script serves mint + spend + withdrawal.
   // Core PlutusScript.bytes needs the RAW script bytes, not blueprint.scriptCbor's

@@ -16,8 +16,6 @@ import {
 
 import { LazyWalletMismatchError } from './lazy-wallet-mismatch-error';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import type {
   CardanoBip32AccountProps,
   CardanoDataSigner,
@@ -31,6 +29,8 @@ import type {
   AnyAccount,
   LazyInMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 /**
  * Supplies recovery words for one signature, keeping them inside a callback:

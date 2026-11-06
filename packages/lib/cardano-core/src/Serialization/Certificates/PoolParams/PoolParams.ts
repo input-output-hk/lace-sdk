@@ -17,6 +17,63 @@ type PoolOwners = CborSet<
   Crypto.Ed25519KeyHashHex,
   Hash<Crypto.Ed25519KeyHashHex>
 >;
+
+const BLS_KEY_ELEMENT_COUNT = 2;
+const BLS_PUBLIC_KEY_SIZE = 96;
+const BLS_PROOF_OF_POSSESSION_SIZE = 48;
+
+/**
+ * Checks that a pool BLS key has a 96 byte public key and a 48 byte proof of possession.
+ *
+ * @param blsKey The BLS key to check, if any.
+ */
+const assertBlsKeySizes = (blsKey: Cardano.PoolBlsKey | undefined) => {
+  if (!blsKey) return;
+
+  const publicKeySize = blsKey.publicKey.length / 2;
+  if (publicKeySize !== BLS_PUBLIC_KEY_SIZE)
+    throw new InvalidArgumentError(
+      'blsKey',
+      `Expected a BLS public key of ${BLS_PUBLIC_KEY_SIZE} bytes, but got ${publicKeySize} bytes`,
+    );
+
+  const proofSize = blsKey.proofOfPossession.length / 2;
+  if (proofSize !== BLS_PROOF_OF_POSSESSION_SIZE)
+    throw new InvalidArgumentError(
+      'blsKey',
+      `Expected a BLS proof of possession of ${BLS_PROOF_OF_POSSESSION_SIZE} bytes, but got ${proofSize} bytes`,
+    );
+};
+
+/**
+ * Reads a pool BLS key. An empty (null) field means the pool has no BLS key, the same as an absent field.
+ *
+ * @param reader The reader positioned at the BLS key field.
+ * @returns The BLS key, or undefined when the field is empty.
+ */
+const readBlsKey = (reader: CborReader): Cardano.PoolBlsKey | undefined => {
+  if (reader.peekState() === CborReaderState.Null) {
+    reader.readNull();
+    return undefined;
+  }
+
+  const length = reader.readStartArray();
+
+  if (length !== BLS_KEY_ELEMENT_COUNT)
+    throw new InvalidArgumentError(
+      'cbor',
+      `Expected a BLS key array of ${BLS_KEY_ELEMENT_COUNT} elements, but got an array of ${length} elements`,
+    );
+
+  const publicKey = HexBlob.fromBytes(reader.readByteString());
+  const proofOfPossession = HexBlob.fromBytes(reader.readByteString());
+  const blsKey = { proofOfPossession, publicKey };
+
+  reader.readEndArray();
+
+  return blsKey;
+};
+
 /**
  * Stake pool update certificate parameters.
  *
@@ -33,9 +90,11 @@ export class PoolParams {
   #poolOwners: PoolOwners;
   #relays: Array<Relay>;
   #poolMetadata?: PoolMetadata;
+  #blsKey?: Cardano.PoolBlsKey;
   #originalBytes: HexBlob | undefined = undefined;
 
   static readonly subgroupCount = 9;
+  static readonly subgroupCountWithBlsKey = 10;
 
   /**
    * Initializes a new instance of the PoolParams class.
@@ -49,6 +108,7 @@ export class PoolParams {
    * @param poolOwners The public keys of the owners of the stake pool.
    * @param relays The network addresses (IP and/or DNS) of the relay nodes running in the pool.
    * @param poolMetadata  If the pool has associated metadata, this will include the hash of that metadata and the URL where the metadata file can be found.
+   * @param blsKey The pool BLS key, if the pool has one.
    */
   constructor(
     operator: Crypto.Ed25519KeyHashHex,
@@ -60,7 +120,10 @@ export class PoolParams {
     poolOwners: PoolOwners,
     relays: Array<Relay>,
     poolMetadata?: PoolMetadata,
+    blsKey?: Cardano.PoolBlsKey,
   ) {
+    assertBlsKeySizes(blsKey);
+
     this.#operator = operator;
     this.#vrfKeyHash = vrfKeyHash;
     this.#pledge = pledge;
@@ -70,6 +133,7 @@ export class PoolParams {
     this.#poolOwners = poolOwners;
     this.#relays = relays;
     this.#poolMetadata = poolMetadata;
+    this.#blsKey = blsKey;
   }
 
   /**
@@ -85,6 +149,7 @@ export class PoolParams {
     // CDDL
     // pool_params = ( operator:       pool_keyhash
     //               , vrf_keyhash:    vrf_keyhash
+    //               , ? bls_key:      bls_key / nil
     //               , pledge:         coin
     //               , cost:           coin
     //               , margin:         unit_interval
@@ -93,7 +158,7 @@ export class PoolParams {
     //               , relays:         [* relay]
     //               , pool_metadata:  pool_metadata / null
     //               )
-    writer.writeStartArray(PoolParams.subgroupCount);
+    writer.writeStartArray(this.fieldCount());
     return this.toFlattenedCbor(writer);
   }
 
@@ -109,6 +174,15 @@ export class PoolParams {
   toFlattenedCbor(writer: CborWriter): HexBlob {
     writer.writeByteString(Buffer.from(this.#operator, 'hex'));
     writer.writeByteString(Buffer.from(this.#vrfKeyHash, 'hex'));
+
+    if (this.#blsKey) {
+      writer.writeStartArray(BLS_KEY_ELEMENT_COUNT);
+      writer.writeByteString(Buffer.from(this.#blsKey.publicKey, 'hex'));
+      writer.writeByteString(
+        Buffer.from(this.#blsKey.proofOfPossession, 'hex'),
+      );
+    }
+
     writer.writeInt(this.#pledge);
     writer.writeInt(this.#cost);
     writer.writeEncodedValue(Buffer.from(this.#margin.toCbor(), 'hex'));
@@ -140,13 +214,19 @@ export class PoolParams {
 
     const length = reader.readStartArray();
 
-    if (length !== PoolParams.subgroupCount)
+    if (
+      length !== PoolParams.subgroupCount &&
+      length !== PoolParams.subgroupCountWithBlsKey
+    )
       throw new InvalidArgumentError(
         'cbor',
-        `Expected an array of ${PoolParams.subgroupCount} elements, but got an array of ${length} elements`,
+        `Expected an array of ${PoolParams.subgroupCount} or ${PoolParams.subgroupCountWithBlsKey} elements, but got an array of ${length} elements`,
       );
 
-    const params = PoolParams.fromFlattenedCbor(reader);
+    const params = PoolParams.fromFlattenedCbor(
+      reader,
+      length === PoolParams.subgroupCountWithBlsKey,
+    );
 
     params.#originalBytes = cbor;
 
@@ -159,13 +239,15 @@ export class PoolParams {
    * certificate type.
    *
    * @param reader The reader that started reading the subgroup
+   * @param hasBlsKey Whether the group carries the BLS key field, which the caller knows from the group size.
    * @returns The new PoolParams instance.
    */
-  static fromFlattenedCbor(reader: CborReader): PoolParams {
+  static fromFlattenedCbor(reader: CborReader, hasBlsKey = false): PoolParams {
     const operator = Crypto.Ed25519KeyHashHex(
       HexBlob.fromBytes(reader.readByteString()),
     );
     const vrfKeyHash = VrfVkHex(HexBlob.fromBytes(reader.readByteString()));
+    const blsKey = hasBlsKey ? readBlsKey(reader) : undefined;
     const pledge = reader.readInt();
     const cost = reader.readInt();
     const margin = UnitInterval.fromCbor(
@@ -209,6 +291,7 @@ export class PoolParams {
       poolOwner,
       relays,
       poolMetadata,
+      blsKey,
     );
   }
 
@@ -240,6 +323,8 @@ export class PoolParams {
     if (this.#poolMetadata)
       poolParams.metadataJson = this.#poolMetadata.toCore();
 
+    if (this.#blsKey) poolParams.blsKey = { ...this.#blsKey };
+
     return poolParams;
   }
 
@@ -268,7 +353,20 @@ export class PoolParams {
       params.metadataJson
         ? PoolMetadata.fromCore(params.metadataJson)
         : undefined,
+      params.blsKey,
     );
+  }
+
+  /**
+   * Gets the number of fields the pool parameters flatten into, which grows by one when
+   * the pool has a BLS key.
+   *
+   * @returns The number of fields of the pool parameters group.
+   */
+  fieldCount(): number {
+    return this.#blsKey
+      ? PoolParams.subgroupCountWithBlsKey
+      : PoolParams.subgroupCount;
   }
 
   /**
@@ -445,6 +543,26 @@ export class PoolParams {
    */
   setPoolMetadata(poolMetadata: PoolMetadata): void {
     this.#poolMetadata = poolMetadata;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the pool BLS key, introduced in the Dijkstra era.
+   *
+   * @returns The BLS key, or undefined when the pool has none.
+   */
+  blsKey(): Cardano.PoolBlsKey | undefined {
+    return this.#blsKey;
+  }
+
+  /**
+   * Sets the pool BLS key, introduced in the Dijkstra era.
+   *
+   * @param blsKey The BLS key, or undefined to remove it.
+   */
+  setBlsKey(blsKey: Cardano.PoolBlsKey | undefined): void {
+    assertBlsKeySizes(blsKey);
+    this.#blsKey = blsKey;
     this.#originalBytes = undefined;
   }
 }

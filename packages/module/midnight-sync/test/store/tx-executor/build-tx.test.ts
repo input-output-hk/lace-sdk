@@ -1,7 +1,7 @@
-import { createTestScheduler } from '@cardano-sdk/util-dev';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { TokenId } from '@lace-contract/tokens';
 import { genericErrorResults } from '@lace-contract/tx-executor';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { BigNumber } from '@lace-lib/util';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import {

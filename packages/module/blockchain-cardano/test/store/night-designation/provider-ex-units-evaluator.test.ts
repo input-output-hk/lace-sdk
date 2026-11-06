@@ -3,7 +3,7 @@ import {
   ProviderError,
   ProviderFailure,
   Serialization,
-} from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
 import { Err, Ok } from '@lace-lib/util';
 import { of, throwError } from 'rxjs';
 import { dummyLogger } from 'ts-log';
@@ -107,6 +107,31 @@ describe('createProviderExUnitsEvaluator', () => {
     ]);
   });
 
+  it('declares the evaluated budget for guarding, vote and propose redeemers by their purpose', async () => {
+    const purposes = [
+      Cardano.RedeemerPurpose.guarding,
+      Cardano.RedeemerPurpose.vote,
+      Cardano.RedeemerPurpose.propose,
+    ];
+    const budget = { memory: 100_000, steps: 40_000_000 };
+    const evaluateTx = vi.fn(() =>
+      of(Ok(purposes.map(purpose => ({ purpose, index: 0, budget })))),
+    );
+
+    const result = await makeEvaluator(evaluateTx).evaluate(
+      tx(purposes.map(purpose => redeemer(purpose, 0))),
+      [],
+    );
+
+    expect(result).toEqual(
+      purposes.map(purpose => ({
+        purpose,
+        index: 0,
+        budget: { memory: 110_000, steps: 44_000_000 },
+      })),
+    );
+  });
+
   it('sends the transaction CBOR to the provider for the chain being built', async () => {
     const evaluateTx = vi.fn(() => of(Ok(evaluated)));
 
@@ -124,6 +149,19 @@ describe('createProviderExUnitsEvaluator', () => {
       props.tx as Serialization.TxCBOR,
     ).toCore();
     expect(sent.witness.redeemers).toHaveLength(2);
+  });
+
+  it('sends the transaction the builder serialized, when given, instead of writing it again', async () => {
+    const evaluateTx = vi.fn(() => of(Ok(evaluated)));
+    const serialized = Serialization.Transaction.fromCore(mintAndSpend);
+    serialized.setAuxiliaryData(
+      Serialization.AuxiliaryData.fromCore({ blob: new Map([[1n, 'kept']]) }),
+    );
+
+    await makeEvaluator(evaluateTx).evaluate(mintAndSpend, [], serialized);
+
+    const [props] = evaluateTx.mock.calls[0] as unknown as [{ tx: string }];
+    expect(props.tx).toBe(serialized.toCbor());
   });
 
   it('keeps the bounded budget for every redeemer when the provider declines to evaluate', async () => {

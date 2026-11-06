@@ -3,7 +3,8 @@ import {
   ProviderError,
   ProviderFailure,
   Serialization,
-} from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
+import { serializeTransaction } from '@lace-lib/cardano-tx-builder';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CustodyBuildFailure } from '../../../src/store/custody/build-failure';
@@ -39,7 +40,7 @@ import {
   version,
 } from './fixtures';
 
-import type { EraSummary } from '@cardano-sdk/core';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 const TOKEN = Cardano.AssetId(`${'99'.repeat(28)}746f6b656e`);
 
@@ -134,7 +135,7 @@ describe('restorePlannedOutputs', () => {
     outputs: Cardano.TxOut[],
     collateral: Partial<Cardano.TxBody> = {},
   ) =>
-    Serialization.Transaction.fromCore({
+    serializeTransaction({
       id: '0'.repeat(64) as Cardano.TransactionId,
       body: {
         inputs: [{ txId: '1'.repeat(64) as Cardano.TransactionId, index: 0 }],
@@ -270,10 +271,8 @@ describe('fee floors', () => {
   it('prices attached scripts by size and referenced scripts at the reference-script price', () => {
     const attachedBytes = BigInt(version.accountValidator.bytes.length / 2);
     const [[, logicUtxo]] = parkedScriptUtxos.slice(1);
-    // The tagged CBOR of a Plutus V3 script: its bytes, their header and the tag.
     const referencedBytes = BigInt(
-      Serialization.Script.fromCore(logicUtxo.scriptReference!).toCbor()
-        .length / 2,
+      (logicUtxo.scriptReference as Cardano.PlutusScript).bytes.length / 2,
     );
     expect(leastFeeOf(plan, protocolParameters)).toBe(
       BigInt(protocolParameters.minFeeConstant) +

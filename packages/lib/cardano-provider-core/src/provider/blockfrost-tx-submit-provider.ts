@@ -2,11 +2,14 @@ import {
   ProviderError,
   TxSubmissionError,
   TxSubmissionErrorCode,
-} from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
 
 import { BlockfrostProvider } from '../blockfrost-provider';
 
-import type { SubmitTxArgs, ValueNotConservedData } from '@cardano-sdk/core';
+import type {
+  SubmitTxArgs,
+  ValueNotConservedData,
+} from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
 

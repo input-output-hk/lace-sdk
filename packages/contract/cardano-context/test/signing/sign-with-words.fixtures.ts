@@ -1,9 +1,9 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { HexBytes } from '@lace-lib/util';
 
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 /** A preprod account and a transaction it can sign, shared by the words-based signing tests. */
 export const words =

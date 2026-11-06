@@ -1,4 +1,3 @@
-import { minAdaRequired } from '@cardano-sdk/tx-construction';
 import {
   CardanoRewardAccount,
   isCardanoCustodyGrantExhausted,
@@ -17,6 +16,7 @@ import {
   revokeCustodyGrant,
   sweepCustodyGrants,
 } from '@lace-lib/cardano-custody';
+import { minAdaRequired } from '@lace-lib/cardano-tx-builder';
 import { BigNumber } from '@lace-lib/util';
 
 import {
@@ -69,14 +69,14 @@ import type {
   CustodyLogicRun,
   CustodyScriptWitnesses,
 } from './custody-scripts';
-import type { Cardano, Serialization } from '@cardano-sdk/core';
-import type * as Crypto from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildResult,
   CardanoCustodyCollateralFunding,
   CardanoCustodyGrantScopeRequest,
 } from '@lace-contract/cardano-context';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountState,
   CustodyGrant,

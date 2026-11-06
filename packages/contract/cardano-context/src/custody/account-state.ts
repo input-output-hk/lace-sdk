@@ -1,4 +1,3 @@
-import { minAdaRequired } from '@cardano-sdk/tx-construction';
 import {
   classifyCustodyAccountUtxos,
   decodeCustodyAccountState,
@@ -6,16 +5,17 @@ import {
   findCustodyContractVersion,
   findCustodyLogic,
 } from '@lace-lib/cardano-custody';
+import { minAdaRequired } from '@lace-lib/cardano-tx-builder';
 
 import type { CardanoCustodyAccountProps } from '../types';
-import type { Cardano } from '@cardano-sdk/core';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type {
   CustodyAccountState,
   CustodyDecodeError,
   CustodyGrantUtxo,
   CustodyUtxoAnomaly,
 } from '@lace-lib/cardano-custody';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** Why the control state of a created custody account cannot be read. */
 export type CardanoCustodyInvalidReason =

@@ -34,6 +34,34 @@ describe('Cardano/types/Transaction', () => {
     });
   });
 
+  describe('HydratedSubTransaction', () => {
+    it('carries its id and inputs that hold the address of the output they spend', () => {
+      expectTypeOf<
+        Cardano.HydratedSubTransaction['id']
+      >().toEqualTypeOf<Cardano.TransactionId>();
+      expectTypeOf<
+        Cardano.HydratedSubTransaction['body']['inputs']
+      >().toEqualTypeOf<Cardano.HydratedTxIn[]>();
+      expectTypeOf<
+        Cardano.HydratedSubTransaction['body']['referenceInputs']
+      >().toEqualTypeOf<Cardano.HydratedTxIn[] | undefined>();
+    });
+
+    it('is the sub transaction type of a hydrated body but not of a core body', () => {
+      expectTypeOf<Cardano.HydratedTxBody['subTransactions']>().toEqualTypeOf<
+        Cardano.HydratedSubTransaction[] | undefined
+      >();
+      expectTypeOf<Cardano.TxBody['subTransactions']>().toEqualTypeOf<
+        Cardano.SubTransaction[] | undefined
+      >();
+    });
+
+    it('is readable wherever a core sub transaction is expected', () => {
+      expectTypeOf<Cardano.HydratedSubTransaction>().toExtend<Cardano.SubTransaction>();
+      expectTypeOf<Cardano.HydratedTxBody>().toExtend<Cardano.TxBody>();
+    });
+  });
+
   it('Ed25519Signature() accepts a valid signature hex string', () => {
     expect(() =>
       Ed25519SignatureHex(

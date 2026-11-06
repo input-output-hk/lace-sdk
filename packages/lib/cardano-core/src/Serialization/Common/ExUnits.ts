@@ -83,6 +83,8 @@ export class ExUnits {
   /**
    * Creates a Core ExUnits object from the current ExUnits object.
    *
+   * Units above 2^53 are rounded in the core form, while toCbor keeps the decoded bytes.
+   *
    * @returns The Core ExUnits object.
    */
   toCore(): Cardano.ExUnits {

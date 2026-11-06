@@ -16,7 +16,7 @@ import {
 } from '../src';
 
 // A fixed account extended public key (m/1852'/1815'/0') — its derived values are
-// stable across the @cardano-sdk version this lib depends on.
+// stable across changes to the @lace-lib/cardano-* packages it goes through.
 const ACCOUNT_XPUB = Crypto.Bip32PublicKeyHex(
   'b3f8aad750c8f498d2882d1ecd74bf550e81870e89acaed82e8e10ef5871887091286d601ecfe0aafc2121154db787bf489ccf35c6b5db5d60096052c8b34c2f',
 );
@@ -42,7 +42,7 @@ describe('@lace-lib/core', () => {
     ).rejects.toThrow();
   });
 
-  it('emip3 round-trips through @cardano-sdk', async () => {
+  it('emip3 round-trips through @lace-lib/cardano-key-management', async () => {
     const data = Uint8Array.from([0xc0, 0xff, 0xee, 0x12, 0x34]);
     const passphrase = Uint8Array.from([0x70, 0x61, 0x73, 0x73]);
     const decrypted = await emip3decrypt(

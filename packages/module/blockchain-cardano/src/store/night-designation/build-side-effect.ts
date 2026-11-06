@@ -1,13 +1,12 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   CardanoRewardAccount,
-  InputSelectionError,
   LOVELACE_TOKEN_ID,
-  createInputResolver,
   filterSpendableUtxos,
   getEligibleCollateralUtxo,
   utxoKey,
 } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
+import { InputSelectionError } from '@lace-lib/cardano-tx-builder';
 import {
   CardanoDustNetwork,
   MidnightCoinPubkey,
@@ -369,11 +368,7 @@ const buildDesignation = async (
           chainId,
           logger: dependencies.logger,
         }),
-        inputResolver: createInputResolver([
-          ...cnightUtxos,
-          ...coverUtxos,
-          ...(action.kind === 'register' ? [] : [action.registrationUtxo]),
-        ]),
+        logger: dependencies.logger,
       },
     );
 

@@ -31,6 +31,7 @@ class MockKeyAgent extends KeyAgentBase {
   signCip8Data = vi.fn();
   exportRootPrivateKey = vi.fn();
   signTransaction = vi.fn();
+  signSubTransaction = vi.fn();
   signVotingMetadata = vi.fn();
   exportExtendedKeyPair = vi.fn();
 }

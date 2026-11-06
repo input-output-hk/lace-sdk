@@ -96,4 +96,79 @@ describe('Redeemers', () => {
       'Redeemers map value',
     );
   });
+
+  it.each([
+    ['spend', '00'],
+    ['mint', '01'],
+    ['cert', '02'],
+    ['reward', '03'],
+    ['voting', '04'],
+    ['proposing', '05'],
+    ['guarding', '06'],
+  ])('decodes the %s tag in the map form', (_, tag) => {
+    const redeemers = Redeemers.fromCbor(
+      HexBlob(`a182${tag}0082d8799f0102030405ff821821182c`),
+    );
+    expect(redeemers.size()).toBe(1);
+    expect(redeemers.toCbor()).toBe(
+      `a182${tag}0082d8799f0102030405ff821821182c`,
+    );
+  });
+
+  it('decodes an index of 2^32-1 in the map and array forms', () => {
+    const map = HexBlob('a182001affffffff82d8799f0102030405ff821821182c');
+    const array = HexBlob('8184001affffffffd8799f0102030405ff821821182c');
+
+    expect(Redeemers.fromCbor(map).values()[0].index()).toBe(4_294_967_295n);
+    expect(Redeemers.fromCbor(array).values()[0].index()).toBe(4_294_967_295n);
+  });
+
+  it('rejects an index above 2^32-1 in the map and array forms', () => {
+    const map = HexBlob(
+      'a182001b000000010000000082d8799f0102030405ff821821182c',
+    );
+    const array = HexBlob(
+      '8184001b0000000100000000d8799f0102030405ff821821182c',
+    );
+
+    expect(() => Redeemers.fromCbor(map)).toThrowError('Redeemer index');
+    expect(() => Redeemers.fromCbor(array)).toThrowError('Redeemer index');
+  });
+
+  it('rejects an unknown tag in the map and array forms', () => {
+    const map = HexBlob('a182070082d8799f0102030405ff821821182c');
+    const array = HexBlob('81840700d8799f0102030405ff821821182c');
+
+    expect(() => Redeemers.fromCbor(map)).toThrowError('Unknown redeemer tag');
+    expect(() => Redeemers.fromCbor(array)).toThrowError(
+      'Unknown redeemer tag',
+    );
+  });
+
+  it.each([true, false])(
+    'writes an index of 2^32-1 when in conway era is %s',
+    inConwayEra => {
+      setInConwayEra(inConwayEra);
+      const redeemers = Redeemers.fromCore([
+        { ...core[0], index: 2 ** 32 - 1 },
+      ]);
+
+      expect(Redeemers.fromCbor(redeemers.toCbor()).values()[0].index()).toBe(
+        4_294_967_295n,
+      );
+    },
+  );
+
+  it.each([
+    [true, 'a182001b000000010000000082d8799f0102030405ff821821182c'],
+    [false, '8184001b0000000100000000d8799f0102030405ff821821182c'],
+  ])(
+    'writes an index above 2^32-1 when in conway era is %s so a placeholder index can be encoded while estimating fees',
+    (inConwayEra, expected) => {
+      setInConwayEra(inConwayEra);
+      const redeemers = Redeemers.fromCore([{ ...core[0], index: 2 ** 32 }]);
+
+      expect(redeemers.toCbor()).toEqual(expected);
+    },
+  );
 });

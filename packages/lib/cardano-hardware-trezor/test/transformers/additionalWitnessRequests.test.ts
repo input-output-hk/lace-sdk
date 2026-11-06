@@ -1,4 +1,4 @@
-import { Cardano } from '@lace-lib/cardano-core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import * as Crypto from '@lace-lib/cardano-crypto';
 import { KeyRole, TxInId } from '@lace-lib/cardano-key-management';
 
@@ -57,19 +57,42 @@ describe('additionalWitnessRequests', () => {
     ).toEqual([paymentBip32Path, knownAddressStakeKeyPath]);
   });
 
-  it('requests the stake key a native script in the context requires', () => {
-    expect(
-      mapAdditionalWitnessRequests(minValidTxBody, {
-        ...context,
-        scripts: [
-          {
-            __type: Cardano.ScriptType.Native,
-            keyHash: Crypto.Ed25519KeyHashHex(stakeKeyHash),
-            kind: Cardano.NativeScriptKind.RequireSignature,
-          },
+  describe('with a native script in the context', () => {
+    const script: Cardano.Script = {
+      __type: Cardano.ScriptType.Native,
+      keyHash: Crypto.Ed25519KeyHashHex(stakeKeyHash),
+      kind: Cardano.NativeScriptKind.RequireSignature,
+    };
+    const mintingBody = {
+      ...minValidTxBody,
+      mint: new Map([
+        [
+          Cardano.AssetId.fromParts(
+            Cardano.PolicyId(Serialization.Script.fromCore(script).hash()),
+            Cardano.AssetName(''),
+          ),
+          1n,
         ],
-      }),
-    ).toEqual([paymentBip32Path, knownAddressStakeKeyPath]);
+      ]),
+    };
+
+    it('requests the stake key the script requires when the body needs it', () => {
+      expect(
+        mapAdditionalWitnessRequests(mintingBody, {
+          ...context,
+          scripts: [script],
+        }),
+      ).toEqual([paymentBip32Path, knownAddressStakeKeyPath]);
+    });
+
+    it('does not request the stake key when the body does not need the script', () => {
+      expect(
+        mapAdditionalWitnessRequests(minValidTxBody, {
+          ...context,
+          scripts: [script],
+        }),
+      ).toEqual([paymentBip32Path]);
+    });
   });
 
   it('requests the stake key a certificate needs, not the first known address one', () => {

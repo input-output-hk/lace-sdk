@@ -1,6 +1,6 @@
-import { util } from '@cardano-sdk/key-management';
 import { createSecureStorePasswordManager } from '@lace-contract/authentication-prompt';
 import { stampWalletOnboardedAt } from '@lace-contract/wallet-repo';
+import { util } from '@lace-lib/cardano-key-management';
 import { classifyHardwareError } from '@lace-lib/util-hw';
 import {
   catchError,

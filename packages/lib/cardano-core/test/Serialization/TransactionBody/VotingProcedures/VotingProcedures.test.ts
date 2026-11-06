@@ -118,6 +118,16 @@ describe('VotingProcedures', () => {
     expect(procedures.toCbor()).toEqual(cbor);
   });
 
+  it('rejects a voter that has no votes', () => {
+    const emptyVotesCbor = HexBlob(
+      'a18202581c10000000000000000000000000000000000000000000000000000000a0',
+    );
+
+    expect(() => VotingProcedures.fromCbor(emptyVotesCbor)).toThrowError(
+      'Voting procedures must have at least one vote per voter',
+    );
+  });
+
   it('can encode VotingProcedures to Core', () => {
     const procedures = VotingProcedures.fromCbor(cbor);
 

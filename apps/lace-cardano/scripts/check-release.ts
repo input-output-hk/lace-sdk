@@ -15,8 +15,8 @@
  *   version;
  * - in a stable release (`lace-sdk@X.Y.Z`), a new version must be above the
  *   latest stable on npm and, against that release's declarations, break no
- *   export without the version bump and the prior `@deprecated` the rules
- *   require;
+ *   export without the version bump the rules require and, from 1.0, the
+ *   prior `@deprecated`;
  * - in a canary release (`lace-sdk@X.Y.Z-canary.N`), every package publishes
  *   at the canary version on the `canary` dist-tag, which must preview a
  *   version above its latest stable on npm and not sort below a version npm
@@ -94,7 +94,12 @@ const NPM_REGISTRY = [
   }`,
 ];
 
-/** Each package, with the declaration file of each entry it exports. */
+/**
+ * Each package, with the declaration file of each entry it exports. An entry
+ * a release removed stays listed until the previous stable release no longer
+ * declares it: a build without its declarations is read without it, so the
+ * exports of the release before count as removed.
+ */
 const PACKAGES = [
   {
     directory: 'apps/lace-cardano',
@@ -103,9 +108,10 @@ const PACKAGES = [
       'crypto',
       'util',
       'key-management',
+      'tx-builder',
+      'dapp-connector',
       'input-selection',
       'tx-construction',
-      'dapp-connector',
     ],
   },
   { directory: 'apps/lace-cardano-ledger', entries: ['index'] },

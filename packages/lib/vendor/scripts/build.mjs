@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Builds @lace-lib/vendor into self-contained, NO-MINIFY browser bundles —
 // the ADR-37 audit artifact and the host's SINGLE admission mechanism. Every
-// trusted external tree admitted into the privileged host (@cardano-sdk, the
-// HW SDK trees, the Midnight engine derivation, the QR codecs) enters ONLY as
-// a dedicated entrypoint of this lib, committed as reviewable built output — so
-// an upstream bump surfaces as a real code diff, not a version-string change.
+// trusted tree admitted into the privileged host (the workspace Cardano
+// packages, the HW SDK trees, the Midnight engine derivation, the QR codecs)
+// enters ONLY as a dedicated entrypoint of this lib, committed as reviewable
+// built output, so an upstream bump surfaces as a real code diff, not a
+// version-string change.
 // This is what makes "audit the actual production code" true rather than "pin
 // and trust the registry".
 //
@@ -15,25 +16,27 @@
 // a layer split is STRUCTURAL — a light surface never pulls a heavy tree it does
 // not use, and a CI metafile assertion (LIGHT_ENTRY_EXCLUSIONS) pins that. With
 // splitting on, code shared across entries lands in ONE hashed chunk, so there
-// is exactly ONE @cardano-sdk copy per document rather than a copy re-inlined
-// into every entry (the second-copy hazard the Ledger tree would otherwise
-// create). Chunk names carry a [hash] (esbuild errors on colliding non-hashed
-// chunk names), and dist/chunks.map.json distills the metafile into the review
-// index (output file → the top-level input packages inside it) so a diff over
-// no-minify output + `git diff -M` reads as real code.
+// is exactly ONE Cardano domain-layer copy per document rather than a copy
+// re-inlined into every entry (the second-copy hazard the Ledger tree would
+// otherwise create). Chunk names carry a [hash] (esbuild errors on colliding
+// non-hashed chunk names), and dist/chunks.map.json distills the metafile into
+// the review index (output file -> the top-level input packages inside it) so a
+// diff over no-minify output + `git diff -M` reads as real code.
 //
-// The build runs in the WORKSPACE (the root resolves @cardano-sdk), and the
-// browser shims (Buffer/process/stream + node-built-in stubs) are baked in
-// HERE — so the host consumes browser-ready bundles and @cardano-sdk NEVER
-// enters the host's own dependency closure (only the inlined dist does).
+// The build runs in the WORKSPACE (the root resolves the @lace-lib/cardano-*
+// packages to their TypeScript source), and the browser shims
+// (Buffer/process/stream + node-built-in stubs) are baked in HERE - so the host
+// consumes browser-ready bundles and the Cardano packages NEVER enter the
+// host's own dependency closure (only the inlined dist does).
 // esbuild is the host's TCB bundler (ADR 37 "one engine").
 //
 // Size is dominated by load-bearing audited crypto: the libsodium Ed25519/
-// BIP32 derivation (via Crypto.SodiumBip32Ed25519) and the @cardano-sdk/core
-// CBOR decoder (the canonical tx summary). The one material trim is shipping
-// bip39 English-only — the only wordlist Lace uses. Slimming further means
-// swapping SodiumBip32Ed25519 for a pure-JS derivation, a separate
-// behaviour-sensitive change in @lace-lib/core (ADR 37's slimming lever).
+// BIP32 derivation (via Crypto.SodiumBip32Ed25519) and the
+// @lace-lib/cardano-core CBOR decoder (the canonical tx summary). The one
+// material trim is shipping bip39 English-only, the only wordlist Lace uses.
+// Slimming further means swapping SodiumBip32Ed25519 for a pure-JS derivation,
+// a separate behaviour-sensitive change in @lace-lib/core (ADR 37's slimming
+// lever).
 import { execFileSync } from 'node:child_process';
 import {
   mkdirSync,
@@ -80,18 +83,18 @@ mkdirSync(dist, { recursive: true });
 //     kept off the key-agent signing tree by the LIGHT_ENTRY_EXCLUSIONS rows
 //     below.
 //   - ledger-cardano-key-agent: the HEAVY Ledger signing tree
-//     (@cardano-sdk/hardware-ledger + the crypto/key-management interop the
-//     signer surface constructs the agent from). Shares one @cardano-sdk copy
-//     with /index via the split chunks.
+//     (@lace-lib/cardano-hardware-ledger + the crypto/key-management interop
+//     the signer surface constructs the agent from). Shares one Cardano
+//     domain-layer copy with /index via the split chunks.
 //   - trezor-connect: the chain-agnostic @trezor/connect-webextension runtime
 //     (pairing + signing, both chains) — a LIGHT group kept off the Cardano
 //     signing tree by the LIGHT_ENTRY_EXCLUSIONS row below (ADR 37). The
 //     content-script bridge it uses is the SEPARATE trezor-bridge IIFE pass.
 //   - trezor-cardano: the HEAVY Trezor Cardano signing tree — our own port
 //     (@lace-lib/cardano-hardware-trezor) + the crypto/key-management interop.
-//     Its ported domain-layer imports resolve to the @cardano-sdk copies /index
-//     carries (portedDomainOverSdk), so it shares one domain-layer copy with
-//     /index + /ledger-cardano-key-agent via the split chunks; its internal
+//     It imports the same workspace domain-layer packages /index carries, so it
+//     shares one domain-layer copy with /index + /ledger-cardano-key-agent via
+//     the split chunks; its internal
 //     @trezor/connect-web import is aliased to the same webextension copy
 //     /trezor-connect resolves (trezorConnectWebAlias).
 const entryPoints = {
@@ -111,36 +114,40 @@ const entryPoints = {
 // must not drag a HEAVY tree into its bundle. Row = entry name → forbidden
 // top-level package names anywhere in that entry's transitive output closure.
 // Each admission commit pins ITS light entries here (e.g. ledger-cardano-app /
-// webhid / qr must exclude @cardano-sdk/hardware-ledger and the midnight engine).
+// webhid / qr must exclude @lace-lib/cardano-hardware-ledger and the midnight
+// engine). A workspace package is bundled from its source beside this one, so
+// its inputs carry no node_modules segment: topLevelPackage names it from its
+// own manifest, which is what lets these rows bite on the workspace packages.
 //   - index: must never grow the Midnight engine — the SW + ceremony surfaces
 //     consume /index, and the engine belongs to the offscreen /midnight layer
 //     alone. wallet-sdk-hd (the pure-JS HD derivation leaf) stays in /index and
 //     is a DISTINCT top-level package from the excluded wallet-sdk umbrella.
 //   - ledger-cardano-app / webhid: the LIGHT pairing/verify surfaces must never
-//     pull the Ledger signing tree (@cardano-sdk/hardware-ledger) — that is the
-//     structural split ADR 37 pins (pairing uses the ledgerjs app directly, not
-//     LedgerKeyAgent) — nor the Midnight engine.
+//     pull the Ledger signing tree (@lace-lib/cardano-hardware-ledger) - that
+//     is the structural split ADR 37 pins (pairing uses the ledgerjs app
+//     directly, not LedgerKeyAgent) - nor the Midnight engine.
 //   - trezor-connect: the chain-agnostic Connect runtime must never pull the
 //     Cardano Trezor signing tree (@lace-lib/cardano-hardware-trezor) — the
 //     entry is chain-agnostic by definition, so the split is structural
 //     (ADR 37) — nor the Midnight engine.
 //   - qr: the render/scan surface (qrcode + jsqr) is pure JS — the air-gapped
 //     exchange loads it in its own light document, so it must never pull the
-//     @cardano-sdk surface, the Ledger signing tree, or the Midnight engine
+//     Cardano domain layer (@lace-lib/cardano-core, -crypto, -util and
+//     -key-management), the Ledger signing tree, or the Midnight engine
 //     (ADR 37).
 //   - zxcvbn: the password-strength estimator is pure JS — the create/import
 //     ceremony surfaces load it to gate the wallet password, so like qr it must
-//     never pull the @cardano-sdk surface, the Ledger signing tree, or the
+//     never pull the Cardano domain layer, the Ledger signing tree, or the
 //     Midnight engine (ADR 37).
 const LIGHT_ENTRY_EXCLUSIONS = {
   index: ['@midnight-ntwrk/ledger-v8', '@midnightntwrk/wallet-sdk'],
   'ledger-cardano-app': [
-    '@cardano-sdk/hardware-ledger',
+    '@lace-lib/cardano-hardware-ledger',
     '@midnight-ntwrk/ledger-v8',
     '@midnightntwrk/wallet-sdk',
   ],
   webhid: [
-    '@cardano-sdk/hardware-ledger',
+    '@lace-lib/cardano-hardware-ledger',
     '@midnight-ntwrk/ledger-v8',
     '@midnightntwrk/wallet-sdk',
   ],
@@ -150,14 +157,20 @@ const LIGHT_ENTRY_EXCLUSIONS = {
     '@midnightntwrk/wallet-sdk',
   ],
   qr: [
-    '@cardano-sdk/core',
-    '@cardano-sdk/hardware-ledger',
+    '@lace-lib/cardano-core',
+    '@lace-lib/cardano-crypto',
+    '@lace-lib/cardano-hardware-ledger',
+    '@lace-lib/cardano-key-management',
+    '@lace-lib/cardano-util',
     '@midnight-ntwrk/ledger-v8',
     '@midnightntwrk/wallet-sdk',
   ],
   zxcvbn: [
-    '@cardano-sdk/core',
-    '@cardano-sdk/hardware-ledger',
+    '@lace-lib/cardano-core',
+    '@lace-lib/cardano-crypto',
+    '@lace-lib/cardano-hardware-ledger',
+    '@lace-lib/cardano-key-management',
+    '@lace-lib/cardano-util',
     '@midnight-ntwrk/ledger-v8',
     '@midnightntwrk/wallet-sdk',
   ],
@@ -224,14 +237,15 @@ const libsodiumSkipDataUriFetch = {
 };
 
 // Import-safe, use-fatal stub for the node-only / unused Ledger transports.
-// @cardano-sdk/hardware-ledger statically requires node-hid +
+// @lace-lib/cardano-hardware-ledger statically requires node-hid +
 // @ledgerhq/hw-transport-node-hid-noevents + @ledgerhq/hw-transport-webusb, and
 // its LedgerKeyAgent READS them at MODULE SCOPE to seed capability references
 // (`TransportWebUSB = import_hw_transport_webusb.default.default`) before any
 // device work. WebHID is the ONE transport the closure admits (ADR 37 "a single
 // transport variant"), and the host constructs LedgerKeyAgent directly with an
-// already-open WebHID deviceConnection (ledger-signer.ts — no createWithDevice),
-// so it never reaches the SDK's auto-connect transport methods that USE these.
+// already-open WebHID deviceConnection (ledger-signer.ts, no
+// createWithDevice), so it never reaches the key agent's auto-connect
+// transport methods that USE these.
 // The stub must therefore BIND under import (property reads / esbuild __toESM
 // prototype walks resolve to the proxy) yet stay UNUSABLE (apply/construct
 // throw), so no node/WebUSB transport can ever be listed, opened, or
@@ -279,55 +293,6 @@ module.exports = proxy;
   },
 };
 
-// @emurgo/cardano-message-signing-nodejs — an EVAL-SAFE recursive-proxy stub.
-// @cardano-sdk/hardware-ledger's LedgerKeyAgent eagerly evaluates
-// key-management's cip8 module, whose util.js CALLS @emurgo at module scope (the
-// CoseLabel table: `MessageSigning.Label.new_text('address')` etc.), so cip8
-// must now load REAL — the earlier fail-loud cip8 stub would starve
-// LedgerKeyAgent of the cip8 symbols it imports. Only @emurgo is stubbed, and —
-// unlike the empty alias it replaces — it must NOT throw at module load. The
-// recursive proxy answers every get/apply/construct WITH ITSELF, so arbitrarily
-// deep namespace chains (`.Label.new_text(...)`) resolve to a callable value and
-// the CoseLabel table builds with inert values.
-//   The getPrototypeOf trap is load-bearing, not decoration: esbuild imports
-//   @emurgo as an ESM namespace via `__toESM(require(...))`, which builds a fresh
-//   object `Object.create(getPrototypeOf(mod))` and copies only the module's OWN
-//   keys. Namespace member access (`ns.Label`) therefore misses the proxy unless
-//   the interop object INHERITS from it — so getPrototypeOf returns the proxy,
-//   making `ns.Label → proxy.get → proxy`. Without it, `ns.Label` is undefined
-//   and the CoseLabel table throws at import. Do not "simplify" this back to a
-//   bare get/apply/construct proxy.
-//   cip8's signCip8Data RUNTIME-uses pure-JS CborWriter cose helpers
-// (createProtectedHeadersCbor/createCoseSign1Cbor/createCoseKeyCbor) +
-// Cip30DataSignError, which work REAL. The one cip8 export whose RUNTIME rides
-// @emurgo is cip30signData (InMemoryKeyAgent.signData) — the host never calls it
-// (the sign-data surface reimplements CIP-8 via Serialization.CborWriter +
-// signBlob), so its inert proxy return is never observed.
-const emurgoMessageSigningStub = {
-  name: 'emurgo-message-signing-stub',
-  setup(build) {
-    build.onResolve(
-      { filter: /^@emurgo\/cardano-message-signing-nodejs$/ },
-      ({ path }) => ({ path, namespace: 'emurgo-message-signing-stub' }),
-    );
-    build.onLoad(
-      { filter: /.*/, namespace: 'emurgo-message-signing-stub' },
-      () => ({
-        contents: `const target = function () {};
-const proxy = new Proxy(target, {
-  get: () => proxy,
-  apply: () => proxy,
-  construct: () => proxy,
-  getPrototypeOf: () => proxy,
-});
-module.exports = proxy;
-`,
-        loader: 'js',
-      }),
-    );
-  },
-};
-
 // Exact-specifier `@trezor/connect-web` → `@trezor/connect-webextension` alias
 // (/ ADR 37 — the seam-side move of the monolith's webpack `$`-alias,
 // apps/lace-extension/webpack/base/common.webpack.config.js). The trezor-cardano
@@ -352,18 +317,6 @@ const trezorConnectWebAlias = {
   },
 };
 
-// The ported domain layer (@lace-lib/cardano-*) is a port of the @cardano-sdk
-// versions /index admits. Our Trezor port imports it; resolving those imports
-// to the @cardano-sdk copies keeps ONE domain-layer copy per document (ADR 37),
-// so the transaction body and addresses every other entry builds are the
-// port's own classes at runtime. Resolved from this package's root — the copies
-// /index bundles. Retired when the seam moves to the ported layer wholesale.
-const PORTED_TO_SDK = {
-  '@lace-lib/cardano-core': '@cardano-sdk/core',
-  '@lace-lib/cardano-crypto': '@cardano-sdk/crypto',
-  '@lace-lib/cardano-key-management': '@cardano-sdk/key-management',
-  '@lace-lib/cardano-util': '@cardano-sdk/util',
-};
 const result = await esbuild.build({
   absWorkingDir: root,
   entryPoints,
@@ -391,17 +344,14 @@ const result = await esbuild.build({
     'process.env.NODE_ENV': JSON.stringify('production'),
   },
   alias: {
-    // Native aliases preserve module-format metadata as well as sideEffects.
-    ...PORTED_TO_SDK,
-    // Node built-ins reached by the sdk's CJS deps (pbkdf2/chacha streams).
+    // Node built-ins reached by the Cardano packages' CJS deps (pbkdf2/chacha
+    // streams).
     stream: 'stream-browserify',
     events: 'events',
     // Empty stubs for node-only code paths never taken in the browser:
     // libsodium's emscripten ENVIRONMENT_IS_NODE branch (require('path'|'fs'|
     // 'crypto')). esbuild must resolve them statically even though the branches
-    // are dead at runtime. (@emurgo/cardano-message-signing-nodejs is NOT an
-    // empty alias — it is touched at module scope by cip8's util.js and must not
-    // throw, so the emurgoMessageSigningStub plugin below handles it instead.)
+    // are dead at runtime.
     crypto: './scripts/shims/empty.cjs',
     path: './scripts/shims/empty.cjs',
     fs: './scripts/shims/empty.cjs',
@@ -410,7 +360,6 @@ const result = await esbuild.build({
     bip39EnglishOnly,
     libsodiumSkipDataUriFetch,
     ledgerNodeTransportFailLoud,
-    emurgoMessageSigningStub,
     trezorConnectWebAlias,
     wasmBindgenPlugin(),
   ],
@@ -454,7 +403,7 @@ const workspacePackageName = dir =>
 // The top-level input package an input path belongs to: 'src' for this lib's
 // own source, a sibling workspace package's name, else the package name after
 // the LAST `node_modules/` (@scope kept as two segments). Anything else
-// (esbuild virtual namespaces, e.g. the emurgo / ledger-transport stubs) is
+// (esbuild virtual namespaces, e.g. the ledger-transport stubs) is
 // reported verbatim — honest and deterministic.
 const topLevelPackage = input => {
   const marker = 'node_modules/';
@@ -536,14 +485,62 @@ execFileSync('npx', ['tsc', '-p', 'tsconfig.build.json'], {
   stdio: 'inherit',
 });
 
-// The /trezor-cardano entry is typed in the ported domain layer, whose packages
-// ship TypeScript source rather than declarations. Its .d.ts therefore inlines
-// their declarations (tsconfig.build.json leaves the entry out), so the host
-// type-checks against the committed copy alone, never a live workspace path
-// (ADR 37); every other package stays an import the host resolves as before.
-// tsc emits first, then rollup only concatenates: emitting while bundling
-// orders inferred unions by whichever file was checked first, which breaks
-// the byte-identical rebuild vendor-check.yml demands.
+// The modules typed in the workspace Cardano packages (the /index Cardano
+// seam, /ledger-cardano-key-agent and /trezor-cardano) reach packages that ship
+// TypeScript source rather than declarations. Their .d.ts therefore inline
+// those declarations, so the host type-checks against the committed copy
+// alone, never a live workspace path (ADR 37); every other package stays an
+// import the host resolves as before. They are bundled together into one
+// hashed `cardano-*.d.ts` chunk the three files re-export, so a Cardano type
+// the host takes from one entry is the same type another entry expects, and
+// every namespace is rebuilt beside the declarations it gathers: the
+// declaration bundler rebuilds a namespace whose members sit in another chunk
+// from their values alone. The bundle is written after tsconfig.build.json's
+// emit, replacing any of these files that emit produced. tsc emits first, then
+// rollup only concatenates: emitting while bundling orders inferred unions by
+// whichever file was checked first, which breaks the byte-identical rebuild
+// vendor-check.yml demands.
+const CARDANO_TYPED_MODULES = [
+  'seam-cardano',
+  'ledger-cardano-key-agent',
+  'trezor-cardano',
+];
+// rollup-plugin-dts records one kind per local name when it rebuilds a
+// namespace (`export * as Cardano`), so a value sharing its name with a type
+// alias (the branded-string idiom: `type TransactionId = ...` beside
+// `const TransactionId = (value) => ...`) enters the namespace as the value
+// alone, and `Cardano.TransactionId` stops naming a type. This restores the
+// alias beside each such member. Only non-generic aliases are matched, which is
+// every branded string the Cardano packages declare. The Cardano chunk always
+// holds such members, so restoring none there means the bundler's output shape
+// changed and the build fails rather than ship namespaces without their types.
+const escapeIdentifier = name => name.replaceAll('$', '\\$');
+const namespaceTypeAliases = {
+  name: 'namespace-type-aliases',
+  renderChunk: (code, chunk) => {
+    let restored = 0;
+    const rendered = code.replaceAll(
+      /^declare const (\S+): typeof (\S+);$/gm,
+      (line, member, local) => {
+        const declaresType = name =>
+          new RegExp(
+            `^(?:declare )?(?:type|interface) ${escapeIdentifier(name)}[ =]`,
+            'm',
+          ).test(code);
+        if (!declaresType(local) || declaresType(member)) return line;
+        restored += 1;
+        return `type ${member} = ${local};\n${line}`;
+      },
+    );
+    if (chunk.name === 'cardano' && restored === 0) {
+      throw new Error(
+        '[vendor] Cardano declarations: no namespace type alias was restored; ' +
+          'the declaration bundler no longer emits `declare const X: typeof Y;`.',
+      );
+    }
+    return rendered;
+  },
+};
 const declarationWork = mkdtempSync(join(tmpdir(), 'lace-vendor-dts-'));
 try {
   execFileSync(
@@ -560,20 +557,31 @@ try {
       ? emitted(join(root, '..', match[1], 'src', 'index.d.ts'))
       : null;
   };
+  const entries = Object.fromEntries(
+    CARDANO_TYPED_MODULES.map(name => [
+      name,
+      emitted(join(root, 'src', `${name}.d.ts`)),
+    ]),
+  );
+  const entryPaths = new Set(Object.values(entries));
   const declarations = await rollup({
-    input: emitted(join(root, 'src', 'trezor-cardano.d.ts')),
+    input: entries,
     external: id => /^[^./]/.test(id) && portedDeclaration(id) === null,
     plugins: [
       { name: 'ported-declarations', resolveId: portedDeclaration },
       dts({ respectExternal: true }),
+      namespaceTypeAliases,
     ],
     onwarn: warning => {
-      throw new Error(`[vendor] trezor-cardano.d.ts: ${warning.message}`);
+      throw new Error(`[vendor] Cardano declarations: ${warning.message}`);
     },
   });
   await declarations.write({
-    file: join(dist, 'trezor-cardano.d.ts'),
+    dir: dist,
     format: 'es',
+    entryFileNames: '[name].d.ts',
+    chunkFileNames: '[name]-[hash].d.ts',
+    manualChunks: id => (entryPaths.has(id) ? undefined : 'cardano'),
   });
   await declarations.close();
 } finally {

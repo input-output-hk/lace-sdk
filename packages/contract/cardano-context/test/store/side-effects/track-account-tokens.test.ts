@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
 import { TokenId } from '@lace-contract/tokens';
 import { tokensActions } from '@lace-contract/tokens';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { describe, it } from 'vitest';

@@ -1,7 +1,7 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 import { CustomError } from 'ts-custom-error';
 
-export { ProviderError, ProviderFailure } from '@cardano-sdk/core';
+export { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 
 /**
  * Error wrapper that normalises network / HTTP errors thrown by the client.

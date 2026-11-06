@@ -1,6 +1,6 @@
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { Cardano, ProviderError } from '@cardano-sdk/core';
 import type { CardanoProviderContext } from '@lace-contract/cardano-context';
+import type { Cardano, ProviderError } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 

@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { inputOutputTransformer } from '../../../src/store/helpers/input-output-transform';

@@ -1,7 +1,7 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import { ActivityType } from '@lace-contract/activities';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { RemoteSignerError } from '@lace-lib/passkey';
 import { Timestamp } from '@lace-lib/util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

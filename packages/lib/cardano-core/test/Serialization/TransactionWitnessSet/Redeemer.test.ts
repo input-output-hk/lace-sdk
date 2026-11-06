@@ -161,4 +161,34 @@ describe('Redeemer', () => {
       expect(redeemer.toCore()).toEqual(certCore);
     });
   });
+
+  it('rejects an index above 2^32-1', () => {
+    expect(() =>
+      Redeemer.fromCbor(
+        HexBlob('84001b0000000100000000d8799f0102030405ff821821182c'),
+      ),
+    ).toThrowError('Redeemer index');
+  });
+
+  it('rejects an unknown tag', () => {
+    expect(() =>
+      Redeemer.fromCbor(HexBlob('840700d8799f0102030405ff821821182c')),
+    ).toThrowError('Unknown redeemer tag');
+  });
+
+  it('writes an index of 2^32-1', () => {
+    const redeemer = Redeemer.fromCore(core);
+    redeemer.setIndex(4_294_967_295n);
+
+    expect(Redeemer.fromCbor(redeemer.toCbor()).index()).toBe(4_294_967_295n);
+  });
+
+  it('writes an index above 2^32-1 so a placeholder index can be encoded while estimating fees', () => {
+    const redeemer = Redeemer.fromCore(core);
+    redeemer.setIndex(2n ** 32n);
+
+    expect(redeemer.toCbor()).toEqual(
+      '84001b0000000100000000d8799f0102030405ff821b000086788ffc4e831b00015060e9e46451',
+    );
+  });
 });

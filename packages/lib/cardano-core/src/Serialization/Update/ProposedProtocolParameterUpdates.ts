@@ -6,6 +6,7 @@ import { CborReader, CborReaderState, CborWriter } from '../CBOR';
 import { ProtocolParamUpdate } from './ProtocolParamUpdate';
 
 import type * as Cardano from '../../Cardano';
+import type { DeserializationOptions } from '../Common';
 
 /**
  * In the Cardano network, stakeholders can propose changes to the protocol parameters. These proposals are then
@@ -63,9 +64,13 @@ export class ProposedProtocolParameterUpdates {
    * Deserializes the ProposedProtocolParameterUpdates  from a CBOR byte array.
    *
    * @param cbor The CBOR encoded ProposedProtocolParameterUpdates  object.
+   * @param options Deserialization options forwarded to each parameter update.
    * @returns The new ProposedProtocolParameterUpdates  instance.
    */
-  static fromCbor(cbor: HexBlob): ProposedProtocolParameterUpdates {
+  static fromCbor(
+    cbor: HexBlob,
+    options?: DeserializationOptions,
+  ): ProposedProtocolParameterUpdates {
     const reader = new CborReader(cbor);
     const proposedUpdates = new Map<
       Cardano.GenesisDelegateKeyHash,
@@ -80,6 +85,7 @@ export class ProposedProtocolParameterUpdates {
       );
       const params = ProtocolParamUpdate.fromCbor(
         HexBlob.fromBytes(reader.readEncodedValue()),
+        options,
       );
 
       proposedUpdates.set(genesisHash, params);

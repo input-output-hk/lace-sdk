@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -6,10 +6,10 @@ import {
   getFallbackAsset,
 } from '../../../src/store/helpers/get-fallback-asset';
 
-import type * as Core from '@cardano-sdk/core';
+import type * as Core from '@lace-lib/cardano-core';
 
 // Mock the Cardano SDK functions
-vi.mock('@cardano-sdk/core', async importActual => {
+vi.mock('@lace-lib/cardano-core', async importActual => {
   const module = await importActual<typeof Core>();
 
   return {

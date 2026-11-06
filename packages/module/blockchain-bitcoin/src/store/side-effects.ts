@@ -34,7 +34,6 @@ import { computeBitcoinTokenBalances } from './helpers/compute-token-balances';
 import type { BitcoinWalletInfo } from '../common';
 import type { SideEffect } from '../sdk-contracts';
 import type { SyncStatusUpdate } from '../wallet';
-import type { ProviderError } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { AnyBlockchainAddress } from '@lace-contract/addresses';
 import type {
@@ -52,6 +51,7 @@ import type {
   AccountId,
   InMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { Milliseconds, Result } from '@lace-lib/util';
 import type { BehaviorSubject, Observable } from 'rxjs';
 import type { Logger } from 'ts-log';

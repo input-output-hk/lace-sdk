@@ -40,8 +40,6 @@ export * from './reward-timing';
 export * from './value-objects';
 export * from './const';
 export * from './drep';
-export * from './estimate-signed-tx-size';
-export * from './input-selection/InputSelectionError';
 export {
   EXPLOIT_DESCRIPTORS,
   resolveAccountNameSuffix,
@@ -69,9 +67,6 @@ export type {
   CardanoNightDesignationActivityMetadata,
 } from './augmentations';
 
-export * from './tx-builder';
-export { InputSelectionError } from './input-selection/InputSelectionError';
-export { LargeFirstCoinSelector } from './input-selection/LargeFirstCoinSelector';
 export * from './signing';
 export * from './serialization';
 export * from './extensions/exports';

@@ -1,4 +1,4 @@
-import type { ProviderError } from '@cardano-sdk/core';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 
 /** The value of a provider result, or its error thrown. */

@@ -1,10 +1,10 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { getDustGeneratorPlutusV3Script } from '../scripts';
 import { CardanoDustNetwork } from '../value-objects/network-id.vo';
 
-import type { Serialization } from '@cardano-sdk/core';
-import type * as Crypto from '@cardano-sdk/crypto';
+import type { Serialization } from '@lace-lib/cardano-core';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 
 // =====================================================================
 // Script-derived addresses + identifiers for cnight_generates_dust.

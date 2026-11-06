@@ -1,4 +1,4 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 import { vi } from 'vitest';
 
 import {
@@ -13,7 +13,7 @@ import type {
   CardanoCustodySponsorCollateral,
   CardanoCustodySponsorLease,
 } from '../../src/custody/cardano-custody-sponsor';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** 2026-10-07T00:00:00Z, the clock the orchestration tests run at. */
 export const NOW = 1_791_331_200_000;

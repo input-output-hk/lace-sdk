@@ -1,5 +1,3 @@
-import { deepEquals, isNotNil, Percent } from '@cardano-sdk/util';
-import { blockingWithLatestFrom } from '@cardano-sdk/util-rxjs';
 import {
   createInitialMidnightTokenMetadata,
   createMidnightToken,
@@ -8,6 +6,8 @@ import {
 } from '@lace-contract/midnight-context';
 import { TokenId } from '@lace-contract/tokens';
 import { whileActive } from '@lace-contract/wallet-active-state';
+import { deepEquals, isNotNil, Percent } from '@lace-lib/cardano-util';
+import { blockingWithLatestFrom } from '@lace-lib/cardano-util-rxjs';
 import { SecretBox } from '@lace-lib/core';
 import { BigNumber, ByteArray, Timestamp } from '@lace-lib/util';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';

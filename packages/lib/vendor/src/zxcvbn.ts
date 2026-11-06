@@ -7,7 +7,7 @@
  * (`surfaces/create-wallet.ts`, `surfaces/import-wallet.ts`), which gate the
  * wallet password on the SAME strength bar as the monolith onboarding
  * (`packages/module/vault-local` `usePasswordStrength`: zxcvbn `score >= 3`).
- * `zxcvbn` is pure JS with no `@cardano-sdk`, Ledger, or Midnight tree, so the
+ * `zxcvbn` is pure JS with no Cardano, Ledger, or Midnight tree, so the
  * split is STRUCTURAL (pinned by the build's `LIGHT_ENTRY_EXCLUSIONS`): a
  * ceremony document loads the estimator without any heavy trusted tree.
  *

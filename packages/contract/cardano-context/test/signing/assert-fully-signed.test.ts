@@ -6,7 +6,7 @@ import {
 } from '../../src/signing/assert-fully-signed';
 
 const getUniqueSignerKeyHashes = vi.hoisted(() => vi.fn());
-vi.mock('../../src/signing/getUniqueSigners', () => ({
+vi.mock('@lace-lib/cardano-tx-builder', () => ({
   getUniqueSignerKeyHashes,
 }));
 

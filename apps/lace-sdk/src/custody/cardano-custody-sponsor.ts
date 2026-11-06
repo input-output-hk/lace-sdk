@@ -1,5 +1,5 @@
-import type { Cardano } from '@cardano-sdk/core';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * A fee UTxO the sponsor reserved for one account creation (fee mode).

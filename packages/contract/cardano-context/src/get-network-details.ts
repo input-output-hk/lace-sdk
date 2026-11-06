@@ -9,8 +9,8 @@ import { supportedNetworkIds } from './const';
 import { cardanoContextSelectors } from './store';
 import { CardanoNetworkId } from './value-objects/cardano-network-id.vo';
 
-import type { Cardano } from '@cardano-sdk/core';
 import type { State } from '@lace-contract/module';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Resolves Cardano chain and Lace network classification for hardware onboarding.

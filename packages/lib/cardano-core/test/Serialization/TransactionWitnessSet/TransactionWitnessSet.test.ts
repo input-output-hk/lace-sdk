@@ -3,7 +3,14 @@ import { Base64Blob, HexBlob } from '@lace-lib/cardano-util';
 
 import { Cardano } from '../../../src';
 import { RedeemerPurpose } from '../../../src/Cardano';
-import { TransactionWitnessSet } from '../../../src/Serialization';
+import {
+  CborSet,
+  PlutusV4Script,
+  Transaction,
+  TransactionWitnessSet,
+  TxCBOR,
+} from '../../../src/Serialization';
+import { vectorsForRule } from '../dijkstraVectors';
 
 // Test data used in the following tests was generated with the cardano-serialization-lib
 const cbor = HexBlob(
@@ -276,8 +283,8 @@ describe('TransactionWitnessSet', () => {
 });
 
 describe('TransactionWitnessSet unknown map keys', () => {
-  // {0: [], 8: [1, 2]} - key 8 is not part of the transaction_witness_set CDDL
-  const cborWithUnknownKey = HexBlob('a2008008820102');
+  // {0: [], 9: [1, 2]} - key 9 is not part of the transaction_witness_set CDDL
+  const cborWithUnknownKey = HexBlob('a2008009820102');
 
   it('skips unknown keys by default', () => {
     const witnessSet = TransactionWitnessSet.fromCbor(cborWithUnknownKey);
@@ -288,6 +295,156 @@ describe('TransactionWitnessSet unknown map keys', () => {
   it('throws on unknown keys when strict', () => {
     expect(() =>
       TransactionWitnessSet.fromCbor(cborWithUnknownKey, { strict: true }),
-    ).toThrow('Unknown transaction witness set map key: 8');
+    ).toThrow('Unknown transaction witness set map key: 9');
+  });
+});
+
+describe('TransactionWitnessSet repeated map keys', () => {
+  const cborWithRepeatedKey = HexBlob(
+    'a208d90102814e4d0100003322222005120012001108d90102814e4d01000033222220051200120011',
+  );
+
+  it('rejects a key that appears twice', () => {
+    expect(() => TransactionWitnessSet.fromCbor(cborWithRepeatedKey)).toThrow(
+      'Duplicate transaction witness set map key: 8',
+    );
+  });
+});
+
+describe('TransactionWitnessSet Plutus V4 scripts', () => {
+  const plutusV4Script: Cardano.PlutusScript = {
+    __type: Cardano.ScriptType.Plutus,
+    bytes: HexBlob('4d01000033222220051200120011'),
+    version: Cardano.PlutusLanguageVersion.V4,
+  };
+  const taggedCbor = HexBlob('a108d90102814e4d01000033222220051200120011');
+  const untaggedCbor = HexBlob('a108814e4d01000033222220051200120011');
+
+  const plutusV4ScriptsOf = (witnessSet: TransactionWitnessSet) =>
+    witnessSet
+      .toCore()
+      .scripts?.filter(
+        script =>
+          script.__type === Cardano.ScriptType.Plutus &&
+          script.version === Cardano.PlutusLanguageVersion.V4,
+      );
+
+  it('decodes a tagged set of Plutus V4 scripts', () => {
+    const witnessSet = TransactionWitnessSet.fromCbor(taggedCbor);
+
+    expect(witnessSet.plutusV4Scripts()?.toCore()).toEqual([plutusV4Script]);
+    expect(witnessSet.toCore().scripts).toEqual([plutusV4Script]);
+    expect(witnessSet.toCbor()).toEqual(taggedCbor);
+  });
+
+  it('decodes an untagged array of Plutus V4 scripts', () => {
+    const witnessSet = TransactionWitnessSet.fromCbor(untaggedCbor);
+
+    expect(witnessSet.toCore().scripts).toEqual([plutusV4Script]);
+    expect(witnessSet.toCbor()).toEqual(untaggedCbor);
+  });
+
+  it('writes Plutus V4 scripts as a tagged set when rebuilt from its core form', () => {
+    for (const cbor of [taggedCbor, untaggedCbor]) {
+      const witnessSet = TransactionWitnessSet.fromCbor(cbor);
+
+      expect(
+        TransactionWitnessSet.fromCore(witnessSet.toCore()).toCbor(),
+      ).toEqual(taggedCbor);
+    }
+  });
+
+  it('encodes a Plutus V4 script set in code', () => {
+    const witnessSet = new TransactionWitnessSet();
+    witnessSet.setPlutusV4Scripts(
+      CborSet.fromCore([plutusV4Script], PlutusV4Script.fromCore),
+    );
+
+    expect(witnessSet.toCbor()).toEqual(taggedCbor);
+    expect(plutusV4ScriptsOf(witnessSet)).toEqual([plutusV4Script]);
+  });
+
+  it('keeps Plutus V4 scripts next to scripts of other languages', () => {
+    const plutusV3Script: Cardano.PlutusScript = {
+      ...plutusV4Script,
+      version: Cardano.PlutusLanguageVersion.V3,
+    };
+    const witnessSet = TransactionWitnessSet.fromCore({
+      scripts: [plutusV4Script, plutusV3Script],
+      signatures: new Map(),
+    });
+
+    expect(witnessSet.toCbor()).toEqual(
+      HexBlob(
+        'a207d90102814e4d0100003322222005120012001108d90102814e4d01000033222220051200120011',
+      ),
+    );
+    expect(witnessSet.toCore().scripts).toEqual([
+      plutusV3Script,
+      plutusV4Script,
+    ]);
+  });
+
+  describe('in transactions', () => {
+    const subTransactionVector = vectorsForRule('transaction').find(
+      vector => vector.name === 'musashi-sub-transaction-plutus-v4-witness',
+    )!;
+    const spendVector = vectorsForRule('transaction').find(
+      vector => vector.name === 'musashi-plutus-v4-spend',
+    )!;
+    const musashiPlutusV4Script: Cardano.PlutusScript = {
+      __type: Cardano.ScriptType.Plutus,
+      bytes: HexBlob('450100002499'),
+      version: Cardano.PlutusLanguageVersion.V4,
+    };
+
+    const subTransactionWitnessSetOf = (tx: Transaction) =>
+      tx.body().subTransactions()!.values()[0].witnessSet();
+
+    it('re-encodes a transaction whose sub transaction witnesses a Plutus V4 script byte for byte', () => {
+      const tx = Transaction.fromCbor(TxCBOR(subTransactionVector.hex));
+
+      expect(tx.toCbor()).toEqual(subTransactionVector.hex);
+      expect(tx.getId()).toEqual(
+        'a17d7bb326cac2262a80054584474f33bcc00e1c0355cb864bafe5a6e5352e1b',
+      );
+      expect(plutusV4ScriptsOf(subTransactionWitnessSetOf(tx))).toEqual([
+        musashiPlutusV4Script,
+      ]);
+    });
+
+    it('keeps the Plutus V4 script of a sub transaction when rebuilt from its core form', () => {
+      const tx = Transaction.fromCbor(TxCBOR(subTransactionVector.hex));
+      const rebuilt = Transaction.fromCore(tx.toCore());
+
+      expect(plutusV4ScriptsOf(subTransactionWitnessSetOf(rebuilt))).toEqual([
+        musashiPlutusV4Script,
+      ]);
+      expect(subTransactionWitnessSetOf(rebuilt).toCbor()).toEqual(
+        subTransactionWitnessSetOf(tx).toCbor(),
+      );
+    });
+
+    it('re-encodes a transaction that witnesses a Plutus V4 script byte for byte', () => {
+      const tx = Transaction.fromCbor(TxCBOR(spendVector.hex));
+
+      expect(tx.toCbor()).toEqual(spendVector.hex);
+      expect(tx.getId()).toEqual(
+        'c81b286b04b760911f33810f8e75f9796cc758c502ee137b3850dab5ac978e19',
+      );
+      expect(plutusV4ScriptsOf(tx.witnessSet())).toEqual([
+        musashiPlutusV4Script,
+      ]);
+    });
+
+    it('keeps the Plutus V4 script of a transaction when rebuilt from its core form', () => {
+      const tx = Transaction.fromCbor(TxCBOR(spendVector.hex));
+      const rebuilt = Transaction.fromCore(tx.toCore());
+
+      expect(plutusV4ScriptsOf(rebuilt.witnessSet())).toEqual([
+        musashiPlutusV4Script,
+      ]);
+      expect(rebuilt.witnessSet().toCbor()).toEqual(tx.witnessSet().toCbor());
+    });
   });
 });

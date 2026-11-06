@@ -22,10 +22,10 @@ import type {
   CardanoCustodyDeviceSigner,
 } from './cardano-custody-device-signer';
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
-import type { HexBlob } from '@cardano-sdk/util';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import type { HexBlob } from '@lace-lib/cardano-util';
 import type { Result } from '@lace-lib/util';
 
 /** The options of `signCardanoCustodyData`. */

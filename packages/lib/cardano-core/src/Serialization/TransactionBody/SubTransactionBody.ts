@@ -7,39 +7,48 @@ import { SerializationError, SerializationFailure } from '../../errors';
 import { hexToBytes } from '../../util/misc';
 import { CborReader, CborReaderState, CborWriter } from '../CBOR';
 import { Certificate } from '../Certificates';
-import { CborSet, Credential } from '../Common';
-import { PlutusData } from '../PlutusData';
+import { CborSet } from '../Common';
 
-import { AccountBalanceInterval } from './AccountBalanceInterval';
 import { Guards } from './Guards';
 import { ProposalProcedure } from './ProposalProcedure';
 import { TransactionInput } from './TransactionInput';
 import { TransactionOutput } from './TransactionOutput';
 import {
+  accountBalanceIntervalsFromCore,
+  accountBalanceIntervalsToCore,
   multiAssetsToTokenMap,
+  readAccountBalanceIntervals,
+  readRequiredTopLevelGuards,
+  requiredTopLevelGuardsFromCore,
+  requiredTopLevelGuardsToCore,
   sortCanonically,
   tokenMapToMultiAsset,
+  writeAccountBalanceIntervals,
+  writeRequiredTopLevelGuards,
 } from './Utils';
 import { VotingProcedures } from './VotingProcedures';
 
+import type { AccountBalanceInterval } from './AccountBalanceInterval';
 import type * as Cardano from '../../Cardano';
-import type { DeserializationOptions } from '../Common';
+import type { Credential, DeserializationOptions } from '../Common';
+import type { PlutusData } from '../PlutusData';
 
 type TransactionInputSet = CborSet<
   ReturnType<TransactionInput['toCore']>,
   TransactionInput
 >;
 
-const TOP_LEVEL_ONLY_KEYS = new Set([2n, 13n, 16n, 17n, 23n]);
+const TOP_LEVEL_ONLY_KEYS = new Set([2n, 13n, 16n, 17n, 23n, 27n]);
 
 /**
  * The body of a Dijkstra sub transaction (CIP-0118 nested transactions).
  *
  * A sub transaction body reuses the top level transaction body keys but excludes fee (2),
- * collateral inputs (13), collateral return (16), total collateral (17) and sub transactions
- * (23) - the enclosing transaction pays the fee and posts collateral for the whole batch - and
- * adds key 24 required_top_level_guards: guards the enclosing transaction must carry, each with
- * an optional plutus datum.
+ * collateral inputs (13), collateral return (16), total collateral (17), sub transactions (23)
+ * and starting account balance intervals (27) - the enclosing transaction pays the fee, posts
+ * collateral and asserts starting balances for the whole batch. Key 24
+ * required_top_level_guards names guards the enclosing transaction must carry, each with an
+ * optional plutus datum.
  *
  * Unlike the permissive top level decoder, decoding mirrors the ledger decoderByKey exactly:
  * keys 0 and 1 are required and any key outside the CDDL sub_transaction_body key set is
@@ -69,7 +78,9 @@ export class SubTransactionBody {
   #donation: Cardano.Lovelace | undefined;
   #requiredTopLevelGuards: Map<Credential, PlutusData | null> | undefined;
   #directDeposits: Map<Cardano.RewardAccount, Cardano.Lovelace> | undefined;
-  #accountBalanceIntervals: Map<Credential, AccountBalanceInterval> | undefined;
+  #accountBalanceIntervals:
+    | Map<Cardano.RewardAccount, AccountBalanceInterval>
+    | undefined;
   #originalBytes: HexBlob | undefined = undefined;
 
   /**
@@ -246,7 +257,7 @@ export class SubTransactionBody {
       writer.writeInt(this.#currentTreasuryValue);
     }
 
-    if (this.#donation !== undefined) {
+    if (this.#donation !== undefined && this.#donation > 0n) {
       writer.writeInt(22n);
       writer.writeInt(this.#donation);
     }
@@ -256,27 +267,7 @@ export class SubTransactionBody {
       this.#requiredTopLevelGuards.size > 0
     ) {
       writer.writeInt(24n);
-
-      const guardsWithCredentialBytes = new Map<HexBlob, PlutusData | null>();
-      for (const [credential, datum] of this.#requiredTopLevelGuards) {
-        guardsWithCredentialBytes.set(credential.toCbor(), datum);
-      }
-
-      const sortedCanonically = [...guardsWithCredentialBytes].sort((a, b) =>
-        a[0] > b[0] ? 1 : -1,
-      );
-
-      writer.writeStartMap(sortedCanonically.length);
-
-      for (const [credentialBytes, datum] of sortedCanonically) {
-        writer.writeEncodedValue(hexToBytes(credentialBytes));
-
-        if (datum === null) {
-          writer.writeNull();
-        } else {
-          writer.writeEncodedValue(hexToBytes(datum.toCbor()));
-        }
-      }
+      writeRequiredTopLevelGuards(writer, this.#requiredTopLevelGuards);
     }
 
     if (this.#directDeposits !== undefined && this.#directDeposits.size > 0) {
@@ -316,25 +307,7 @@ export class SubTransactionBody {
       this.#accountBalanceIntervals.size > 0
     ) {
       writer.writeInt(26n);
-
-      const intervalsWithCredentialBytes = new Map<
-        HexBlob,
-        AccountBalanceInterval
-      >();
-      for (const [credential, interval] of this.#accountBalanceIntervals) {
-        intervalsWithCredentialBytes.set(credential.toCbor(), interval);
-      }
-
-      const sortedCanonically = [...intervalsWithCredentialBytes].sort((a, b) =>
-        a[0] > b[0] ? 1 : -1,
-      );
-
-      writer.writeStartMap(sortedCanonically.length);
-
-      for (const [credentialBytes, interval] of sortedCanonically) {
-        writer.writeEncodedValue(hexToBytes(credentialBytes));
-        writer.writeEncodedValue(hexToBytes(interval.toCbor()));
-      }
+      writeAccountBalanceIntervals(writer, this.#accountBalanceIntervals);
     }
 
     return writer.encodeAsHex();
@@ -346,9 +319,12 @@ export class SubTransactionBody {
    * Key admission is strict regardless of options, mirroring the ledger decoderByKey: keys 0
    * and 1 are required, the top-level-only keys 2, 13, 16, 17 and 23 are rejected, and any
    * other key outside the CDDL sub_transaction_body key set is rejected rather than skipped.
+   * A key may appear only once, the certificates, withdrawals, mint, reference inputs, voting
+   * procedures and proposal procedures must not be empty when present, the donation must be
+   * greater than zero, and the guards must not repeat a key hash or credential.
    *
    * @param cbor The CBOR encoded SubTransactionBody object.
-   * @param options Deserialization options forwarded to nested output decoding.
+   * @param options Deserialization options forwarded to nested output and proposal decoding.
    * @returns The new SubTransactionBody instance.
    */
   static fromCbor(
@@ -363,11 +339,20 @@ export class SubTransactionBody {
 
     let hasInputs = false;
     let hasOutputs = false;
+    const seenKeys = new Set<bigint>();
 
     reader.readStartMap();
 
     while (reader.peekState() !== CborReaderState.EndMap) {
       const key = reader.readInt();
+
+      if (seenKeys.has(key))
+        throw new SerializationError(
+          SerializationFailure.InvalidType,
+          `Duplicate sub transaction body map key: ${key}`,
+        );
+
+      seenKeys.add(key);
 
       switch (key) {
         case 0n: {
@@ -404,12 +389,18 @@ export class SubTransactionBody {
           body.setTtl(Slot(Number(reader.readInt())));
           break;
         case 4n: {
-          body.setCerts(
-            CborSet.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-              Certificate.fromCbor,
-            ),
-          );
+          const certs = CborSet.fromCbor<
+            ReturnType<Certificate['toCore']>,
+            Certificate
+          >(HexBlob.fromBytes(reader.readEncodedValue()), Certificate.fromCbor);
+
+          if (certs.size() === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'certificates (sub transaction body key 4) must be a non-empty set',
+            );
+
+          body.setCerts(certs);
           break;
         }
         case 5n: {
@@ -429,6 +420,13 @@ export class SubTransactionBody {
           }
 
           reader.readEndMap();
+
+          if (body.withdrawals()!.size === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'withdrawals (sub transaction body key 5) must be a non-empty map',
+            );
+
           break;
         }
         case 7n:
@@ -469,6 +467,12 @@ export class SubTransactionBody {
           }
           reader.readEndMap();
 
+          if (multiassets.size === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'mint (sub transaction body key 9) must be a non-empty map',
+            );
+
           body.setMint(multiAssetsToTokenMap(multiassets));
           break;
         }
@@ -479,78 +483,95 @@ export class SubTransactionBody {
             ) as unknown as Crypto.Hash32ByteBase16,
           );
           break;
-        case 14n:
-          body.setGuards(
-            Guards.fromCbor(HexBlob.fromBytes(reader.readEncodedValue())),
+        case 14n: {
+          const guards = Guards.fromCbor(
+            HexBlob.fromBytes(reader.readEncodedValue()),
           );
+          const keyHashes = guards.keyHashes() ?? [];
+
+          if (new Set(keyHashes).size !== keyHashes.length)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'guards (sub transaction body key 14) must not contain duplicate key hashes',
+            );
+
+          body.setGuards(guards);
           break;
+        }
         case 15n:
           body.setNetworkId(Number(reader.readInt()) as Cardano.NetworkId);
           break;
-        case 18n:
-          body.setReferenceInputs(
-            CborSet.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-              TransactionInput.fromCbor,
-            ),
+        case 18n: {
+          const referenceInputs = CborSet.fromCbor<
+            ReturnType<TransactionInput['toCore']>,
+            TransactionInput
+          >(
+            HexBlob.fromBytes(reader.readEncodedValue()),
+            TransactionInput.fromCbor,
           );
+
+          if (referenceInputs.size() === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'reference_inputs (sub transaction body key 18) must be a non-empty set',
+            );
+
+          body.setReferenceInputs(referenceInputs);
           break;
-        case 19n:
-          body.setVotingProcedures(
-            VotingProcedures.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-            ),
+        }
+        case 19n: {
+          const votingProcedures = VotingProcedures.fromCbor(
+            HexBlob.fromBytes(reader.readEncodedValue()),
           );
+
+          if (votingProcedures.getVoters().length === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'voting_procedures (sub transaction body key 19) must be a non-empty map',
+            );
+
+          body.setVotingProcedures(votingProcedures);
           break;
-        case 20n:
-          body.setProposalProcedures(
-            CborSet.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-              ProposalProcedure.fromCbor,
-            ),
+        }
+        case 20n: {
+          const proposalProcedures = CborSet.fromCbor<
+            ReturnType<ProposalProcedure['toCore']>,
+            ProposalProcedure
+          >(HexBlob.fromBytes(reader.readEncodedValue()), proposalCbor =>
+            ProposalProcedure.fromCbor(proposalCbor, options),
           );
+
+          if (proposalProcedures.size() === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'proposal_procedures (sub transaction body key 20) must be a non-empty set',
+            );
+
+          body.setProposalProcedures(proposalProcedures);
           break;
+        }
         case 21n:
           body.setCurrentTreasuryValue(reader.readInt());
           break;
-        case 22n:
-          body.setDonation(reader.readInt());
-          break;
-        case 24n: {
-          reader.readStartMap();
+        case 22n: {
+          const donation = reader.readInt();
 
-          const requiredTopLevelGuards = new Map<
-            Credential,
-            PlutusData | null
-          >();
-
-          while (reader.peekState() !== CborReaderState.EndMap) {
-            const credential = Credential.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-            );
-
-            if (reader.peekState() === CborReaderState.Null) {
-              reader.readNull();
-              requiredTopLevelGuards.set(credential, null);
-            } else {
-              requiredTopLevelGuards.set(
-                credential,
-                PlutusData.fromCbor(
-                  HexBlob.fromBytes(reader.readEncodedValue()),
-                ),
-              );
-            }
-          }
-
-          reader.readEndMap();
-
-          if (requiredTopLevelGuards.size === 0)
+          if (donation <= 0n)
             throw new SerializationError(
               SerializationFailure.InvalidType,
-              'required_top_level_guards (sub transaction body key 24) must be a non-empty map',
+              'donation (sub transaction body key 22) must be greater than zero',
             );
 
-          body.setRequiredTopLevelGuards(requiredTopLevelGuards);
+          body.setDonation(donation);
+          break;
+        }
+        case 24n: {
+          body.setRequiredTopLevelGuards(
+            readRequiredTopLevelGuards(
+              reader,
+              'required_top_level_guards (sub transaction body key 24)',
+            ),
+          );
           break;
         }
         case 25n: {
@@ -581,33 +602,12 @@ export class SubTransactionBody {
           break;
         }
         case 26n: {
-          reader.readStartMap();
-
-          const accountBalanceIntervals = new Map<
-            Credential,
-            AccountBalanceInterval
-          >();
-
-          while (reader.peekState() !== CborReaderState.EndMap) {
-            const credential = Credential.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-            );
-            const interval = AccountBalanceInterval.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-            );
-
-            accountBalanceIntervals.set(credential, interval);
-          }
-
-          reader.readEndMap();
-
-          if (accountBalanceIntervals.size === 0)
-            throw new SerializationError(
-              SerializationFailure.InvalidType,
-              'account_balance_intervals (sub transaction body key 26) must be a non-empty map',
-            );
-
-          body.setAccountBalanceIntervals(accountBalanceIntervals);
+          body.setAccountBalanceIntervals(
+            readAccountBalanceIntervals(
+              reader,
+              'account_balance_intervals (sub transaction body key 26)',
+            ),
+          );
           break;
         }
         default:
@@ -653,11 +653,8 @@ export class SubTransactionBody {
 
     return {
       ...(this.#accountBalanceIntervals && {
-        accountBalanceIntervals: [...this.#accountBalanceIntervals].map(
-          ([credential, interval]) => ({
-            credential: credential.toCore(),
-            interval: interval.toCore(),
-          }),
+        accountBalanceIntervals: accountBalanceIntervalsToCore(
+          this.#accountBalanceIntervals,
         ),
       }),
       auxiliaryDataHash: this.#auxiliaryDataHash,
@@ -684,11 +681,8 @@ export class SubTransactionBody {
           ? guardKeyHashes
           : undefined,
       ...(this.#requiredTopLevelGuards && {
-        requiredTopLevelGuards: [...this.#requiredTopLevelGuards].map(
-          ([credential, datum]) => ({
-            credential: credential.toCore(),
-            datum: datum === null ? null : datum.toCore(),
-          }),
+        requiredTopLevelGuards: requiredTopLevelGuardsToCore(
+          this.#requiredTopLevelGuards,
         ),
       }),
       scriptIntegrityHash: this.#scriptDataHash,
@@ -785,18 +779,12 @@ export class SubTransactionBody {
       }
     }
 
-    if (coreSubTransactionBody.requiredTopLevelGuards) {
-      const requiredTopLevelGuards = new Map<Credential, PlutusData | null>();
-
-      for (const entry of coreSubTransactionBody.requiredTopLevelGuards) {
-        requiredTopLevelGuards.set(
-          Credential.fromCore(entry.credential),
-          entry.datum === null ? null : PlutusData.fromCore(entry.datum),
-        );
-      }
-
-      body.setRequiredTopLevelGuards(requiredTopLevelGuards);
-    }
+    if (coreSubTransactionBody.requiredTopLevelGuards)
+      body.setRequiredTopLevelGuards(
+        requiredTopLevelGuardsFromCore(
+          coreSubTransactionBody.requiredTopLevelGuards,
+        ),
+      );
 
     if (coreSubTransactionBody.directDeposits) {
       body.setDirectDeposits(
@@ -810,21 +798,12 @@ export class SubTransactionBody {
       }
     }
 
-    if (coreSubTransactionBody.accountBalanceIntervals) {
-      const accountBalanceIntervals = new Map<
-        Credential,
-        AccountBalanceInterval
-      >();
-
-      for (const entry of coreSubTransactionBody.accountBalanceIntervals) {
-        accountBalanceIntervals.set(
-          Credential.fromCore(entry.credential),
-          AccountBalanceInterval.fromCore(entry.interval),
-        );
-      }
-
-      body.setAccountBalanceIntervals(accountBalanceIntervals);
-    }
+    if (coreSubTransactionBody.accountBalanceIntervals)
+      body.setAccountBalanceIntervals(
+        accountBalanceIntervalsFromCore(
+          coreSubTransactionBody.accountBalanceIntervals,
+        ),
+      );
 
     if (coreSubTransactionBody.donation !== undefined)
       body.setDonation(coreSubTransactionBody.donation);
@@ -1152,6 +1131,8 @@ export class SubTransactionBody {
   /**
    * Sets the current treasury donation of this sub transaction.
    *
+   * A zero donation is left out of the encoding, as the ledger does.
+   *
    * @param donation The treasury donation.
    */
   setDonation(donation: Cardano.Lovelace): void {
@@ -1219,12 +1200,12 @@ export class SubTransactionBody {
 
   /**
    * Sets the account balance intervals (body key 26). Each entry asserts that the balance of the
-   * account with the given credential lies in a half-open range at validation time.
+   * reward account lies in a half-open range, or equals an exact balance, at validation time.
    *
-   * @param accountBalanceIntervals The map of credentials to balance intervals.
+   * @param accountBalanceIntervals The map of reward accounts to balance intervals.
    */
   setAccountBalanceIntervals(
-    accountBalanceIntervals: Map<Credential, AccountBalanceInterval>,
+    accountBalanceIntervals: Map<Cardano.RewardAccount, AccountBalanceInterval>,
   ): void {
     this.#accountBalanceIntervals = accountBalanceIntervals;
     this.#originalBytes = undefined;
@@ -1232,12 +1213,12 @@ export class SubTransactionBody {
 
   /**
    * Gets the account balance intervals (body key 26). Each entry asserts that the balance of the
-   * account with the given credential lies in a half-open range at validation time.
+   * reward account lies in a half-open range, or equals an exact balance, at validation time.
    *
-   * @returns The map of credentials to balance intervals.
+   * @returns The map of reward accounts to balance intervals.
    */
   accountBalanceIntervals():
-    | Map<Credential, AccountBalanceInterval>
+    | Map<Cardano.RewardAccount, AccountBalanceInterval>
     | undefined {
     return this.#accountBalanceIntervals;
   }
@@ -1269,7 +1250,7 @@ export class SubTransactionBody {
     )
       ++mapSize;
     if (this.#currentTreasuryValue !== undefined) ++mapSize;
-    if (this.#donation !== undefined) ++mapSize;
+    if (this.#donation !== undefined && this.#donation > 0n) ++mapSize;
     if (
       this.#requiredTopLevelGuards !== undefined &&
       this.#requiredTopLevelGuards.size > 0

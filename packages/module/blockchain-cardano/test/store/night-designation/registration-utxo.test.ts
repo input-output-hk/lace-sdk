@@ -1,4 +1,4 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 import {
   CardanoDustNetwork,
   CardanoStakeKeyHash,
@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { findRegistrationUtxo } from '../../../src/store/night-designation/registration-utxo';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const network = CardanoDustNetwork.testnet;
 const nftAssetId = getDustMappingNftAssetId(network);

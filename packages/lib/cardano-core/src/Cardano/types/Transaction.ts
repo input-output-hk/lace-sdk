@@ -32,18 +32,32 @@ export interface Withdrawal {
 }
 
 /**
- * Half-open account balance range in lovelace: a balance b satisfies the interval when
- * inclusiveLowerBound <= b < exclusiveUpperBound. At least one bound is always set; a bound
- * of 0 is valid and distinct from an absent bound.
+ * Account balance condition in lovelace. Either a half-open range, where a balance b satisfies
+ * the interval when inclusiveLowerBound <= b < exclusiveUpperBound, or an exact balance that b
+ * must equal. A range has at least one bound set, and a bound of 0 is valid and distinct from
+ * an absent bound. An exact balance is set alone, without either bound.
  */
 export interface AccountBalanceInterval {
   inclusiveLowerBound?: Lovelace;
   exclusiveUpperBound?: Lovelace;
+  exactBalance?: Lovelace;
 }
 
+/** An account balance interval asserted for the account behind a reward account. */
 export interface AccountBalanceIntervalEntry {
-  credential: Credential;
+  rewardAccount: RewardAccount;
   interval: AccountBalanceInterval;
+}
+
+/** A guard the top level transaction must carry, with the datum it must be supplied with. */
+export interface RequiredTopLevelGuardEntry {
+  credential: Credential;
+
+  /**
+   * Datum the top-level transaction must supply the guard with, or null when the guard carries
+   * no datum (CBOR nil on the wire, used for key-hash and native-script guards).
+   */
+  datum: PlutusData | null;
 }
 
 export type HydratedPoolRegistrationCertificate =
@@ -104,22 +118,47 @@ export interface HydratedTxBody {
   donation?: Lovelace;
 
   /**
+   * Required top-level guards (Dijkstra body key 24): guards the top-level transaction must
+   * carry, each with the datum it must be supplied with. Non-empty when present.
+   */
+  requiredTopLevelGuards?: RequiredTopLevelGuardEntry[];
+
+  /**
    * Direct deposits (Dijkstra body key 25): coin deposited directly into reward accounts
    * without a withdrawal-style witness. Non-empty when present.
    */
   directDeposits?: Withdrawal[];
 
   /**
-   * Account balance intervals (Dijkstra body key 26): asserts that each credential's account
-   * balance lies in a half-open range at validation time. Non-empty when present.
+   * Account balance intervals (Dijkstra body key 26): asserts that the balance of each reward
+   * account lies in a half-open range, or equals an exact balance, at validation time. Non-empty
+   * when present.
    */
   accountBalanceIntervals?: AccountBalanceIntervalEntry[];
+
+  /**
+   * Starting account balance intervals (Dijkstra body key 27): asserts that the balance of each
+   * reward account lies in a half-open range, or equals an exact balance, before the transaction
+   * and its sub transactions are applied. Non-empty when present and admitted only on a
+   * top-level body.
+   */
+  startingAccountBalanceIntervals?: AccountBalanceIntervalEntry[];
+
+  /**
+   * Sub transactions (Dijkstra body key 23, CIP-0118 nested transactions) in batch order, each
+   * with its inputs hydrated and carrying its own id. Non-empty when present.
+   */
+  subTransactions?: HydratedSubTransaction[];
 }
 
 export interface TxBody
   extends Omit<
     HydratedTxBody,
-    'certificates' | 'collaterals' | 'inputs' | 'referenceInputs'
+    | 'certificates'
+    | 'collaterals'
+    | 'inputs'
+    | 'referenceInputs'
+    | 'subTransactions'
   > {
   certificates?: Certificate[];
   collaterals?: TxIn[];
@@ -135,38 +174,22 @@ export interface TxBody
   subTransactions?: SubTransaction[];
 }
 
-export interface RequiredTopLevelGuardEntry {
-  credential: Credential;
-
-  /**
-   * Datum the enclosing transaction must supply the guard with, or null when the guard carries
-   * no datum (CBOR nil on the wire, used for key-hash and native-script guards).
-   */
-  datum: PlutusData | null;
-}
-
 /**
  * Body of a Dijkstra sub transaction (CIP-0118 nested transactions). Reuses the top-level
- * transaction body fields but has no fee, collateral or update fields -- the enclosing
- * transaction pays the fee and posts collateral for the whole batch -- and adds
- * requiredTopLevelGuards.
+ * transaction body fields but has no fee, collateral, update or starting account balance
+ * interval fields. The enclosing transaction pays the fee, posts collateral and asserts
+ * starting balances for the whole batch.
  */
-export interface SubTransactionBody
-  extends Omit<
-    TxBody,
-    | 'collateralReturn'
-    | 'collaterals'
-    | 'fee'
-    | 'subTransactions'
-    | 'totalCollateral'
-    | 'update'
-  > {
-  /**
-   * Guards the enclosing transaction must carry (Dijkstra sub body key 24), each with the
-   * datum it must be supplied with. Non-empty when present.
-   */
-  requiredTopLevelGuards?: RequiredTopLevelGuardEntry[];
-}
+export type SubTransactionBody = Omit<
+  TxBody,
+  | 'collateralReturn'
+  | 'collaterals'
+  | 'fee'
+  | 'startingAccountBalanceIntervals'
+  | 'subTransactions'
+  | 'totalCollateral'
+  | 'update'
+>;
 
 /**
  * A Dijkstra sub transaction (CIP-0118 nested transactions): a sub transaction body plus its
@@ -178,6 +201,27 @@ export interface SubTransaction {
 
   witness: Witness;
   auxiliaryData?: AuxiliaryData;
+}
+
+/**
+ * A sub transaction body whose inputs and reference inputs carry the address of the output they
+ * spend or reference, so the body can be read without resolving its inputs. An input that spends
+ * the output of a sibling sub transaction resolves against the batch itself.
+ */
+export interface HydratedSubTransactionBody
+  extends Omit<SubTransactionBody, 'inputs' | 'referenceInputs'> {
+  inputs: HydratedTxIn[];
+  referenceInputs?: HydratedTxIn[];
+}
+
+/**
+ * A Dijkstra sub transaction as read from chain history. It carries its id, the blake2b-256 hash
+ * of the sub transaction body bytes, since a hydrated body cannot be serialized again to derive
+ * it, and inputs of sibling sub transactions that spend its outputs reference it.
+ */
+export interface HydratedSubTransaction extends Omit<SubTransaction, 'body'> {
+  id: TransactionId;
+  body: HydratedSubTransactionBody;
 }
 
 export enum InputSource {

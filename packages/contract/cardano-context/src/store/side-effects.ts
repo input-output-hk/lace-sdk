@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { autoDismissFailureOnSuccess } from '@lace-contract/failures';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Err, Milliseconds, Ok } from '@lace-lib/util';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
 import { retryBackoff } from 'backoff-rxjs';

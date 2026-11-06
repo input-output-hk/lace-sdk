@@ -53,7 +53,6 @@ import type {
   HeadHistoryStart,
 } from './head-history';
 import type { SideEffect } from '../../sdk-contracts';
-import type { Cardano } from '@cardano-sdk/core';
 import type {
   Activity,
   BlockchainSpecificActivityMetadata,
@@ -64,6 +63,7 @@ import type {
   HydraHeadsIndexSliceState,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type {
   HydraAccountHead,
   HydraAccountMatch,

@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber } from '@lace-lib/util';
 import { describe, it, expect } from 'vitest';
 

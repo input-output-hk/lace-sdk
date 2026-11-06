@@ -1,10 +1,10 @@
-import { Cardano } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
 import {
   createCustodyAccountRecord,
   encodeCustodyAccountRedeemer,
   encodeCustodyLogicRedeemer,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CustodyBuildFailure } from '../../../src/store/custody/build-failure';
@@ -47,21 +47,21 @@ import {
 } from './fixtures';
 
 import type { CustodyChain } from '../../../src/store/custody/custody-chain';
-import type { Serialization } from '@cardano-sdk/core';
 import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildError,
   CardanoCustodyBuildResult,
   CardanoCustodyCollateralFunding,
 } from '@lace-contract/cardano-context';
+import type { Serialization } from '@lace-lib/cardano-core';
 import type { CustodyGrant } from '@lace-lib/cardano-custody';
 
 const limits = vi.hoisted(() => ({ error: undefined as Error | undefined }));
 
-vi.mock('@lace-contract/cardano-context', async importOriginal => {
+vi.mock('@lace-lib/cardano-tx-builder', async importOriginal => {
   const actual = await importOriginal<
     // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-    typeof import('@lace-contract/cardano-context')
+    typeof import('@lace-lib/cardano-tx-builder')
   >();
   return {
     ...actual,
@@ -424,9 +424,9 @@ describe('finalizeCustodyBuild', () => {
 
   it('refuses a fee above what the sponsor collateral covers with its return', () => {
     const fee = transactionOf(fixture.built).body().fee();
-    // The return needs 969,750 lovelace whatever four-byte amount it holds,
+    // The return needs 978,370 lovelace whatever four-byte amount it holds,
     // so the rest covers a fee of at most `fee - 1` at 150% collateral.
-    const coins = 969_750n + ((fee - 1n) * 150n) / 100n;
+    const coins = 978_370n + ((fee - 1n) * 150n) / 100n;
     expect(
       refusalOf({
         funding: {
@@ -440,7 +440,7 @@ describe('finalizeCustodyBuild', () => {
     ).toEqual({
       code: 'collateral-fee-ceiling',
       fee,
-      maxFee: ((coins - 969_750n) * 100n) / 150n,
+      maxFee: ((coins - 978_370n) * 100n) / 150n,
     });
   });
 

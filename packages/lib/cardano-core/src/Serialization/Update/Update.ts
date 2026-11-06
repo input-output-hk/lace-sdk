@@ -6,6 +6,7 @@ import { CborReader, CborWriter } from '../CBOR';
 import { ProposedProtocolParameterUpdates } from './ProposedProtocolParameterUpdates';
 
 import type * as Cardano from '../../Cardano';
+import type { DeserializationOptions } from '../Common';
 
 const UPDATE_ARRAY_SIZE = 2;
 
@@ -59,9 +60,10 @@ export class Update {
    * Deserializes the Update from a CBOR byte array.
    *
    * @param cbor The CBOR encoded Update object.
+   * @param options Deserialization options forwarded to the proposed parameter updates.
    * @returns The new Update instance.
    */
-  static fromCbor(cbor: HexBlob): Update {
+  static fromCbor(cbor: HexBlob, options?: DeserializationOptions): Update {
     const reader = new CborReader(cbor);
 
     const length = reader.readStartArray();
@@ -74,6 +76,7 @@ export class Update {
 
     const updates = ProposedProtocolParameterUpdates.fromCbor(
       HexBlob.fromBytes(reader.readEncodedValue()),
+      options,
     );
     const epoch = reader.readInt();
 

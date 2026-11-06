@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { computeMinimumCoinQuantity } from '@cardano-sdk/tx-construction';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { computeMinimumCoinQuantity } from '@lace-lib/cardano-tx-builder';
 
 import { LOVELACE_FOR_REGISTRATION } from '../constants';
 import { canonicalDustPayloadDefect } from '../dust-address-decode';
@@ -30,7 +30,7 @@ import type {
   BuildNightDesignationTxParams,
   NightDesignationTxBlueprint,
 } from './types';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const NFT_ASSET_NAME = Cardano.AssetName('');
 

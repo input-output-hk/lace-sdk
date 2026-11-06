@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { HYDRA_METADATA_LABEL, parseHydraTxTag } from '../src';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const withTag = (value: Cardano.Metadatum) =>
   new Map<bigint, Cardano.Metadatum>([[HYDRA_METADATA_LABEL, value]]);

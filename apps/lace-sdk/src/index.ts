@@ -236,11 +236,25 @@ export type {
 } from '@lace-contract/wallet-repo';
 
 // Transaction building (simple, certificates, and Plutus smart contracts)
-export { TransactionBuilder } from '@lace-contract/cardano-context';
+export {
+  EvaluatedFeeShortfallError,
+  ExtraneousRedeemerError,
+  InputSelectionError,
+  InsufficientCollateralError,
+  MalformedGuardDatumError,
+  MissingCollateralError,
+  MissingDatumError,
+  MissingRedeemerError,
+  MissingTopLevelGuardError,
+  NotAllowedSupplementalDatumError,
+  TransactionBuilder,
+  UnbalancedSubTransactionsError,
+} from '@lace-lib/cardano-tx-builder';
 export type {
   PlutusContext,
+  ScriptGuardProps,
   ScriptInputProps,
-} from '@lace-contract/cardano-context';
+} from '@lace-lib/cardano-tx-builder';
 export { createTxBuilder, waitForNetworkInfo } from './create-tx-builder';
 export type {
   CardanoContextObservables,
@@ -263,10 +277,10 @@ export type {
   WalletWithCardanoSubmit,
 } from './submit-cardano-tx';
 
-export { HexBlob } from '@cardano-sdk/util';
+export { HexBlob } from '@lace-lib/cardano-util';
 
 // Cardano chain IDs and CBOR serialization
-export { Cardano, Serialization } from '@cardano-sdk/core';
+export { Cardano, Serialization } from '@lace-lib/cardano-core';
 
 // Swap provider (Steelswap + shared swap types)
 export * from './swap';
@@ -275,7 +289,7 @@ export * from './swap';
 export * from './blockfrost';
 
 // Branded address constructors / types (lace-platform brands, distinct
-// from @cardano-sdk/core Cardano.* address types).
+// from @lace-lib/cardano-core Cardano.* address types).
 export * from './cardano-address-types';
 
 export { AddressAlias, AddressAliasType } from '@lace-contract/addresses';
@@ -337,8 +351,11 @@ export {
   ProviderFailure,
   TxSubmissionError,
   TxSubmissionErrorCode,
-} from '@cardano-sdk/core';
-export type { SubmitTxArgs, ValueNotConservedData } from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
+export type {
+  SubmitTxArgs,
+  ValueNotConservedData,
+} from '@lace-lib/cardano-core';
 
 // Module maps (re-exported as namespace for single-entrypoint bundling)
 export * as m from './modules-cardano';

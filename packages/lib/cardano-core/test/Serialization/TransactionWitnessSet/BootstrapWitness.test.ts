@@ -78,7 +78,7 @@ describe('BootstrapWitness', () => {
     expect(witness.toCore()).toEqual(core);
   });
 
-  it('encodes attributes as empty byte string if field not present', () => {
+  it('encodes missing attributes as an empty map', () => {
     const witness = BootstrapWitness.fromCore({
       chainCode: HexBlob(
         '0000000000000000000000000000000000000000000000000000000000000000',
@@ -135,6 +135,36 @@ describe('BootstrapWitness', () => {
   it('round trips a 32-byte chain code byte-exact', () => {
     expect(BootstrapWitness.fromCbor(cbor).toCbor()).toEqual(cbor);
     expect(BootstrapWitness.fromCore(core).toCbor()).toEqual(cbor);
+  });
+
+  describe('empty attributes', () => {
+    const vectors: [string, HexBlob][] = [
+      [
+        'the witness with vkey 32f09e2d',
+        HexBlob(
+          '84582032f09e2ddf7941003195bdd85c00e84384430527d4ec79d1b7d9b5f87464dfa55840b0dc830a60e05ee452e1d83385c85b0d4b31962e1cf4c56249130e5a3434cc6edd76b9b59d4b0624b9ae0a2b6aa87d6731ff67c527a27a69b5650d37247a3c715820bc6c31eb74e10dd45203618540dc04f5e2714a10ad8e3d47429e0d3526e7422d40',
+        ),
+      ],
+      [
+        'the witness with vkey 66be5f0b',
+        HexBlob(
+          '84582066be5f0b10f875be75dde2c3f4075fd624c8dbee65c6d8aac7070aec993001825840fe749da4538746770cf71dad2a6215ba2f8b7c9d33f376079c6d1226a8f687af93759fa0d91d80a739c61e6a987f78b80e0c039b8d9b28574d754b8853a400315820610db098cbb3e63b0a16792f6b9a9379ed5609719f69b193673455c76d4f329f40',
+        ),
+      ],
+    ];
+
+    it.each(vectors)(
+      'keeps an empty attributes byte string when %s is rebuilt from its core form',
+      (_label, vector) => {
+        const witness = BootstrapWitness.fromCbor(vector);
+
+        expect(witness.attributes()).toEqual('');
+        expect(witness.toCore().addressAttributes).toEqual('');
+        expect(BootstrapWitness.fromCore(witness.toCore()).toCbor()).toEqual(
+          vector,
+        );
+      },
+    );
   });
 
   // Enforcement decision (Dijkstra CDDL: chain_code : bytes .size 32): the 32-byte

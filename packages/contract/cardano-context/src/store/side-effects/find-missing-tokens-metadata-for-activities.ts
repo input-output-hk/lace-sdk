@@ -1,5 +1,5 @@
-import { Milliseconds } from '@cardano-sdk/core';
-import { blockingWithLatestFrom } from '@cardano-sdk/util-rxjs';
+import { Milliseconds } from '@lace-lib/cardano-core';
+import { blockingWithLatestFrom } from '@lace-lib/cardano-util-rxjs';
 import uniq from 'lodash/uniq';
 import { combineLatest, debounceTime, from, mergeMap } from 'rxjs';
 

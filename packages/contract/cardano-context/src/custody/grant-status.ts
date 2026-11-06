@@ -1,11 +1,11 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import { minAdaRequired } from '@cardano-sdk/tx-construction';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import {
   custodyGrantLiveness,
   custodyRecipientToAddress,
   isCustodyLovelaceAsset,
 } from '@lace-lib/cardano-custody';
+import { minAdaRequired } from '@lace-lib/cardano-tx-builder';
 
 import { CARDANO_CUSTODY_DEFAULT_GRANT_FEE_BOUND } from './build-transaction';
 

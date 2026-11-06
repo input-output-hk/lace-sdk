@@ -2,6 +2,7 @@ import { HexBlob } from '@lace-lib/cardano-util';
 
 import { hexToBytes } from '../../util/misc';
 import { CborReader, CborWriter } from '../CBOR';
+import { containerEdits } from '../Common/ContainerEdits';
 
 import { PlutusList } from './PlutusList';
 
@@ -23,6 +24,9 @@ const ALTERNATIVE_TAG_OFFSET = 7n;
 export class ConstrPlutusData {
   readonly #alternative: bigint = 0n;
   readonly #data = new PlutusList();
+  #originalBytes: HexBlob | undefined = undefined;
+  #decodedData: HexBlob | undefined = undefined;
+  #verifiedAt = -1;
 
   /**
    * Initializes a new instance of the ConstrPlutusData class.
@@ -38,10 +42,22 @@ export class ConstrPlutusData {
 
   /**
    * Serializes this ConstrPlutusData instance into its CBOR representation as a Uint8Array.
+   * An instance decoded from CBOR returns the bytes it was decoded from while its arguments
+   * still encode as they did when decoded.
    *
    * @returns The CBOR representation of this instance as a Uint8Array.
    */
   toCbor(): HexBlob {
+    if (this.#originalBytes && this.#verifiedAt === containerEdits())
+      return this.#originalBytes;
+
+    const data = this.#data.toCbor();
+
+    if (this.#originalBytes && data === this.#decodedData) {
+      this.#verifiedAt = containerEdits();
+      return this.#originalBytes;
+    }
+
     const writer = new CborWriter();
     const compactTag = ConstrPlutusData.alternativeToCompactCborTag(
       this.#alternative,
@@ -50,11 +66,11 @@ export class ConstrPlutusData {
     writer.writeTag(Number(compactTag));
 
     if (compactTag !== GENERAL_FORM_TAG) {
-      writer.writeEncodedValue(hexToBytes(this.#data.toCbor()));
+      writer.writeEncodedValue(hexToBytes(data));
     } else {
       writer.writeStartArray(2);
       writer.writeInt(this.#alternative);
-      writer.writeEncodedValue(hexToBytes(this.#data.toCbor()));
+      writer.writeEncodedValue(hexToBytes(data));
     }
 
     return HexBlob.fromBytes(writer.encode());
@@ -75,21 +91,31 @@ export class ConstrPlutusData {
       reader.readStartArray();
 
       const alternative = reader.readInt();
-      const data = reader.readEncodedValue();
-      const plutusList = PlutusList.fromCbor(HexBlob.fromBytes(data));
+      const data = HexBlob.fromBytes(reader.readEncodedValue());
+      const plutusList = PlutusList.fromCbor(data);
 
       reader.readEndArray();
 
-      return new ConstrPlutusData(alternative, plutusList);
+      const constr = new ConstrPlutusData(alternative, plutusList);
+      constr.#originalBytes = cbor;
+      constr.#decodedData = data;
+      constr.#verifiedAt = containerEdits();
+
+      return constr;
     }
 
     const alternative = ConstrPlutusData.compactCborTagToAlternative(
       BigInt(tag),
     );
-    const data = reader.readEncodedValue();
-    const plutusList = PlutusList.fromCbor(HexBlob.fromBytes(data));
+    const data = HexBlob.fromBytes(reader.readEncodedValue());
+    const plutusList = PlutusList.fromCbor(data);
 
-    return new ConstrPlutusData(alternative, plutusList);
+    const constr = new ConstrPlutusData(alternative, plutusList);
+    constr.#originalBytes = cbor;
+    constr.#decodedData = data;
+    constr.#verifiedAt = containerEdits();
+
+    return constr;
   }
 
   /**

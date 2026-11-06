@@ -23,11 +23,11 @@ import {
 
 import type { ChainFixture } from './fixtures';
 import type { finalizeCustodyBuild } from '../../../src/store/custody/custody-validation';
-import type { Serialization } from '@cardano-sdk/core';
 import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildResult,
 } from '@lace-contract/cardano-context';
+import type { Serialization } from '@lace-lib/cardano-core';
 
 type CustodyBuildExpectation = Parameters<typeof finalizeCustodyBuild>[2];
 

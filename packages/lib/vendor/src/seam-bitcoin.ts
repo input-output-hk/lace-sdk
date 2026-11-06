@@ -3,9 +3,9 @@
 // Bitcoin signing & derivation externals — the host's Bitcoin sealing, data
 // plane, and sign surfaces reach these through the same audited seam, mirroring
 // the symbols packages/module/blockchain-bitcoin imports. bip39 is pinned to
-// 3.0.4 to match the `@cardano-sdk/key-management` transitive the Cardano
-// seam (seam-cardano.ts) already inlines, so esbuild dedupes to a single bip39
-// copy.
+// 3.0.4 for the Bitcoin seed; `@lace-lib/cardano-key-management` carries its
+// own bip39 for the Cardano mnemonic helpers the Cardano seam (seam-cardano.ts)
+// inlines.
 export {
   address,
   crypto,

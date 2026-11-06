@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import { CURRENT_CUSTODY_CONTRACT_VERSION } from '@lace-lib/cardano-custody';
 import { describe, expect, it } from 'vitest';
 

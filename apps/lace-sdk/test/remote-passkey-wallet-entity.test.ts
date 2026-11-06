@@ -1,11 +1,11 @@
-import { Cardano } from '@cardano-sdk/core';
 import { WalletId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { PasskeyWalletMismatchError } from '../src/passkey-wallet-mismatch-error';
 import { createRemotePasskeyWalletEntity } from '../src/remote-passkey-wallet-entity';
 
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 const accountXpub =
   '928f23856ef3f6edc6adc14d7fb39b15cfb985b9bb038755158cf2ad6cdd8281d601bb8f919e2feb0183b1462a59fce5c7acde2cf10ccd10e213d02ff0d0a7a7' as Bip32PublicKeyHex;

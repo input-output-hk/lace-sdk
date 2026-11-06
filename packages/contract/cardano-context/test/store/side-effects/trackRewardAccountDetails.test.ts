@@ -1,6 +1,10 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { failuresActions } from '@lace-contract/failures';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
 import { BigNumber, Err, Ok, Timestamp } from '@lace-lib/util';
 import { testSideEffect as baseTestSideEffect } from '@lace-lib/util-dev';
 import { Serializable } from '@lace-lib/util-store';

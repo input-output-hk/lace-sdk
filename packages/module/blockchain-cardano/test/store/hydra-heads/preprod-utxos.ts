@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 /** A UTxO as recorded from the Preprod Blockfrost API. */
 type RecordedUtxo = {

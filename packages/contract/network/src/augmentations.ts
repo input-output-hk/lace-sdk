@@ -5,7 +5,7 @@
 // enforces it.
 
 import type { networkReducers } from './store/slice';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { StateFromReducersMapObject } from '@reduxjs/toolkit';
 
 declare module '@lace-contract/module' {

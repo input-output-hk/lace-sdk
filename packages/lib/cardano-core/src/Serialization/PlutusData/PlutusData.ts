@@ -38,27 +38,26 @@ export class PlutusData {
 
   /**
    * Serializes this PlutusData instance into its CBOR representation as a Uint8Array.
+   * A constr, list or map encodes as the container it holds, and an integer or a byte string
+   * decoded from CBOR returns the bytes it was decoded from.
    *
    * @returns The CBOR representation of this instance as a Uint8Array.
    */
   toCbor(): HexBlob {
+    switch (this.#kind) {
+      case PlutusDataKind.ConstrPlutusData:
+        return this.#constr!.toCbor();
+      case PlutusDataKind.Map:
+        return this.#map!.toCbor();
+      case PlutusDataKind.List:
+        return this.#list!.toCbor();
+    }
+
     if (this.#originalBytes) return this.#originalBytes;
 
     let cbor: HexBlob;
 
     switch (this.#kind) {
-      case PlutusDataKind.ConstrPlutusData: {
-        cbor = this.#constr!.toCbor();
-        break;
-      }
-      case PlutusDataKind.Map: {
-        cbor = this.#map!.toCbor();
-        break;
-      }
-      case PlutusDataKind.List: {
-        cbor = this.#list!.toCbor();
-        break;
-      }
       // Note [The 64-byte limit]: See https://github.com/input-output-hk/plutus/blob/1f31e640e8a258185db01fa899da63f9018c0e85/plutus-core/plutus-core/src/PlutusCore/Data.hs#L61-L105
       // If the bytestring is >64bytes, we encode it as indefinite-length bytestrings with 64-byte chunks. We have to write
       // our own encoders/decoders so we can produce chunks of the right size and check
@@ -166,7 +165,7 @@ export class PlutusData {
           case CborTag.NegativeBigNum: {
             reader.readTag();
             const bytes = reader.readByteString();
-            data.#integer = PlutusData.bufferToBigint(bytes) * -1n;
+            data.#integer = -1n - PlutusData.bufferToBigint(bytes);
             data.#kind = PlutusDataKind.Integer;
             break;
           }
@@ -217,6 +216,10 @@ export class PlutusData {
 
   /**
    * Creates a Core Tx object from the current PlutusData object.
+   *
+   * In the core form of a map, every entry of a repeated key takes the value of the first entry,
+   * and integer keys collapse into one entry. Only `data` loses entries: `cbor` keeps the
+   * exact decoded bytes and fromCore uses it.
    *
    * @returns The PlutusData object.
    */

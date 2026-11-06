@@ -1,13 +1,13 @@
-import { Cardano } from '@cardano-sdk/core';
-import { SodiumBip32Ed25519 } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { SodiumBip32Ed25519 } from '@lace-lib/cardano-crypto';
 import {
   InMemoryKeyAgent,
   KeyPurpose,
   type SerializableInMemoryKeyAgentData,
-} from '@cardano-sdk/key-management';
+} from '@lace-lib/cardano-key-management';
 import { dummyLogger } from 'ts-log';
 
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 /** Use the same CIP-3 Icarus account derivation as Cardano's wallet integration. */
 export const passkeyAccountPublicKey = async (

@@ -3,7 +3,7 @@ import type {
   CustodyExternalOutput,
   CustodyFeeShares,
 } from './inspect';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const lovelaceOf = (items: readonly { readonly value: Cardano.Value }[]) =>
   items.reduce((total, { value }) => total + value.coins, 0n);

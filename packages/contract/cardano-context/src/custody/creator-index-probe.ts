@@ -1,5 +1,8 @@
 import type { CardanoCustodyBuildError } from './build-transaction';
-import type { Bip32PublicKeyHex, Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type {
+  Bip32PublicKeyHex,
+  Hash28ByteBase16,
+} from '@lace-lib/cardano-crypto';
 import type { CustodyAccountRecord } from '@lace-lib/cardano-custody';
 
 /**

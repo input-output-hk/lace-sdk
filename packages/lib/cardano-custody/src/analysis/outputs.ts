@@ -5,7 +5,7 @@
 // classified against every supported contract version, and addresses are
 // compared as the script context presents them, without a network id.
 
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 
 import {
   decodeCustodyAccountState,
@@ -26,7 +26,7 @@ import type {
 } from '../codecs/account-state';
 import type { CustodyContractVersion } from '../contract-version';
 import type { CustodyValueDelta } from './value';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /** How an output carries a datum. */
 export type CustodyDatumKind = 'hash' | 'inline' | 'none';

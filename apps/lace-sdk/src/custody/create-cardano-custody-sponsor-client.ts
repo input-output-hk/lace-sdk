@@ -11,7 +11,7 @@ import {
 } from './parse-sponsor-answer';
 
 import type { CardanoCustodySponsor } from './cardano-custody-sponsor';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export type CreateCardanoCustodySponsorClientProps = {
   /**

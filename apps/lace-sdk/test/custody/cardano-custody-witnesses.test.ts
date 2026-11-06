@@ -1,8 +1,8 @@
-import { Serialization } from '@cardano-sdk/core';
 import {
   mergeVkeyWitnesses,
   TransactionUnderSignedError,
 } from '@lace-contract/cardano-context';
+import { Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { describe, expect, it } from 'vitest';
 

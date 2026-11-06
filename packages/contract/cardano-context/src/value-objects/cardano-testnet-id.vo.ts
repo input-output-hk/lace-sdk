@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 export type CardanoTestnetId = 'preprod' | 'preview' | 'sanchonet';
 

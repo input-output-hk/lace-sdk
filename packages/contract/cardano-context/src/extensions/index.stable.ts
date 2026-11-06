@@ -3,11 +3,11 @@
 // The exports and their types match index.ts.
 import type { CardanoPaymentAddress, ExtensionActivityTx } from '../types';
 import type { CardanoWalletAccount } from '../util';
-import type { Cardano } from '@cardano-sdk/core';
 import type { ActivityType } from '@lace-contract/activities';
 import type { FeatureFlag } from '@lace-contract/feature';
 import type { LacePersistConfigMap } from '@lace-contract/module';
 import type { TokenId } from '@lace-contract/tokens';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** The account data of the account kinds the features add: none. */
 export type ExtensionAccountProps = never;

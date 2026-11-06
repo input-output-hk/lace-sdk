@@ -1,4 +1,4 @@
-import { Cardano, ProviderFailure } from '@cardano-sdk/core';
+import { Cardano, ProviderFailure } from '@lace-lib/cardano-core';
 import { HttpClientError } from '@lace-lib/util-provider';
 import { firstValueFrom } from 'rxjs';
 import { dummyLogger } from 'ts-log';
@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BlockfrostTxEvaluationProvider } from '../../../src/blockfrost';
 
-import type { Serialization } from '@cardano-sdk/core';
+import type { Serialization } from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
 
@@ -179,6 +179,49 @@ describe('BlockfrostTxEvaluationProvider', () => {
         purpose: Cardano.RedeemerPurpose.withdrawal,
         index: 0,
         budget: { memory: 302_119, steps: 98_444_310 },
+      },
+    ]);
+  });
+
+  it('maps the governance and guarding purposes in either spelling', async () => {
+    const result = await evaluate({
+      result: [
+        {
+          validator: { purpose: 'vote', index: 0 },
+          budget: { memory: 1, cpu: 2 },
+        },
+        {
+          validator: { purpose: 'propose', index: 1 },
+          budget: { memory: 3, cpu: 4 },
+        },
+        {
+          validator: { purpose: 'guard', index: 2 },
+          budget: { memory: 5, cpu: 6 },
+        },
+        { validator: 'guarding:3', budget: { memory: 7, steps: 8 } },
+      ],
+    });
+
+    expect(result.isOk() && result.value).toEqual([
+      {
+        purpose: Cardano.RedeemerPurpose.vote,
+        index: 0,
+        budget: { memory: 1, steps: 2 },
+      },
+      {
+        purpose: Cardano.RedeemerPurpose.propose,
+        index: 1,
+        budget: { memory: 3, steps: 4 },
+      },
+      {
+        purpose: Cardano.RedeemerPurpose.guarding,
+        index: 2,
+        budget: { memory: 5, steps: 6 },
+      },
+      {
+        purpose: Cardano.RedeemerPurpose.guarding,
+        index: 3,
+        budget: { memory: 7, steps: 8 },
       },
     ]);
   });

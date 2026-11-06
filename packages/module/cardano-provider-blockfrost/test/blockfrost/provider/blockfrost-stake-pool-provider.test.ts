@@ -1,13 +1,13 @@
-import { logger } from '@cardano-sdk/util-dev';
 import { BlockfrostStakePoolProvider } from '@lace-lib/cardano-provider-core';
+import { logger } from '@lace-lib/cardano-util-dev';
 import { ProviderError, ProviderFailure } from '@lace-lib/util-provider';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mockResponses } from '../util';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { Cardano } from '@cardano-sdk/core';
 import type { BlockfrostPartialStakePool } from '@lace-contract/cardano-stake-pools';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
 import type { Mock } from 'vitest';

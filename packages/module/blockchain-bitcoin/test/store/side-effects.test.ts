@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import { activitiesActions, ActivityType } from '@lace-contract/activities';
 import { addressesActions } from '@lace-contract/addresses';
 import {
@@ -16,6 +15,7 @@ import {
 } from '@lace-contract/network';
 import { tokensActions } from '@lace-contract/tokens';
 import { AccountId, WalletId } from '@lace-contract/wallet-repo';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 import { BigNumber, Milliseconds, Timestamp, Err, Ok } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { BehaviorSubject, EMPTY, of } from 'rxjs';

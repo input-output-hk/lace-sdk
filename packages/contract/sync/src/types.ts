@@ -1,6 +1,6 @@
-import type { Percent } from '@cardano-sdk/util';
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Percent } from '@lace-lib/cardano-util';
 import type { Timestamp } from '@lace-lib/util';
 
 export type SyncOperationId = string;

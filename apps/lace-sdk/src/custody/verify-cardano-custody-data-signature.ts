@@ -3,7 +3,7 @@ import { Err, Ok } from '@lace-lib/util';
 import { CustomError } from 'ts-custom-error';
 
 import type { CardanoCustodyDataPurpose } from './cardano-custody-device-signer';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type { CustodyDataSignatureError } from '@lace-lib/cardano-custody';
 import type { Result } from '@lace-lib/util';
 

@@ -11,7 +11,6 @@ import { refuseExtensionAccount } from '../account-guards';
 import { buildComposerTx, toPaymentAddress } from './build-composer-tx';
 
 import type { SideEffect } from '../../sdk-contracts';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type {
   ComposerBuildResult,
@@ -19,6 +18,7 @@ import type {
 } from '@lace-contract/cardano-context';
 import type { SideEffectDependencies } from '@lace-contract/module';
 import type { TxErrorTranslationKeys } from '@lace-contract/tx-executor';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 // =====================================================================
 // Composer — build orchestrator.
@@ -156,6 +156,7 @@ const buildComposition = async (
       ),
       tipSlot: Number(tip.slot),
       eraSummaries,
+      logger: dependencies.logger,
     });
 
     return {

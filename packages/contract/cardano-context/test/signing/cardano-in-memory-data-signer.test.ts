@@ -6,9 +6,9 @@ import { CardanoInMemoryDataSigner } from '../../src/signing/cardano-in-memory-d
 
 import type { WithCardanoKeyAgent$ } from '../../src/signing/cardano-in-memory-transaction-signer';
 import type { CardanoKeyAgent } from '../../src/signing/types';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type { SignerAuth } from '@lace-contract/signer';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type { Observable } from 'rxjs';
 
 const STUB_DREP_KEY_HASH = 'cd'.repeat(28) as Ed25519KeyHashHex;

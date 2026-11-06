@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { activitiesActions, ActivityType } from '@lace-contract/activities';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Timestamp, Ok, Err } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { EMPTY, of } from 'rxjs';

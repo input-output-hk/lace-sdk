@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { classifyCustodyAddress } from '@lace-lib/cardano-custody';
 
 import type { AnyAddress } from '@lace-contract/addresses';

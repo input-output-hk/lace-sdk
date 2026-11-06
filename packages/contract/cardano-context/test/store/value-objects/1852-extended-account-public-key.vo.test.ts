@@ -1,5 +1,5 @@
-import { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import { InvalidStringError } from '@cardano-sdk/util';
+import { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
+import { InvalidStringError } from '@lace-lib/cardano-util';
 import { describe, it, expect } from 'vitest';
 
 import { Cip1852ExtendedAccountPublicKey } from '../../../src';

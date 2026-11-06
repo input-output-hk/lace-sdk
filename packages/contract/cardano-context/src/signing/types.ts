@@ -1,10 +1,3 @@
-import type { Cardano, Serialization } from '@cardano-sdk/core';
-import type {
-  Bip32PublicKeyHex,
-  Ed25519PublicKeyHex,
-} from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
-import type { HexBlob } from '@cardano-sdk/util';
 import type { AuthSecret } from '@lace-contract/authentication-prompt';
 import type {
   DataSigner,
@@ -15,6 +8,13 @@ import type {
   SignerFactory,
   TransactionSigner,
 } from '@lace-contract/signer';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519PublicKeyHex,
+} from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
+import type { HexBlob } from '@lace-lib/cardano-util';
 import type { HexBytes } from '@lace-lib/util';
 
 /** Interface for Cardano key operations. */

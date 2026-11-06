@@ -15,6 +15,7 @@ import * as Trezor from '@trezor/connect';
 import _TrezorConnectWeb from '@trezor/connect-web';
 
 import { txToTrezor } from './transformers/tx';
+import { getUnmappedBodyFields } from './unmappedBodyFields';
 
 import type { Cardano, Serialization } from '@lace-lib/cardano-core';
 import type { BIP32Path } from '@lace-lib/cardano-crypto';
@@ -329,13 +330,35 @@ export class TrezorKeyAgent extends KeyAgentBase {
     return Trezor.PROTO.CardanoTxSigningMode.ORDINARY_TRANSACTION;
   }
 
+  /**
+   * Signs a transaction body on the device.
+   *
+   * @param txBody The transaction body to sign.
+   * @param context The signing context.
+   * @returns The signatures by public key.
+   * @throws HwMappingError Before reaching the device, when the body holds a
+   *   field the Trezor request drops (see {@link getUnmappedBodyFields}).
+   */
   async signTransaction(
     txBody: Serialization.TransactionBody,
-    { knownAddresses, txInKeyPathMap, scripts }: SignTransactionContext,
+    {
+      knownAddresses,
+      txInKeyPathMap,
+      scripts,
+      spentOutputAddresses,
+    }: SignTransactionContext,
   ): Promise<Cardano.Signatures> {
+    const body = txBody.toCore();
+    const unmappedFields = getUnmappedBodyFields(body);
+    if (unmappedFields.length > 0) {
+      throw new errors.HwMappingError(
+        `Trezor cannot carry the transaction body fields ${unmappedFields.join(
+          ', ',
+        )}`,
+      );
+    }
     try {
       await this.isTrezorInitialized;
-      const body = txBody.toCore();
       const hash = txBody.hash() as unknown as HexBlob;
 
       const outputsFormat = txBody
@@ -358,6 +381,7 @@ export class TrezorKeyAgent extends KeyAgentBase {
         knownAddresses,
         outputsFormat,
         scripts,
+        spentOutputAddresses,
         tagCborSets: txBody.hasTaggedSets(),
         txInKeyPathMap,
       });
@@ -389,6 +413,7 @@ export class TrezorKeyAgent extends KeyAgentBase {
             txInKeyPathMap,
             undefined,
             scripts,
+            spentOutputAddresses,
           )
           .map(derivationPath => this.derivePublicKey(derivationPath)),
       );
@@ -440,6 +465,19 @@ export class TrezorKeyAgent extends KeyAgentBase {
 
   async signCip8Data(): Promise<Cip30DataSignature> {
     throw new NotImplementedError('signCip8Data');
+  }
+
+  /**
+   * Sub transactions (CIP-0118 nested transactions) cannot be signed with a
+   * Trezor device: its Cardano app does not know the Dijkstra era, so it can
+   * neither show nor sign a sub transaction body.
+   *
+   * @throws NotImplementedError Always.
+   */
+  async signSubTransaction(): Promise<Cardano.Signatures> {
+    throw new NotImplementedError(
+      'Sub transaction signing is not supported by Trezor devices',
+    );
   }
 
   async exportRootPrivateKey(): Promise<Crypto.Bip32PrivateKeyHex> {

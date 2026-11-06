@@ -4,8 +4,8 @@
 // constants, so runtime code never loads the blueprint.
 // test/blueprint.test.ts ties both constants to the vendored plutus.json.
 
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * Compiled code of the account proxy (`account.account`) as the blueprint

@@ -1,8 +1,8 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Hash28ByteBase16, Hash32ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16, Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 import { classifyCustodyAccountUtxos } from '@lace-lib/cardano-custody';
 import { BlockfrostToCardanoSDK } from '@lace-lib/cardano-provider-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import type { BlockfrostUtxo } from '@lace-lib/cardano-provider-core';

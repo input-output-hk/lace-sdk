@@ -4,23 +4,6 @@ import type {
   TransactionExtensionMetadata,
 } from './extensions';
 import type { CardanoNetworkId, MasterFingerprint } from './value-objects';
-import type {
-  Asset,
-  Cardano,
-  EraSummary,
-  ProviderError,
-  Serialization,
-  SubmitTxArgs,
-} from '@cardano-sdk/core';
-import type {
-  Bip32PublicKeyHex,
-  Ed25519KeyHashHex,
-  Hash28ByteBase16,
-} from '@cardano-sdk/crypto';
-import type {
-  AccountKeyDerivationPath,
-  GroupedAddress,
-} from '@cardano-sdk/key-management';
 import type { ActivityType, RewardActivity } from '@lace-contract/activities';
 import type {
   AnyAddress,
@@ -35,6 +18,23 @@ import type {
 } from '@lace-contract/tokens';
 import type { FeeEntry } from '@lace-contract/tx-executor';
 import type { AccountId, InMemoryWallet } from '@lace-contract/wallet-repo';
+import type {
+  Asset,
+  Cardano,
+  EraSummary,
+  ProviderError,
+  Serialization,
+  SubmitTxArgs,
+} from '@lace-lib/cardano-core';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519KeyHashHex,
+  Hash28ByteBase16,
+} from '@lace-lib/cardano-crypto';
+import type {
+  AccountKeyDerivationPath,
+  GroupedAddress,
+} from '@lace-lib/cardano-key-management';
 import type {
   BigNumber,
   HexBytes,

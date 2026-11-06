@@ -21,6 +21,16 @@ export const createMockInputResolver = (
   },
 });
 
+/** Resolves inputs against the given utxos, and any other input to null. */
+export const createMockUtxoResolver = (
+  utxos: Cardano.Utxo[],
+): Cardano.InputResolver => ({
+  resolveInput: async input =>
+    utxos.find(
+      ([txIn]) => txIn.txId === input.txId && txIn.index === input.index,
+    )?.[1] ?? null,
+});
+
 export const createMockAssetProvider = (
   assets: Asset.AssetInfo[],
 ): AssetProvider => ({

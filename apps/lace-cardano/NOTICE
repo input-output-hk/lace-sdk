@@ -3,13 +3,15 @@
 This package is built from source ported from the Cardano JS SDK
 (https://github.com/input-output-hk/cardano-js-sdk) at commit 48019e49. It
 contains the code of the cardano-js-sdk packages @cardano-sdk/core,
-@cardano-sdk/crypto, @cardano-sdk/util, @cardano-sdk/key-management,
-@cardano-sdk/input-selection, @cardano-sdk/tx-construction, and
-@cardano-sdk/dapp-connector, whose notices follow.
+@cardano-sdk/crypto, @cardano-sdk/util, @cardano-sdk/key-management and
+@cardano-sdk/dapp-connector, and the fee and output rules of
+@cardano-sdk/tx-construction in its tx-builder subpath, whose notices follow.
+The transaction builder and coin selectors of the tx-builder subpath were
+written in the Lace repository.
 
 ---
 
-@cardano-sdk/core, @cardano-sdk/input-selection, @cardano-sdk/dapp-connector:
+@cardano-sdk/core, @cardano-sdk/dapp-connector:
 
 Copyright 2021 IOHK
 

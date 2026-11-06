@@ -1,7 +1,7 @@
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 
 /**
  * A grant spend this wallet built and has not yet submitted: the inputs it

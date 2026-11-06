@@ -1,7 +1,7 @@
 import { toCollateralOwnershipSets } from '@lace-lib/core/dapp-connector/signing';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { CollateralOwnershipSets } from '@lace-lib/core/dapp-connector/signing';
 
 export {

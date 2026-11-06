@@ -1,10 +1,10 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 import {
   datumMatchesStakeKey,
   decodeDustMappingDatum,
 } from '@lace-lib/cnight-dust-designation';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type {
   CardanoStakeKeyHash,
   DustMappingDatumValue,

@@ -1,6 +1,6 @@
-import { Milliseconds } from '@cardano-sdk/core';
 import { addressesActions } from '@lace-contract/addresses';
 import { tokensActions } from '@lace-contract/tokens';
+import { Milliseconds } from '@lace-lib/cardano-core';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { describe, expect, it } from 'vitest';
 

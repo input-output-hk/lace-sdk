@@ -1,4 +1,4 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
 import { SUPPORTED_CUSTODY_CONTRACT_VERSIONS } from '../contract-version';
 
@@ -7,7 +7,7 @@ import { scriptHashOfRewardAccount } from './transaction-facts';
 import { policyIdOf } from './value';
 
 import type { CustodyAccountHashes } from './outputs';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** An output of the transaction or of one of its sub-transactions. */
 type CustodyEffectLocation =

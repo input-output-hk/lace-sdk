@@ -1,6 +1,6 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {

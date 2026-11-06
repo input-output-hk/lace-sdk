@@ -1,4 +1,4 @@
-import { HexBlob } from '@cardano-sdk/util';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { firstValueFrom } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 
@@ -20,8 +20,8 @@ import {
   utxo,
 } from './custody-fixtures';
 
-import type { Cardano } from '@cardano-sdk/core';
 import type { CardanoCustodyDeviceBinding } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const observeWith = async (
   utxos: Cardano.Utxo[],

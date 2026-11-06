@@ -59,10 +59,14 @@ server.listen(0, '127.0.0.1', () => process.stdout.write(server.address().port +
 const unpublished = await registry(404);
 after(() => unpublished.child.kill());
 
-/** A tree holding the three packages at `version`, as the release check reads it. */
+/**
+ * A tree holding the three packages at `version`, as the release check reads
+ * it, with an `input-selection` entry when `inputSelection` declares one.
+ */
 const fixtureRoot = ({
   version = '0.2.0',
   core = 'export declare const a: number;',
+  inputSelection,
 } = {}) => {
   const root = temporary();
   const write = (file, text) => {
@@ -78,6 +82,10 @@ const fixtureRoot = ({
   write('apps/lace-cardano/package.json', manifest('@laceio/cardano'));
   write('apps/lace-cardano/dist/core.d.ts', `${core}\n`);
   write('apps/lace-cardano/dist/core.js', 'export const a = 1;\n');
+  if (inputSelection !== undefined) {
+    write('apps/lace-cardano/dist/input-selection.d.ts', `${inputSelection}\n`);
+    write('apps/lace-cardano/dist/input-selection.js', 'export {};\n');
+  }
   for (const device of ['ledger', 'trezor']) {
     write(
       `apps/lace-cardano-${device}/package.json`,
@@ -174,26 +182,76 @@ describe('the release check', () => {
     );
   });
 
-  it('refuses a stable release that removes an export the latest release did not deprecate', () => {
-    const older = check(
-      fixtureRoot({
-        version: '0.1.0',
-        core: 'export declare const a: number;\nexport declare const gone: number;',
-      }),
-      'lace-sdk@0.1.0',
+  /** A directory standing in for npm, holding the family's stable release at `version`. */
+  const publishedRelease = (version, older) => {
+    const release = check(
+      fixtureRoot({ version, ...older }),
+      `lace-sdk@${version}`,
     );
-    const npm = published(
-      ...older.tarballs
+    return published(
+      ...release.tarballs
         .filter(f => f.startsWith('laceio-'))
-        .map(f => path.join(older.out, f)),
+        .map(f => path.join(release.out, f)),
     );
+  };
+  const WITH_GONE = {
+    core: 'export declare const a: number;\nexport declare const gone: number;',
+  };
+
+  it('before 1.0, accepts a minor release that removes an export the latest release did not deprecate, and refuses a patch', () => {
+    const npm = publishedRelease('0.1.0', WITH_GONE);
+    const minor = check(fixtureRoot(), 'lace-sdk@0.2.0', {
+      PUBLISHED_TARBALLS: npm,
+    });
+    assert.equal(minor.status, 0, minor.output);
+    assert.match(
+      minor.output,
+      /@laceio\/cardano@0\.2\.0: publishes \(meets the versioning rules against 0\.1\.0\)/,
+    );
+    const patch = check(fixtureRoot({ version: '0.1.1' }), 'lace-sdk@0.1.1', {
+      PUBLISHED_TARBALLS: npm,
+    });
+    assert.equal(patch.status, 1);
+    assert.match(
+      patch.output,
+      /0\.1\.1 changes or removes core:gone after 0\.1\.0; a minor release is required/,
+    );
+    assert.doesNotMatch(patch.output, /without being @deprecated/);
+  });
+
+  it('before 1.0, accepts a minor release that drops an entry whose exports the latest release did not deprecate', () => {
+    const npm = publishedRelease('0.1.0', {
+      inputSelection: 'export declare const select: number;',
+    });
     const result = check(fixtureRoot(), 'lace-sdk@0.2.0', {
+      PUBLISHED_TARBALLS: npm,
+    });
+    assert.equal(result.status, 0, result.output);
+  });
+
+  it('from 1.0, refuses a major release that removes an export the latest release did not deprecate', () => {
+    const npm = publishedRelease('1.0.0', WITH_GONE);
+    const result = check(fixtureRoot({ version: '2.0.0' }), 'lace-sdk@2.0.0', {
       PUBLISHED_TARBALLS: npm,
     });
     assert.equal(result.status, 1);
     assert.match(
       result.output,
-      /core:gone changes or is removed without being @deprecated in 0\.1\.0/,
+      /core:gone changes or is removed without being @deprecated in 1\.0\.0/,
+    );
+  });
+
+  it('from 1.0, refuses a major release that drops an entry whose exports the latest release did not deprecate', () => {
+    const npm = publishedRelease('1.0.0', {
+      inputSelection: 'export declare const select: number;',
+    });
+    const result = check(fixtureRoot({ version: '2.0.0' }), 'lace-sdk@2.0.0', {
+      PUBLISHED_TARBALLS: npm,
+    });
+    assert.equal(result.status, 1);
+    assert.match(
+      result.output,
+      /input-selection:select changes or is removed without being @deprecated in 1\.0\.0/,
     );
   });
 

@@ -1,12 +1,16 @@
-import { Cardano, Serialization, setInConwayEra } from '@cardano-sdk/core';
-import { Ed25519PublicKey, Ed25519Signature } from '@cardano-sdk/crypto';
-import { AddressType } from '@cardano-sdk/key-management';
 import { AuthSecret } from '@lace-contract/authentication-prompt';
 import {
   accessAuthSecret,
   clearAuthSecret,
   propagateAuthSecret,
 } from '@lace-contract/authentication-prompt/src/store/auth-secret-accessor';
+import { Cardano, Serialization, setInConwayEra } from '@lace-lib/cardano-core';
+import { Ed25519PublicKey, Ed25519Signature } from '@lace-lib/cardano-crypto';
+import { AddressType } from '@lace-lib/cardano-key-management';
+import {
+  getUniqueSignerKeyHashes,
+  TransactionBuilder,
+} from '@lace-lib/cardano-tx-builder';
 import { HexBytes } from '@lace-lib/util';
 import { firstValueFrom, from, of, switchMap } from 'rxjs';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -17,13 +21,14 @@ import {
   createCardanoKeyAgentFromEncryptedRoot,
   deriveDRepKeyHash,
 } from '../../src/signing/cardano-key-agent';
-import { getUniqueSignerKeyHashes } from '../../src/signing/getUniqueSigners';
-import { TransactionBuilder } from '../../src/tx-builder/TransactionBuilder';
 
 import type { WithCardanoKeyAgent$ } from '../../src/signing/cardano-in-memory-transaction-signer';
-import type { Ed25519KeyHashHex, Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { SignerAuth } from '@lace-contract/signer';
+import type {
+  Ed25519KeyHashHex,
+  Bip32PublicKeyHex,
+} from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 // Real preview-testnet fixture (see LW-14969): the root key is encrypted under
 // the UTF-8 bytes of PASSWORD, so the real AES-GCM decrypt only succeeds while
@@ -422,7 +427,8 @@ describe('Cardano in-memory signing — native script witnesses', () => {
     } as unknown as ConstructorParameters<typeof TransactionBuilder>[1];
 
     // A single owned UTxO to balance against; its payment key is the input
-    // signer, while the attached script adds the stake key as a distinct signer.
+    // signer, while the attached minting policy adds the stake key as a
+    // distinct signer.
     const availableUtxos: Cardano.Utxo[] = [
       [
         {
@@ -434,6 +440,13 @@ describe('Cardano in-memory signing — native script witnesses', () => {
       ],
     ];
 
+    const policy = requireSig(stakeKeyHash);
+    const mintedBy = (script: Cardano.Script) =>
+      Cardano.AssetId.fromParts(
+        Cardano.PolicyId(Serialization.Script.fromCore(script).hash()),
+        Cardano.AssetName(''),
+      );
+
     const builtTx = await new TransactionBuilder(
       Cardano.NetworkMagics.Preprod,
       protocolParameters,
@@ -441,7 +454,8 @@ describe('Cardano in-memory signing — native script witnesses', () => {
       .setChangeAddress(FIXTURE_ADDRESS)
       .setUnspentOutputs(availableUtxos)
       .transferValue(FIXTURE_ADDRESS, { coins: 2_000_000n })
-      .attachScript(requireSig(stakeKeyHash))
+      .mintAssets(new Map([[mintedBy(policy), 1n]]))
+      .attachScript(policy)
       .build();
 
     const builtCore = builtTx.toCore();

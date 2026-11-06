@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,8 +7,8 @@ import {
 } from '../../src/signing/collateral-ownership';
 
 import type { CollateralOwnershipErrorCase } from '../../src/signing/assert-collateral-ownership';
-import type * as Crypto from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type * as Crypto from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 const txIn = (id: string, index: number): Cardano.TxIn =>
   ({ txId: id, index } as unknown as Cardano.TxIn);

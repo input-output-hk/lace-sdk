@@ -6,7 +6,7 @@ import {
 } from '../../src/signing/assert-covers-pinned';
 
 import type { CardanoRewardAccount } from '../../src/types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const tx = (
   inputs: { txId: string; index: number }[],

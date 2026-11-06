@@ -14,8 +14,9 @@ export default defineConfig(
     },
   },
   // ADR 37: core admits the trusted SDK surface only through the @lace-lib/vendor
-  // seam — never @cardano-sdk/@midnight-ntwrk directly. Keeps core framework-free
-  // and vendor the single audit chokepoint for the privileged host bundle.
+  // seam, never the Cardano SDK or @midnight-ntwrk directly. Keeps core
+  // framework-free and vendor the single audit chokepoint for the privileged
+  // host bundle.
   {
     files: ['src/**/*.ts', 'test/**/*.ts'],
     rules: {
@@ -29,11 +30,13 @@ export default defineConfig(
               group: [
                 '@cardano-sdk',
                 '@cardano-sdk/*',
+                '@lace-lib/cardano-*',
+                '@lace-lib/cardano-*/*',
                 '@midnight-ntwrk',
                 '@midnight-ntwrk/*',
               ],
               message:
-                'Import the trusted SDK surface through @lace-lib/vendor (ADR 37). @lace-lib/core must not depend on @cardano-sdk/@midnight-ntwrk directly — add the symbol to the vendor seam instead.',
+                'Import the trusted SDK surface through @lace-lib/vendor (ADR 37). @lace-lib/core must not depend on the Cardano SDK (@lace-lib/cardano-*) or @midnight-ntwrk directly: add the symbol to the vendor seam instead.',
             },
           ],
         },

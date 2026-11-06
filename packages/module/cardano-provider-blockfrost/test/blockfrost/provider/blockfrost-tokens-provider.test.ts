@@ -1,8 +1,8 @@
-import { Cardano } from '@cardano-sdk/core';
-import { logger } from '@cardano-sdk/util-dev';
 import { CardanoPaymentAddress } from '@lace-contract/cardano-context';
 import { TokenId } from '@lace-contract/tokens';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { logger } from '@lace-lib/cardano-util-dev';
 import { BigNumber } from '@lace-lib/util';
 import { HttpClientError } from '@lace-lib/util-provider';
 import { firstValueFrom } from 'rxjs';

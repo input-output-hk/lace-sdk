@@ -1,7 +1,7 @@
-import { Cardano } from '@cardano-sdk/core';
 import { FEATURE_FLAG_CARDANO } from '@lace-contract/cardano-context';
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Milliseconds } from '@lace-lib/util';
 import { expect, it } from 'vitest';
 

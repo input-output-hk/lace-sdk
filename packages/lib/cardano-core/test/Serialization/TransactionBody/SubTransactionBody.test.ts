@@ -28,6 +28,11 @@ const scriptHashCredential: Cardano.Credential = {
   type: Cardano.CredentialType.ScriptHash,
 };
 
+const scriptRewardAccount = Cardano.RewardAccount.fromCredential(
+  scriptHashCredential,
+  Cardano.NetworkId.Mainnet,
+);
+
 const constrDatum: Cardano.PlutusData = {
   constructor: 0n,
   fields: { items: [] },
@@ -42,6 +47,9 @@ const guardedBodyCbor = HexBlob(
   `a300d901028001801818${requiredGuardsVector.hex}`,
 );
 const emptyGuardsBodyCbor = HexBlob('a300d901028001801818a0');
+const intervalsBodyCbor = HexBlob(
+  `a300d90102800180181aa2581de1cb0ec2692497b458e46812c8a5bfa2931d1a2d965a99893828ec810f1903e8581df1${SCRIPT_HASH}821901f4f6`,
+);
 const feeBodyCbor = HexBlob(topLevelBodyVector.hex);
 
 const maximalBodyCbor = HexBlob(
@@ -63,8 +71,8 @@ const maximalBodyCbor = HexBlob(
     '68747470733a2f2f7777772e736f6d6575726c2e696f582000000000000000000000000000000000000000000000000' +
     '00000000000000000151907d0161903e81818a28200581c00112233445566778899aabbccddeeff00112233445566778' +
     '899aabbf68201581caabbccddeeff00112233445566778899aabbccddeeff001122334455d879801819a1581de1cb0ec' +
-    '2692497b458e46812c8a5bfa2931d1a2d965a99893828ec810f1a000f4240181aa18200581c001122334455667788' +
-    '99aabbccddeeff00112233445566778899aabb821864191388',
+    '2692497b458e46812c8a5bfa2931d1a2d965a99893828ec810f1a000f4240181aa1581de1cb0ec2692497b458e46812' +
+    'c8a5bfa2931d1a2d965a99893828ec810f821864191388',
 );
 
 const minimalCore: Cardano.SubTransactionBody = {
@@ -75,8 +83,8 @@ const minimalCore: Cardano.SubTransactionBody = {
 const maximalCore: Cardano.SubTransactionBody = {
   accountBalanceIntervals: [
     {
-      credential: keyHashCredential,
       interval: { exclusiveUpperBound: 5000n, inclusiveLowerBound: 100n },
+      rewardAccount,
     },
   ],
   auxiliaryDataHash: Crypto.Hash32ByteBase16(TX_ID),
@@ -220,15 +228,14 @@ describe('SubTransactionBody', () => {
         20n,
         21n,
         22n,
+        24n,
         25n,
         26n,
       ];
-      const subOnlyKeys = new Set([24n]);
-      const topOnlyKeys = new Set([2n, 6n, 13n, 16n, 17n, 23n]);
+      const topOnlyKeys = new Set([2n, 6n, 13n, 16n, 17n, 23n, 27n]);
 
       const subCore = SubTransactionBody.fromCbor(maximalBodyCbor).toCore();
-      const { requiredTopLevelGuards, ...sharedCore } = subCore;
-      const topCore: Cardano.TxBody = { ...sharedCore, fee: 0n };
+      const topCore: Cardano.TxBody = { ...subCore, fee: 0n };
 
       const subEntries = readMapEntries(
         SubTransactionBody.fromCore(subCore).toCbor(),
@@ -237,7 +244,7 @@ describe('SubTransactionBody', () => {
         TransactionBody.fromCore(topCore).toCbor(),
       );
 
-      expect(requiredTopLevelGuards).toBeDefined();
+      expect(subCore.requiredTopLevelGuards).toBeDefined();
       for (const key of sharedKeys) {
         expect(subEntries.has(key)).toBe(true);
         expect(`${key}:${topEntries.get(key)}`).toEqual(
@@ -245,7 +252,7 @@ describe('SubTransactionBody', () => {
         );
       }
       for (const key of subEntries.keys()) {
-        expect(sharedKeys.includes(key) || subOnlyKeys.has(key)).toBe(true);
+        expect(sharedKeys.includes(key)).toBe(true);
       }
       for (const key of topEntries.keys()) {
         expect(sharedKeys.includes(key) || topOnlyKeys.has(key)).toBe(true);
@@ -313,6 +320,83 @@ describe('SubTransactionBody', () => {
         SubTransactionBody.fromCbor(HexBlob('a100d9010280')),
       ).toThrowError('Sub transaction body missing required key: 1');
     });
+
+    it('rejects a key that appears twice', () => {
+      expect(() =>
+        SubTransactionBody.fromCbor(HexBlob('a300d9010280018000d9010280')),
+      ).toThrowError('Duplicate sub transaction body map key: 0');
+    });
+  });
+
+  describe('non-empty fields', () => {
+    it.each([
+      [
+        'certificates',
+        HexBlob('a300d901028001800480'),
+        'certificates (sub transaction body key 4) must be a non-empty set',
+      ],
+      [
+        'withdrawals',
+        HexBlob('a300d9010280018005a0'),
+        'withdrawals (sub transaction body key 5) must be a non-empty map',
+      ],
+      [
+        'mint',
+        HexBlob('a300d9010280018009a0'),
+        'mint (sub transaction body key 9) must be a non-empty map',
+      ],
+      [
+        'reference inputs',
+        HexBlob('a300d901028001801280'),
+        'reference_inputs (sub transaction body key 18) must be a non-empty set',
+      ],
+      [
+        'voting procedures',
+        HexBlob('a300d9010280018013a0'),
+        'voting_procedures (sub transaction body key 19) must be a non-empty map',
+      ],
+      [
+        'proposal procedures',
+        HexBlob('a300d901028001801480'),
+        'proposal_procedures (sub transaction body key 20) must be a non-empty set',
+      ],
+    ])('rejects empty %s', (_, cbor, message) => {
+      expect(() => SubTransactionBody.fromCbor(cbor)).toThrowError(message);
+    });
+
+    it('rejects a zero donation', () => {
+      expect(() =>
+        SubTransactionBody.fromCbor(HexBlob('a300d901028001801600')),
+      ).toThrowError(
+        'donation (sub transaction body key 22) must be greater than zero',
+      );
+    });
+
+    it('leaves a zero donation out of the encoding', () => {
+      const body = SubTransactionBody.fromCbor(minimalBodyCbor);
+
+      body.setDonation(0n);
+
+      expect(body.toCbor()).toEqual(minimalBodyCbor);
+    });
+
+    it('rejects guards that repeat a key hash', () => {
+      expect(() =>
+        SubTransactionBody.fromCbor(
+          HexBlob(`a300d901028001800e82581c${KEY_HASH}581c${KEY_HASH}`),
+        ),
+      ).toThrowError(
+        'guards (sub transaction body key 14) must not contain duplicate key hashes',
+      );
+    });
+
+    it('keeps empty guards and re-encodes byte-exact', () => {
+      const cbor = HexBlob('a300d901028001800e80');
+      const body = SubTransactionBody.fromCbor(cbor);
+
+      expect(body.guards()?.size()).toEqual(0);
+      expect(body.toCbor()).toEqual(cbor);
+    });
   });
 
   describe('required top level guards (key 24)', () => {
@@ -349,6 +433,52 @@ describe('SubTransactionBody', () => {
       body.setRequiredTopLevelGuards(new Map());
 
       expect(body.toCbor()).toEqual(minimalBodyCbor);
+    });
+  });
+
+  describe('account balance intervals (key 26)', () => {
+    it('keeps an exact balance and a range keyed by reward account byte-exact', () => {
+      const body = SubTransactionBody.fromCbor(intervalsBodyCbor);
+
+      expect(body.toCore().accountBalanceIntervals).toEqual([
+        { interval: { exactBalance: 1000n }, rewardAccount },
+        {
+          interval: { inclusiveLowerBound: 500n },
+          rewardAccount: scriptRewardAccount,
+        },
+      ]);
+      expect(body.toCbor()).toEqual(intervalsBodyCbor);
+      expect(SubTransactionBody.fromCore(body.toCore()).toCbor()).toEqual(
+        intervalsBodyCbor,
+      );
+    });
+
+    it('rejects a map keyed by credential', () => {
+      expect(() =>
+        SubTransactionBody.fromCbor(
+          HexBlob(`a300d90102800180181aa18200581c${KEY_HASH}1903e8`),
+        ),
+      ).toThrow('Major type mismatch, expected type 2 but got 4');
+    });
+
+    it('rejects a map with a repeated reward account', () => {
+      expect(() =>
+        SubTransactionBody.fromCbor(
+          HexBlob(
+            'a300d90102800180181aa2581de1cb0ec2692497b458e46812c8a5bfa2931d1a2d965a99893828ec810f1903e8581de1cb0ec2692497b458e46812c8a5bfa2931d1a2d965a99893828ec810f1907d0',
+          ),
+        ),
+      ).toThrowError(
+        `Duplicate reward account in account_balance_intervals (sub transaction body key 26): ${rewardAccount}`,
+      );
+    });
+
+    it('rejects an empty map at key 26 on decode', () => {
+      expect(() =>
+        SubTransactionBody.fromCbor(HexBlob('a300d90102800180181aa0')),
+      ).toThrowError(
+        'account_balance_intervals (sub transaction body key 26) must be a non-empty map',
+      );
     });
   });
 

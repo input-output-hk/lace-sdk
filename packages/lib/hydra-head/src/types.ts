@@ -1,4 +1,4 @@
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Hydra node release whose on-chain validators a registry entry describes,

@@ -1,4 +1,4 @@
-import { createTestScheduler } from '@cardano-sdk/util-dev';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { from } from 'rxjs';
 import { dummyLogger } from 'ts-log';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

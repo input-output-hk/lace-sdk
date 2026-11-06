@@ -1,9 +1,13 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import { activitiesActions, ActivityType } from '@lace-contract/activities';
 import { failuresActions } from '@lace-contract/failures';
 import { syncActions } from '@lace-contract/sync';
 import { TokenId } from '@lace-contract/tokens';
 import { AccountId } from '@lace-contract/wallet-repo';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
 import { BigNumber, Ok, Err, Timestamp } from '@lace-lib/util';
 import { testSideEffect as baseTestSideEffect } from '@lace-lib/util-dev';
 import { defer, NEVER, of } from 'rxjs';

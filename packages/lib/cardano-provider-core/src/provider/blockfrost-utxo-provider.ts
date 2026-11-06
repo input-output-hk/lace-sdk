@@ -3,7 +3,7 @@ import {
   ProviderFailure,
   Serialization,
   type Cardano,
-} from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
 import { Err, Ok } from '@lace-lib/util';
 import { isNotFoundError } from '@lace-lib/util-provider';
 import {

@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { firstValueFrom, from, of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,7 +25,7 @@ import {
   words,
 } from './sign-with-words.fixtures';
 
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 const account = {
   words,

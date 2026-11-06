@@ -5,8 +5,8 @@ import type {
   AccountUtxoMap,
   RequiredProtocolParameters,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Observable for Cardano protocol parameters.

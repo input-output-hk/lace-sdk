@@ -10,6 +10,7 @@ export const channelBuildRoots: (channel: 'canary' | 'stable') => string[];
 export const reachedWorkspaceFiles: (
   roots: string[],
   options?: ts.CompilerOptions,
+  scope?: { withLaceioCardano?: boolean },
 ) => string[];
 export const reachedOwnSource: (channel: 'canary' | 'stable') => Set<string>;
 export const workspacePackages: (files: string[], root: string) => string[];

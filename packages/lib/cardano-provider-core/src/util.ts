@@ -2,12 +2,12 @@ import { CARDANO_TOKEN_METADATA_SCHEMA_VERSION } from '@lace-contract/cardano-co
 import { Timestamp } from '@lace-lib/util';
 
 import type { AssetInfoWithMetadataSources } from './provider/blockfrost-asset-provider';
-import type { Cardano } from '@cardano-sdk/core';
 import type {
   CardanoTokenMetadata,
   CardanoTokenMetadataFile,
 } from '@lace-contract/cardano-context';
 import type { TokenMetadata, TokenMetadataValue } from '@lace-contract/tokens';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 type SerializeMetadatum = {
   (value: Cardano.Metadatum, stringifyComposite: true): string;

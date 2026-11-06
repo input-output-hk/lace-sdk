@@ -1,5 +1,5 @@
-import { createTestScheduler } from '@cardano-sdk/util-dev';
 import { AuthenticationCancelledError } from '@lace-contract/signer';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { ByteArray, Milliseconds } from '@lace-lib/util';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import { defer, EMPTY, throwError } from 'rxjs';

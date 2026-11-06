@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   CardanoAccountId,
   CardanoCustodyDeviceKeyMismatchError,
@@ -6,6 +5,7 @@ import {
   CardanoNetworkId,
 } from '@lace-contract/cardano-context';
 import { WalletType } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { firstValueFrom } from 'rxjs';
 
 import { deriveCardanoCustodyDevice } from './cardano-custody-device';

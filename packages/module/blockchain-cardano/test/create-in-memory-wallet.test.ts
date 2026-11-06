@@ -1,5 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import { AuthSecret } from '@lace-contract/authentication-prompt';
 import {
   CardanoAccountId,
@@ -7,6 +5,8 @@ import {
   type CardanoBip32AccountProps,
 } from '@lace-contract/cardano-context';
 import { WalletId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import { HexBytes } from '@lace-lib/util';
 import { dummyLogger } from 'ts-log';
 import { describe, expect, it } from 'vitest';

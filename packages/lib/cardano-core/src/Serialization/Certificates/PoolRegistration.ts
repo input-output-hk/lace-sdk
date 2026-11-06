@@ -10,7 +10,11 @@ import type * as Cardano from '../../Cardano';
 import type { HexBlob } from '@lace-lib/cardano-util';
 
 // The group flattens the PoolParams along with one field for the certificate type
-const EMBEDDED_GROUP_SIZE = PoolParams.subgroupCount + 1;
+const CERTIFICATE_TYPE_FIELD_COUNT = 1;
+const EMBEDDED_GROUP_SIZE =
+  PoolParams.subgroupCount + CERTIFICATE_TYPE_FIELD_COUNT;
+const EMBEDDED_GROUP_SIZE_WITH_BLS_KEY =
+  PoolParams.subgroupCountWithBlsKey + CERTIFICATE_TYPE_FIELD_COUNT;
 
 /**
  * This certificate is used to register a new stake pool. It includes various details
@@ -42,7 +46,9 @@ export class PoolRegistration {
     // pool_registration = (3, pool_params)
     // pool_params is a basic group which means its fields will flatten into pool_registration
     // rather that inserted as a subgroup.
-    writer.writeStartArray(EMBEDDED_GROUP_SIZE);
+    writer.writeStartArray(
+      this.#params.fieldCount() + CERTIFICATE_TYPE_FIELD_COUNT,
+    );
 
     writer.writeInt(CertificateKind.PoolRegistration);
 
@@ -60,10 +66,13 @@ export class PoolRegistration {
 
     const length = reader.readStartArray();
 
-    if (length !== EMBEDDED_GROUP_SIZE)
+    if (
+      length !== EMBEDDED_GROUP_SIZE &&
+      length !== EMBEDDED_GROUP_SIZE_WITH_BLS_KEY
+    )
       throw new InvalidArgumentError(
         'cbor',
-        `Expected an array of ${EMBEDDED_GROUP_SIZE} elements, but got an array of ${length} elements`,
+        `Expected an array of ${EMBEDDED_GROUP_SIZE} or ${EMBEDDED_GROUP_SIZE_WITH_BLS_KEY} elements, but got an array of ${length} elements`,
       );
 
     const kind = Number(reader.readInt());
@@ -74,7 +83,10 @@ export class PoolRegistration {
         `Expected certificate kind ${CertificateKind.PoolRegistration}, but got ${kind}`,
       );
 
-    const params = PoolParams.fromFlattenedCbor(reader);
+    const params = PoolParams.fromFlattenedCbor(
+      reader,
+      length === EMBEDDED_GROUP_SIZE_WITH_BLS_KEY,
+    );
 
     reader.readEndArray();
 

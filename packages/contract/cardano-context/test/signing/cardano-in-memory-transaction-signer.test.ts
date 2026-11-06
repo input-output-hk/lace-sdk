@@ -1,5 +1,5 @@
-import { Serialization } from '@cardano-sdk/core';
 import { AuthenticationCancelledError } from '@lace-contract/signer';
+import { Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { firstValueFrom, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,11 +8,13 @@ import { CardanoInMemoryTransactionSigner } from '../../src/signing/cardano-in-m
 
 import type { WithCardanoKeyAgent$ } from '../../src/signing/cardano-in-memory-transaction-signer';
 import type { CardanoKeyAgent } from '../../src/signing/types';
-import type { Ed25519PublicKeyHex } from '@cardano-sdk/crypto';
 import type { SignerAuth } from '@lace-contract/signer';
+import type * as Core from '@lace-lib/cardano-core';
+import type { Ed25519PublicKeyHex } from '@lace-lib/cardano-crypto';
 import type { Observable } from 'rxjs';
 
-vi.mock('@cardano-sdk/core', () => {
+vi.mock('@lace-lib/cardano-core', async importActual => {
+  const actual = await importActual<typeof Core>();
   const mockTxBody = { toCore: vi.fn() };
   const mockAuxiliaryData = {};
   const mockWitnessSet = {
@@ -30,6 +32,7 @@ vi.mock('@cardano-sdk/core', () => {
   };
 
   return {
+    ...actual,
     Serialization: {
       Transaction: Object.assign(
         // eslint-disable-next-line prefer-arrow-functions/prefer-arrow-functions -- invoked with `new`, which an arrow function cannot be

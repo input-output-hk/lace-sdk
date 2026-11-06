@@ -1,21 +1,20 @@
-import { Cardano, metadatum } from '@cardano-sdk/core';
-import {
-  computeMinimumCoinQuantity,
-  tokenBundleSizeExceedsLimit,
-} from '@cardano-sdk/tx-construction';
+import { Cardano, metadatum } from '@lace-lib/cardano-core';
 import {
   InputSelectionError,
   TransactionBuilder,
-} from '@lace-contract/cardano-context';
+  computeMinimumCoinQuantity,
+  tokenBundleSizeExceedsLimit,
+} from '@lace-lib/cardano-tx-builder';
 
 import { resolveValidityInterval } from './resolve-validity-interval';
 
-import type { EraSummary, Serialization } from '@cardano-sdk/core';
 import type {
   ComposerOutputRequest,
   ComposerRequest,
   RequiredProtocolParameters,
 } from '@lace-contract/cardano-context';
+import type { EraSummary, Serialization } from '@lace-lib/cardano-core';
+import type { Logger } from 'ts-log';
 
 // =====================================================================
 // buildComposerTx — a composer request → a balanced unsigned tx.
@@ -47,6 +46,8 @@ export type BuildComposerTxParams = {
   /** Absolute slot of the chain tip, used to anchor the validity interval. */
   tipSlot: number;
   eraSummaries: readonly EraSummary[];
+  /** Receives the transaction builder's warnings. */
+  logger?: Logger;
 };
 
 export type BuildComposerTxResult = {
@@ -229,6 +230,7 @@ export const buildComposerTx = async ({
   spendableUtxos,
   tipSlot,
   eraSummaries,
+  logger,
 }: BuildComposerTxParams): Promise<BuildComposerTxResult> => {
   if (request.outputs.length === 0) {
     throw fail(
@@ -264,6 +266,8 @@ export const buildComposerTx = async ({
     .setChangeAddress(changeAddress)
     .setUnspentOutputs(coverUtxos)
     .setValidityInterval(validityInterval);
+
+  if (logger) builder.setLogger(logger);
 
   for (const utxo of selectedInputs) builder.addInput(utxo);
 

@@ -230,6 +230,14 @@ export const allowsBreakingChange = (previous: Version, next: Version) =>
     ? next.major > 0 || next.minor > previous.minor
     : next.major > previous.major;
 
+/**
+ * Whether a release at `next` may break an export only when the release
+ * before it marked the export `@deprecated`: from 1.0. Before 1.0 the
+ * breaking bump, a minor release, is the notice a consumer gets, since a
+ * caret range does not cross it.
+ */
+export const requiresDeprecation = (next: Version) => next.major > 0;
+
 /** A change the release declares compatible, recorded in release-overrides.json. */
 export interface ReleaseOverride {
   version: string;
@@ -318,7 +326,9 @@ export const republishProblems = ({
 /**
  * The problems that stop a stable release, or none. `overrides` marks a
  * changed signature compatible for this release (a reworded type, not a
- * change in meaning); a removal cannot be overridden.
+ * change in meaning); a removal cannot be overridden. A breaking change needs
+ * the bump that permits it and, from 1.0, the export marked `@deprecated` in
+ * the release before.
  */
 export const stableReleaseProblems = ({
   previousVersion,
@@ -358,7 +368,7 @@ export const stableReleaseProblems = ({
       } release is required, or a release-overrides.json entry for a change that is compatible`,
     );
   }
-  for (const key of breaking) {
+  for (const key of requiresDeprecation(to) ? breaking : []) {
     if (!previous.get(key)?.deprecated) {
       problems.push(
         `${key} changes or is removed without being @deprecated in ${previousVersion}`,

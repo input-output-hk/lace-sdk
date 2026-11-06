@@ -1,9 +1,9 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   extractUniqueStakeKeys,
   isCardanoAddress,
   pendingRewardWithdrawalKey,
 } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber } from '@lace-lib/util';
 
 import type { AnyAddress } from '@lace-contract/addresses';

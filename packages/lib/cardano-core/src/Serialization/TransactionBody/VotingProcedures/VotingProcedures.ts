@@ -4,6 +4,7 @@ import {
   InvalidStateError,
 } from '@lace-lib/cardano-util';
 
+import { SerializationError, SerializationFailure } from '../../../errors';
 import { hexToBytes } from '../../../util/misc';
 import { CborReader, CborReaderState, CborWriter } from '../../CBOR';
 import { GovernanceActionId } from '../../Common/GovernanceActionId';
@@ -77,6 +78,7 @@ export class VotingProcedures {
    *
    * @param cbor The CBOR encoded VotingProcedures object.
    * @returns The new VotingProcedures instance.
+   * @throws SerializationError if a voter has no votes.
    */
   static fromCbor(cbor: HexBlob): VotingProcedures {
     const reader = new CborReader(cbor);
@@ -90,6 +92,12 @@ export class VotingProcedures {
       );
 
       reader.readStartMap();
+
+      if (reader.peekState() === CborReaderState.EndMap)
+        throw new SerializationError(
+          SerializationFailure.InvalidType,
+          'Voting procedures must have at least one vote per voter',
+        );
 
       while (reader.peekState() !== CborReaderState.EndMap) {
         const actionId = GovernanceActionId.fromCbor(

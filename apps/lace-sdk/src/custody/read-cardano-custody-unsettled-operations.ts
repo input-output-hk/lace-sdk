@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { cardanoCustodyActivityMetadataOf } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { firstValueFrom } from 'rxjs';
 
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';

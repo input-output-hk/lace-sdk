@@ -24,7 +24,7 @@ import type {
   HydraHeadsIndexDeposit,
   HydraUtxo,
 } from '../src/cardano.canary';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const HYDRA_NAMES = [
   'classifyHydraTxByAddresses',

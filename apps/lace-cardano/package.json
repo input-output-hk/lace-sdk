@@ -1,8 +1,8 @@
 {
   "name": "@laceio/cardano",
-  "version": "0.1.2-canary.0",
+  "version": "0.2.0-canary.0",
   "private": false,
-  "description": "The Cardano domain layer Lace builds on: ledger types and CBOR, cryptography, key management, input selection, transaction rules and the CIP-30 dApp connector.",
+  "description": "The Cardano domain layer Lace builds on: ledger types and CBOR, cryptography, key management, the transaction builder and the CIP-30 dApp connector.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/input-output-hk/lace-sdk.git",
@@ -52,24 +52,14 @@
         "default": "./dist/key-management.cjs"
       }
     },
-    "./input-selection": {
+    "./tx-builder": {
       "import": {
-        "types": "./dist/input-selection.d.ts",
-        "default": "./dist/input-selection.js"
+        "types": "./dist/tx-builder.d.ts",
+        "default": "./dist/tx-builder.js"
       },
       "require": {
-        "types": "./dist/input-selection.d.cts",
-        "default": "./dist/input-selection.cjs"
-      }
-    },
-    "./tx-construction": {
-      "import": {
-        "types": "./dist/tx-construction.d.ts",
-        "default": "./dist/tx-construction.js"
-      },
-      "require": {
-        "types": "./dist/tx-construction.d.cts",
-        "default": "./dist/tx-construction.cjs"
+        "types": "./dist/tx-builder.d.cts",
+        "default": "./dist/tx-builder.cjs"
       }
     },
     "./dapp-connector": {
@@ -97,11 +87,8 @@
       "key-management": [
         "./dist/key-management.d.ts"
       ],
-      "input-selection": [
-        "./dist/input-selection.d.ts"
-      ],
-      "tx-construction": [
-        "./dist/tx-construction.d.ts"
+      "tx-builder": [
+        "./dist/tx-builder.d.ts"
       ],
       "dapp-connector": [
         "./dist/dapp-connector.d.ts"
@@ -118,7 +105,6 @@
     "@scure/base": "1.2.6",
     "@types/webextension-polyfill": "~0.12.4",
     "bech32": "2.0.0",
-    "bignumber.js": "^9.1.1",
     "bip39": "3.1.0",
     "blake2b": "2.1.4",
     "buffer": "6.0.3",

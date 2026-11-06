@@ -10,7 +10,7 @@ import type {
   HydraHeadStateName,
   HydraProtocolVersion,
 } from './types';
-import type { Serialization } from '@cardano-sdk/core';
+import type { Serialization } from '@lace-lib/cardano-core';
 
 /**
  * Layout of one head state constructor. A state either carries its fields

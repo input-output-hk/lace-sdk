@@ -3,7 +3,7 @@
 // (Apache-2.0). Modified for Lace: the identity is derived for an explicit
 // contract version and chain, and carries the network magic.
 
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 
 import { isHash28Hex } from './hex';
 import { fail, ok } from './result';
@@ -11,7 +11,10 @@ import { applyStakeValidatorToOwner } from './stake-script';
 
 import type { CustodyContractVersion } from './contract-version';
 import type { CustodyResult } from './result';
-import type { Ed25519KeyHashHex, Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type {
+  Ed25519KeyHashHex,
+  Hash28ByteBase16,
+} from '@lace-lib/cardano-crypto';
 
 /**
  * Everything that identifies one custody account, all derived from the

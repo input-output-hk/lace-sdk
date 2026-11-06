@@ -2,8 +2,8 @@ import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyCreateOperation,
 } from './build-transaction';
-import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** The kind of custody transaction a submission runs. */
 export type CardanoCustodyOperationKind =

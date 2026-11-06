@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 /** The dApp sent a request whose named field the signer cannot read. */
 export class MalformedRequestError extends Error {

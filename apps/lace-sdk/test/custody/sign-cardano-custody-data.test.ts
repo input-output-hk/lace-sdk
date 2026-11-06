@@ -1,10 +1,10 @@
-import { HexBlob } from '@cardano-sdk/util';
 import {
   CardanoCustodyRequestRefusedError,
   signCardanoCustodyDataWithWords,
 } from '@lace-contract/cardano-context';
 import { AccountId } from '@lace-contract/wallet-repo';
 import { CURRENT_CUSTODY_CONTRACT_VERSION } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it, vi } from 'vitest';
 
 import { openCardanoCustodyAccount } from '../../src/custody/cardano-custody-account-entity';

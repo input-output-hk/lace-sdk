@@ -26,13 +26,16 @@ import { custodyBuildErrorOf } from './request-cardano-custody-build';
 import type { CardanoCustodyDeviceKey } from './cardano-custody-device';
 import type { CardanoCustodyAccountRecord } from './cardano-custody-records';
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
-import type { Bip32PublicKeyHex, Hash28ByteBase16 } from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyCreatorIndexProbeError,
   CardanoCustodyCreatorIndexProbeRequest,
   CardanoCustodyCreatorIndexProbeResult,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type {
+  Bip32PublicKeyHex,
+  Hash28ByteBase16,
+} from '@lace-lib/cardano-crypto';
 import type { CustodyContractVersion } from '@lace-lib/cardano-custody';
 import type { Result } from '@lace-lib/util';
 

@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { HYDRA_HEAD_STATE_TOKEN_NAMES } from './constants';
 import {

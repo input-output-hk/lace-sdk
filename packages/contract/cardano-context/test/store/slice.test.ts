@@ -1,4 +1,3 @@
-import { Cardano, Milliseconds } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { TokenId } from '@lace-contract/tokens';
 import {
@@ -7,6 +6,7 @@ import {
   WalletType,
   walletsActions,
 } from '@lace-contract/wallet-repo';
+import { Cardano, Milliseconds } from '@lace-lib/cardano-core';
 import { BigNumber, Timestamp } from '@lace-lib/util';
 import { Serializable } from '@lace-lib/util-store';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -43,12 +43,12 @@ import type {
   RequiredProtocolParameters,
   Reward,
 } from '../../src';
-import type { EraSummary } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { Failure, FailureId } from '@lace-contract/failures';
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { NetworkSliceState, NetworkType } from '@lace-contract/network';
 import type { AnyAccount, WalletEntity } from '@lace-contract/wallet-repo';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 describe('cardanoContext slice', () => {
   let initialState: CardanoContextSliceState;

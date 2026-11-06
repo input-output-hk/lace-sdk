@@ -1,14 +1,14 @@
-import { Cardano } from '@cardano-sdk/core';
-import { AddressType, TxInId } from '@cardano-sdk/key-management';
+import { Cardano } from '@lace-lib/cardano-core';
+import { AddressType, TxInId } from '@lace-lib/cardano-key-management';
 import { describe, expect, it } from 'vitest';
 
 import { getScriptOnlyKeyPaths } from '../../src/signing/script-only-key-paths';
 
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type {
   GroupedAddress,
   TxInKeyPathMap,
-} from '@cardano-sdk/key-management';
+} from '@lace-lib/cardano-key-management';
 
 const OWN_ADDRESS =
   'addr_test1qpw0djgj0x59ngrjvqthn7enhvruxnsavsw5th63la3mjel3tkc974sr23jmlzgq5zda4gtv8k9cy38756r9y3qgmkqqjz6aa7' as Cardano.PaymentAddress;
@@ -41,13 +41,17 @@ const requireSig = (keyHash: Ed25519KeyHashHex): Cardano.NativeScript => ({
   keyHash,
 });
 
-const emptyTxBody = { inputs: [], outputs: [], fee: 0n } as Cardano.TxBody;
+const scriptInputTxBody = {
+  inputs: [{ txId: Cardano.TransactionId(`${'0'.repeat(63)}1`), index: 0 }],
+  outputs: [],
+  fee: 0n,
+} as Cardano.TxBody;
 
 describe('getScriptOnlyKeyPaths', () => {
   it('returns no paths when the transaction carries no scripts', () => {
     expect(
       getScriptOnlyKeyPaths({
-        txBody: emptyTxBody,
+        txBody: scriptInputTxBody,
         knownAddresses,
         txInKeyPathMap: {},
         scripts: undefined,
@@ -58,7 +62,7 @@ describe('getScriptOnlyKeyPaths', () => {
   it('returns no paths when the scripts require only foreign keys', () => {
     expect(
       getScriptOnlyKeyPaths({
-        txBody: emptyTxBody,
+        txBody: scriptInputTxBody,
         knownAddresses,
         txInKeyPathMap: {},
         scripts: [requireSig(foreignKeyHash)],
@@ -69,7 +73,7 @@ describe('getScriptOnlyKeyPaths', () => {
   it('returns the own payment key path required only via a script', () => {
     expect(
       getScriptOnlyKeyPaths({
-        txBody: emptyTxBody,
+        txBody: scriptInputTxBody,
         knownAddresses,
         txInKeyPathMap: {},
         scripts: [requireSig(ownPaymentKeyHash)],
@@ -80,7 +84,7 @@ describe('getScriptOnlyKeyPaths', () => {
   it('returns the own stake key path required only via a script', () => {
     expect(
       getScriptOnlyKeyPaths({
-        txBody: emptyTxBody,
+        txBody: scriptInputTxBody,
         knownAddresses,
         txInKeyPathMap: {},
         scripts: [requireSig(ownStakeKeyHash)],
@@ -91,7 +95,7 @@ describe('getScriptOnlyKeyPaths', () => {
   it('finds own keys nested in script combinators (RequireAnyOf inside RequireAllOf)', () => {
     expect(
       getScriptOnlyKeyPaths({
-        txBody: emptyTxBody,
+        txBody: scriptInputTxBody,
         knownAddresses,
         txInKeyPathMap: {},
         scripts: [

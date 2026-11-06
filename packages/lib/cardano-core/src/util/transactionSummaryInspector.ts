@@ -6,6 +6,11 @@ import { computeImplicitCoin, isPhase2ValidationErrTx } from '../Cardano/util';
 import { TimeoutError } from '../errors';
 
 import { coalesceValueQuantities } from './coalesceValueQuantities';
+import {
+  createBatchInputResolver,
+  directDepositsInspector,
+  toMergedBatchView,
+} from './dijkstraBatchUtil';
 import { promiseTimeout } from './promiseTimeout';
 import { subtractValueQuantities } from './subtractValueQuantities';
 import { tryGetAssetInfos } from './tryGetAssetInfos';
@@ -47,8 +52,11 @@ interface TransactionSummaryInspectorArgs {
 export type TransactionSummaryInspection = {
   assets: Map<Cardano.AssetId, AssetInfoWithAmount>;
   /**
-   * Spent amount from the wallet's perspective, computed as `own outputs - (own inputs + withdrawals)`.
+   * Spent amount from the wallet's perspective, computed as
+   * `own outputs + own direct deposits - (own inputs + withdrawals)`.
    * Withdrawals are a type of "own input", and are accounted for when computing the wallet spent amount.
+   * Direct deposits into own reward accounts are a type of "own output".
+   * For a Dijkstra batch the computation spans the top level and all sub transactions.
    * Positive when the wallet is receiving funds, negative when the wallet is sending funds.
    *
    * When the transaction failed phase-2 validation this is `-collateral`: the ledger discards the
@@ -171,6 +179,7 @@ const ownValueDiff = async (
   addresses: Cardano.PaymentAddress[],
   inputResolver: Cardano.InputResolver,
   withdrawals: Cardano.Lovelace,
+  ownDirectDeposits: Cardano.Lovelace,
 ) => {
   const totalOutputValue = await totalAddressOutputsValueInspector(addresses)(
     tx,
@@ -189,17 +198,28 @@ const ownValueDiff = async (
     // `coins` represents the actual spent coins from the wallets perspective, using the formula `ownOutputs - ownInputs`.
     // deposit is like a foreign output, and reclaimDeposit is like a foreignInput,
     // so they do not need to be included in the computation.
-    coins: totalOutputValue.coins - (totalInputValue.coins + withdrawals),
+    coins:
+      totalOutputValue.coins +
+      ownDirectDeposits -
+      (totalInputValue.coins + withdrawals),
   };
 };
 
-const getUnaccountedFunds = async (
-  tx: Cardano.Tx,
-  resolvedInputs: ResolutionResult,
-  implicitCoin: Cardano.Lovelace,
-  fee: Cardano.Lovelace,
-  implicitAssets: Cardano.TokenMap = new Map(),
-): Promise<Cardano.Value> => {
+const getUnaccountedFunds = async ({
+  tx,
+  resolvedInputs,
+  implicitCoin,
+  fee,
+  implicitAssets = new Map(),
+  directDepositTotal = 0n,
+}: {
+  tx: Cardano.Tx;
+  resolvedInputs: ResolutionResult;
+  implicitCoin: Cardano.Lovelace;
+  fee: Cardano.Lovelace;
+  implicitAssets?: Cardano.TokenMap;
+  directDepositTotal?: Cardano.Lovelace;
+}): Promise<Cardano.Value> => {
   // The ledger discards the body of a phase-2 failure, so there is no declared movement left to
   // reconcile: reporting a shortfall against outputs that never materialised would be noise.
   // Shaped like a balanced reconciliation rather than `coalesceValueQuantities([])`, whose empty
@@ -211,10 +231,29 @@ const getUnaccountedFunds = async (
 
   totalInputs.assets = coalesceTokenMaps([totalInputs.assets, implicitAssets]);
   totalInputs.coins += implicitCoin;
-  totalOutputs.coins += fee;
+  totalOutputs.coins += fee + directDepositTotal + (tx.body.donation ?? 0n);
 
   return subtractValueQuantities([totalOutputs, totalInputs]);
 };
+
+/**
+ * Gets the transaction to inspect and the resolver to resolve its inputs with. A Dijkstra batch is
+ * inspected as one flat transaction, whose inputs resolve against the batch's own outputs before
+ * the given resolver. Any other transaction is inspected as it is, with the given resolver.
+ *
+ * @param tx The transaction to inspect.
+ * @param inputResolver Resolves the inputs produced outside the batch.
+ * @returns The view to inspect and the resolver for its inputs.
+ */
+const getBatchContext = (
+  tx: Cardano.Tx,
+  inputResolver: Cardano.InputResolver,
+) => ({
+  resolver: tx.body.subTransactions?.length
+    ? createBatchInputResolver(tx, inputResolver)
+    : inputResolver,
+  view: toMergedBatchView(tx),
+});
 
 const intoAssetInfoWithAmount = async ({
   assetProvider,
@@ -263,11 +302,13 @@ export const transactionSummaryInspector: TransactionSummaryInspector =
     logger,
   }: TransactionSummaryInspectorArgs) =>
   async tx => {
+    const { view, resolver } = getBatchContext(tx, inputResolver);
+
     let resolvedInputs: ResolutionResult;
 
     try {
       resolvedInputs = await promiseTimeout(
-        resolveInputs(tx.body.inputs, inputResolver),
+        resolveInputs(view.body.inputs, resolver),
         timeout,
       );
     } catch (error) {
@@ -277,33 +318,47 @@ export const transactionSummaryInspector: TransactionSummaryInspector =
 
       resolvedInputs = {
         resolvedInputs: [],
-        unresolvedInputs: tx.body.inputs,
+        unresolvedInputs: view.body.inputs,
       };
     }
 
-    const fee = tx.body.fee;
+    const fee = view.body.fee;
 
     const implicit = computeImplicitCoin(
       protocolParameters,
-      { certificates: tx.body.certificates, withdrawals: tx.body.withdrawals },
+      {
+        certificates: view.body.certificates,
+        proposalProcedures: view.body.proposalProcedures,
+        withdrawals: view.body.withdrawals,
+      },
       rewardAccounts || [],
       dRepKeyHash,
     );
 
-    const collateral = await getCollateral(tx, inputResolver, addresses);
+    const collateral = await getCollateral(view, resolver, addresses);
 
     const withdrawals = implicit.withdrawals || 0n;
+    const ownDirectDeposits = await directDepositsInspector(
+      rewardAccounts || [],
+    )(view);
+    const directDepositTotal = await directDepositsInspector()(view);
     const implicitCoin =
       withdrawals + (implicit.reclaimDeposit || 0n) - (implicit.deposit || 0n);
-    const implicitAssets = await getImplicitAssets(tx);
+    const implicitAssets = await getImplicitAssets(view);
 
     // A phase-2 failure consumes only its collateral: the declared inputs are never spent and the
     // declared outputs never materialise, so measuring either would report value that never moved.
     // The forfeited collateral is the whole realised loss, and reporting it as the net change keeps
     // `coins` answering the same question it does for an applied transaction.
-    const diff = isPhase2Failure(tx)
+    const diff = isPhase2Failure(view)
       ? { assets: undefined, coins: -collateral }
-      : await ownValueDiff(tx, addresses, inputResolver, withdrawals);
+      : await ownValueDiff(
+          view,
+          addresses,
+          resolver,
+          withdrawals,
+          ownDirectDeposits,
+        );
 
     return {
       assets: await intoAssetInfoWithAmount({
@@ -320,13 +375,14 @@ export const transactionSummaryInspector: TransactionSummaryInspector =
       returnedDeposit: implicit.reclaimDeposit || 0n,
       unresolved: {
         inputs: resolvedInputs.unresolvedInputs,
-        value: await getUnaccountedFunds(
-          tx,
-          resolvedInputs,
-          implicitCoin,
+        value: await getUnaccountedFunds({
+          directDepositTotal,
           fee,
           implicitAssets,
-        ),
+          implicitCoin,
+          resolvedInputs,
+          tx: view,
+        }),
       },
     };
   };

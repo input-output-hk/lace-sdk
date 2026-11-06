@@ -1,7 +1,7 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { TokenId } from '@lace-contract/tokens';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { BigNumber, HexBytes } from '@lace-lib/util';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 

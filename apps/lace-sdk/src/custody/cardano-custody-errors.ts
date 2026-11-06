@@ -1,13 +1,13 @@
 import { CustomError } from 'ts-custom-error';
 
 import type { CardanoCustodySubmission } from './submit-cardano-custody-transaction';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyAccountState,
   CardanoCustodyBuildError,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type { CustodyAccountRecordError } from '@lace-lib/cardano-custody';
 
 /**

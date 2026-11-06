@@ -14,7 +14,7 @@ import {
 
 import type { CustodyResult } from '../result';
 import type { CustodyDecodeError } from './plutus-data';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * The account proxy's spend redeemer. `device` is the owner path on the

@@ -1,7 +1,7 @@
 /* eslint-disable max-params */
 
-import { AddressType, KeyRole } from '@cardano-sdk/key-management';
 import { CardanoRewardAccount } from '@lace-contract/cardano-context';
+import { AddressType, KeyRole } from '@lace-lib/cardano-key-management';
 import { Err, Ok, type Result } from '@lace-lib/util';
 import { isNotFoundError } from '@lace-lib/util-provider';
 import { ProviderError, ProviderFailure } from '@lace-lib/util-provider';
@@ -20,8 +20,8 @@ import {
 import { BlockfrostProvider } from '../blockfrost-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { CardanoPaymentAddress } from '@lace-contract/cardano-context';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { Bip32Account } from '@lace-lib/core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';

@@ -1,6 +1,6 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
-import { contextLogger } from '@cardano-sdk/util';
 import { BitcoinTransactionStatus } from '@lace-contract/bitcoin-context';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
+import { contextLogger } from '@lace-lib/cardano-util';
 import { isNotFoundError, toProviderError } from '@lace-lib/util-provider';
 
 import { btcStringToSatoshis, getOpReturnData } from './util';

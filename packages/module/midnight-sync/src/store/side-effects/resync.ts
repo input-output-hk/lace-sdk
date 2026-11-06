@@ -1,9 +1,9 @@
-import { deepEquals } from '@cardano-sdk/util';
 import {
   hasMidnightAccount,
   isInMemoryMidnightAccount,
   midnightAccounts$,
 } from '@lace-contract/midnight-context';
+import { deepEquals } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 import {
   catchError,

@@ -21,9 +21,9 @@ import type {
   CardanoAccountTransactionsHistoryMap,
   CardanoRewardActivity,
 } from '../../types';
-import type { Cardano } from '@cardano-sdk/core';
-import type { EraSummary } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 export type FindMissingActivitiesParams = {
   addresses: AnyAddress[];

@@ -1,10 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import {
-  InMemoryKeyAgent,
-  KeyPurpose,
-  util,
-} from '@cardano-sdk/key-management';
 import {
   CardanoAccountId,
   CardanoNetworkId,
@@ -13,11 +6,17 @@ import {
 } from '@lace-contract/cardano-context';
 import { createAddAccounts } from '@lace-contract/in-memory';
 import { createBlockchainNetworkTargetResolver } from '@lace-contract/network';
+import { Cardano } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
+import {
+  InMemoryKeyAgent,
+  KeyPurpose,
+  util,
+} from '@lace-lib/cardano-key-management';
 import { SecretBox } from '@lace-lib/core';
 import { HexBytes } from '@lace-lib/util';
 
 import type { AvailableAddons } from './sdk-contracts';
-import type { SerializableInMemoryKeyAgentData } from '@cardano-sdk/key-management';
 import type {
   CardanoBip32AccountProps,
   CardanoSpecificInMemoryWalletData,
@@ -34,6 +33,7 @@ import type {
   LazyInMemoryWalletAccount,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { SerializableInMemoryKeyAgentData } from '@lace-lib/cardano-key-management';
 
 const defaultAccountName = (accountIndex: number) => `Cardano #${accountIndex}`;
 

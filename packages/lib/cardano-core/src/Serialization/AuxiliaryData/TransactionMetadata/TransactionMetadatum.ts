@@ -46,23 +46,24 @@ export class TransactionMetadatum {
 
   /**
    * Serializes this TransactionMetadatum instance into its CBOR representation as a HexBlob.
+   * A list or map encodes as the container it holds, and any other value decoded from CBOR
+   * returns the bytes it was decoded from.
    *
    * @returns The CBOR representation of this instance as a HexBlob.
    */
   toCbor(): HexBlob {
+    switch (this.#kind) {
+      case TransactionMetadatumKind.Map:
+        return this.#map!.toCbor();
+      case TransactionMetadatumKind.List:
+        return this.#list!.toCbor();
+    }
+
     if (this.#originalBytes) return this.#originalBytes;
 
     let cbor: HexBlob;
 
     switch (this.#kind) {
-      case TransactionMetadatumKind.Map: {
-        cbor = this.#map!.toCbor();
-        break;
-      }
-      case TransactionMetadatumKind.List: {
-        cbor = this.#list!.toCbor();
-        break;
-      }
       case TransactionMetadatumKind.Bytes: {
         const writer = new CborWriter();
 
@@ -136,9 +137,15 @@ export class TransactionMetadatum {
           case CborTag.NegativeBigNum: {
             reader.readTag();
             const bytes = reader.readByteString();
-            data.#integer = TransactionMetadatum.bufferToBigint(bytes) * -1n;
+            data.#integer = -1n - TransactionMetadatum.bufferToBigint(bytes);
             data.#kind = TransactionMetadatumKind.Integer;
             break;
+          }
+          default: {
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              `Unsupported metadatum tag ${tag}`,
+            );
           }
         }
         break;
@@ -187,6 +194,9 @@ export class TransactionMetadatum {
 
   /**
    * Creates a Core Tx object from the current TransactionMetadatum object.
+   *
+   * In the core form of a map, every entry of a repeated key takes the value of the first entry,
+   * and integer or text keys collapse into one entry. Use toCbor to keep every entry.
    *
    * @returns The TransactionMetadatum object.
    */

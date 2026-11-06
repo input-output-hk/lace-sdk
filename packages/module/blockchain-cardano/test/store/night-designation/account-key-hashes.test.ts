@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { mockProviders } from '@cardano-sdk/util-dev';
+import { Cardano } from '@lace-lib/cardano-core';
+import { mockProviders } from '@lace-lib/cardano-util-dev';
 import { describe, expect, it } from 'vitest';
 
 import { resolveAccountKeyHashes } from '../../../src/store/night-designation/account-key-hashes';

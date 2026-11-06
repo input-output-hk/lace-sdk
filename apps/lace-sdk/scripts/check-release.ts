@@ -8,9 +8,9 @@
  * its snapshot. A canary must preview a version above the latest stable and
  * sort above every version already published; a stable release is compared
  * with the latest stable's declarations on npm, and fails when it breaks an
- * export without the version bump and the prior `@deprecated` the rules
- * require. A version npm already has, of either channel, must be this build
- * packed as the release packs it (scripts/pack.mjs), file for file: the
+ * export without the version bump the rules require and, from 1.0, the prior
+ * `@deprecated`. A version npm already has, of either channel, must be this
+ * build packed as the release packs it (scripts/pack.mjs), file for file: the
  * publish skips each registry that has the version, so a different build
  * would leave npm and GitHub Packages serving different contents under one
  * version. The SDK released on its own (`@laceio/sdk@X.Y.Z[-canary.N]`) is

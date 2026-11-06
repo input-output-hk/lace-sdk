@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import { type AnyAddress } from '@lace-contract/addresses';
 import {
   cardanoContextActions,
@@ -14,6 +13,7 @@ import {
 } from '@lace-contract/cardano-context/test/mocks';
 import { type Failure } from '@lace-contract/failures';
 import { syncActions } from '@lace-contract/sync';
+import { Cardano } from '@lace-lib/cardano-core';
 import { testSideEffect as baseTestSideEffect } from '@lace-lib/util-dev';
 import { of, mergeMap } from 'rxjs';
 import { describe, expect, it } from 'vitest';

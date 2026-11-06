@@ -1,4 +1,4 @@
-import { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import { Ed25519KeyHashHex, Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 import delay from 'delay';
 import { dummyLogger as logger } from 'ts-log';
 
@@ -19,7 +19,12 @@ import { jsonToMetadatum } from '../../src/util/metadatum';
 import * as AssetIds from '../AssetId';
 import * as AssetId from '../utilDevAssetId';
 
-import { createMockAssetProvider, createMockInputResolver } from './mocks';
+import { createDijkstraBatchFixture } from './dijkstraBatchFixture';
+import {
+  createMockAssetProvider,
+  createMockInputResolver,
+  createMockUtxoResolver,
+} from './mocks';
 
 import type {
   Asset,
@@ -1524,5 +1529,270 @@ describe('Transaction Summary Inspector', () => {
         },
       }
     `);
+  });
+
+  it('counts direct deposits on the output side of a transaction without sub transactions', async () => {
+    const [ownRewardAccount, foreignRewardAccount] = rewardAccounts;
+    const baseTx = buildMockTx({
+      outputs: [
+        { address: addresses[0], value: { coins: 10_000_000n } },
+        { address: externalAddress1, value: { coins: 6_830_000n } },
+      ],
+    });
+    const tx = {
+      ...baseTx,
+      body: {
+        ...baseTx.body,
+        directDeposits: [
+          { quantity: 1_000_000n, stakeAddress: ownRewardAccount },
+          { quantity: 2_000_000n, stakeAddress: foreignRewardAccount },
+        ],
+      },
+    } as Cardano.HydratedTx;
+
+    const histTx: Cardano.HydratedTx[] = [
+      {
+        body: {
+          outputs: [{ address: addresses[0], value: { coins: 20_000_000n } }],
+        },
+        id: Cardano.TransactionId(
+          'bb217abaca60fc0ca68c1555eca6a96d2478547818ae76ce6836133f3cc546e0',
+        ),
+      } as unknown as Cardano.HydratedTx,
+    ];
+
+    const inspectTx = createTxInspector({
+      summary: transactionSummaryInspector({
+        addresses,
+        assetProvider,
+        inputResolver: createMockInputResolver(histTx),
+        logger,
+        protocolParameters,
+        rewardAccounts: [ownRewardAccount],
+        timeout,
+      }),
+    });
+
+    const { summary } = await inspectTx(tx);
+
+    expect(summary.coins).toEqual(10_000_000n + 1_000_000n - 20_000_000n);
+    expect(summary.unresolved.inputs).toEqual([]);
+    expect(summary.unresolved.value.coins).toEqual(0n);
+  });
+
+  it('counts the donation on the output side of a transaction without sub transactions', async () => {
+    const baseTx = buildMockTx({
+      outputs: [
+        { address: addresses[0], value: { coins: 10_000_000n } },
+        { address: externalAddress1, value: { coins: 8_830_000n } },
+      ],
+    });
+    const tx = {
+      ...baseTx,
+      body: { ...baseTx.body, donation: 1_000_000n },
+    } as Cardano.HydratedTx;
+
+    const histTx: Cardano.HydratedTx[] = [
+      {
+        body: {
+          outputs: [{ address: addresses[0], value: { coins: 20_000_000n } }],
+        },
+        id: Cardano.TransactionId(
+          'bb217abaca60fc0ca68c1555eca6a96d2478547818ae76ce6836133f3cc546e0',
+        ),
+      } as unknown as Cardano.HydratedTx,
+    ];
+
+    const inspectTx = createTxInspector({
+      summary: transactionSummaryInspector({
+        addresses,
+        assetProvider,
+        inputResolver: createMockInputResolver(histTx),
+        logger,
+        protocolParameters,
+        rewardAccounts,
+        timeout,
+      }),
+    });
+
+    const { summary } = await inspectTx(tx);
+
+    expect(summary.coins).toEqual(10_000_000n - 20_000_000n);
+    expect(summary.unresolved.inputs).toEqual([]);
+    expect(summary.unresolved.value.coins).toEqual(0n);
+  });
+});
+
+describe('Transaction Summary Inspector on a Dijkstra batch', () => {
+  const fixture = createDijkstraBatchFixture();
+  const mintedAssetInfo = {
+    assetId: fixture.mintedAssetId,
+    nftMetadata: null,
+    supply: 100n,
+    tokenMetadata: null,
+  } as Asset.AssetInfo;
+
+  const inspectSummary = (
+    tx: Cardano.Tx,
+    ownAddresses: Cardano.PaymentAddress[],
+    ownRewardAccounts: Cardano.RewardAccount[],
+  ) =>
+    createTxInspector({
+      summary: transactionSummaryInspector({
+        addresses: ownAddresses,
+        assetProvider: createMockAssetProvider([mintedAssetInfo]),
+        inputResolver: createMockUtxoResolver(fixture.externalUtxos),
+        logger,
+        protocolParameters,
+        rewardAccounts: ownRewardAccounts,
+        timeout,
+      }),
+    })(tx);
+
+  it('summarises the batch as one transaction from the wallet perspective', async () => {
+    const [counterparty1Utxo, counterparty2Utxo, walletUtxo] =
+      fixture.externalUtxos;
+    const { summary } = await inspectSummary(
+      fixture.hydratedTx,
+      [fixture.actors.walletAddress],
+      [fixture.actors.walletRewardAccount],
+    );
+
+    expect(summary).toEqual<TransactionSummaryInspection>({
+      assets: buildAssetInfoWithAmount([[mintedAssetInfo, 100n]]),
+      coins: 14_700_000n,
+      collateral: 0n,
+      deposit: 0n,
+      fee: 300_000n,
+      resolvedInputs: [
+        walletUtxo,
+        counterparty1Utxo,
+        counterparty2Utxo,
+        fixture.intraBatchUtxo,
+      ].map(([txIn, txOut]) => ({ ...txIn, value: txOut.value })),
+      returnedDeposit: 0n,
+      unresolved: { inputs: [], value: { assets: new Map(), coins: 0n } },
+    });
+  });
+
+  it('accounts for the proposal deposit and the donation of a sub transaction', async () => {
+    const [subTx1, ...otherSubTxs] = fixture.hydratedTx.body.subTransactions!;
+    const [walletOutput, intermediateOutput] = subTx1.body.outputs;
+    const proposal: Cardano.ProposalProcedure = {
+      anchor: {
+        dataHash: Hash32ByteBase16(
+          '0000000000000000000000000000000000000000000000000000000000000000',
+        ),
+        url: 'https://www.someurl.io',
+      },
+      deposit: 600_000n,
+      governanceAction: {
+        __typename: Cardano.GovernanceActionType.info_action,
+      },
+      rewardAccount: fixture.actors.walletRewardAccount,
+    };
+    const tx: Cardano.HydratedTx = {
+      ...fixture.hydratedTx,
+      body: {
+        ...fixture.hydratedTx.body,
+        subTransactions: [
+          {
+            ...subTx1,
+            body: {
+              ...subTx1.body,
+              donation: 400_000n,
+              outputs: [
+                {
+                  ...walletOutput,
+                  value: { ...walletOutput.value, coins: 11_000_000n },
+                },
+                intermediateOutput,
+              ],
+              proposalProcedures: [proposal],
+            },
+          },
+          ...otherSubTxs,
+        ],
+      },
+    };
+
+    const { summary } = await inspectSummary(
+      tx,
+      [fixture.actors.walletAddress],
+      [fixture.actors.walletRewardAccount],
+    );
+
+    expect(summary.coins).toEqual(13_700_000n);
+    expect(summary.deposit).toEqual(600_000n);
+    expect(summary.unresolved).toEqual({
+      inputs: [],
+      value: { assets: new Map(), coins: 0n },
+    });
+  });
+
+  it('counts the intra-batch input as spent by the party that owns it', async () => {
+    const { summary } = await inspectSummary(
+      fixture.hydratedTx,
+      [fixture.actors.counterparty2Address],
+      [],
+    );
+
+    expect(summary.coins).toEqual(-6_000_000n);
+    expect(summary.assets).toEqual(new Map());
+  });
+
+  it('leaves a direct deposit into a reward account the wallet does not own out of its coins', async () => {
+    const { summary } = await inspectSummary(
+      fixture.hydratedTx,
+      [fixture.actors.walletAddress],
+      [],
+    );
+
+    expect(summary.coins).toEqual(12_700_000n);
+    expect(summary.unresolved.value.coins).toEqual(0n);
+  });
+
+  it('counts only the forfeited collateral of a batch that failed phase-2 validation', async () => {
+    const [, , [walletInput]] = fixture.externalUtxos;
+    const tx: Cardano.Tx = {
+      ...fixture.tx,
+      body: {
+        ...fixture.tx.body,
+        collateralReturn: {
+          address: fixture.actors.walletAddress,
+          value: { coins: 3_500_000n },
+        },
+        collaterals: [walletInput],
+      },
+      isValid: false,
+    };
+
+    const { summary } = await inspectSummary(
+      tx,
+      [fixture.actors.walletAddress],
+      [fixture.actors.walletRewardAccount],
+    );
+
+    expect(summary.collateral).toEqual(1_500_000n);
+    expect(summary.coins).toEqual(-1_500_000n);
+    expect(summary.assets).toEqual(new Map());
+  });
+
+  it('reports the intra-batch input as unresolved when the sub transactions carry no ids', async () => {
+    const { summary } = await inspectSummary(
+      fixture.tx,
+      [fixture.actors.walletAddress],
+      [fixture.actors.walletRewardAccount],
+    );
+    const [intraBatchInput, intraBatchOutput] = fixture.intraBatchUtxo;
+
+    expect(summary.coins).toEqual(14_700_000n);
+    expect(summary.resolvedInputs).toHaveLength(3);
+    expect(summary.unresolved.inputs).toEqual([
+      { index: intraBatchInput.index, txId: intraBatchInput.txId },
+    ]);
+    expect(summary.unresolved.value.coins).toEqual(
+      intraBatchOutput.value.coins,
+    );
   });
 });

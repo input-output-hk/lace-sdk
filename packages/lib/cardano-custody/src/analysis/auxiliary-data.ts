@@ -1,4 +1,4 @@
-import { blake2b } from '@cardano-sdk/crypto';
+import { blake2b } from '@lace-lib/cardano-crypto';
 
 import { fail, ok } from '../result';
 
@@ -7,9 +7,9 @@ import { hashesOf } from './account-inspection';
 import type { CustodyResult } from '../result';
 import type { CustodyAccountHashes } from './outputs';
 import type { CustodyRefusal } from './refusals';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Serialization } from '@cardano-sdk/core';
-import type { Hash32ByteBase16 } from '@cardano-sdk/crypto';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Serialization } from '@lace-lib/cardano-core';
+import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /**
  * The metadata a transaction carries, read from its auxiliary data and

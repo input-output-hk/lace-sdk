@@ -1,4 +1,4 @@
-import { contextLogger } from '@cardano-sdk/util';
+import { contextLogger } from '@lace-lib/cardano-util';
 import { tap } from 'rxjs';
 
 import { BaseStore } from './base-store';

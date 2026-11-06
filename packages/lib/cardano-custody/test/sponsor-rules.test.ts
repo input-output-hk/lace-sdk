@@ -1,6 +1,6 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { blake2b, Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { blake2b, Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -55,7 +55,7 @@ import type {
   CustodySponsorRuleViolation,
 } from '../src';
 import type { TransactionShape } from './custody-transactions';
-import type { Hash32ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 
 const keyCredential = (hash: string): Cardano.Credential => ({
   type: Cardano.CredentialType.KeyHash,

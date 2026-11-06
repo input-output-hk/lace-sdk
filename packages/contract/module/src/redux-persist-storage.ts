@@ -1,4 +1,4 @@
-import { contextLogger } from '@cardano-sdk/util';
+import { contextLogger } from '@lace-lib/cardano-util';
 import { defaultIfEmpty, firstValueFrom, map } from 'rxjs';
 
 import type { KeyValueStorageFactory } from './storage';

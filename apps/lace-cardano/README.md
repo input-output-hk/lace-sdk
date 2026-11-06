@@ -1,15 +1,14 @@
 # @laceio/cardano
 
-The Cardano domain layer Lace builds on: ledger types and
-CBOR serialization, cryptography, key management, input selection, the rules a
-transaction is built against and the CIP-30 dApp connector, as one package with
-a subpath per area. The documentation and the API reference are on the
-developer site, <https://sdk.lace.io>.
+The Cardano domain layer Lace builds on: ledger types and CBOR serialization,
+cryptography, key management, the transaction builder and the CIP-30 dApp
+connector, as one package with a subpath per area. The documentation and the API
+reference are on the developer site, <https://sdk.lace.io>.
 
 This package is the Cardano JS SDK's domain layer, owned and maintained by the team that builds Lace, beside the Lace
 SDK in one repository, where each change is built, tested and reviewed with the code that uses it. It follows
-the Lace SDK's versioning rules: before 1.0, an export changes incompatibly only in a minor release, never in a patch,
-and only after the release before it marked it deprecated. The code, API and licence are
+the Lace SDK's versioning rules: before 1.0, an export changes incompatibly only in a minor release, never in a patch;
+from 1.0, only in a major release, after the release before it marked it deprecated. The code, API and licence are
 the library's own; the history before the move stays in the
 [cardano-js-sdk repository](https://github.com/input-output-hk/cardano-js-sdk). Lace intends to deprecate the
 `@cardano-sdk` packages, which stay published and unchanged until then, with notice ahead; the Lace SDK carries the
@@ -27,15 +26,14 @@ npm install @laceio/cardano
 
 Import each area from its subpath; nothing is exported from the package's root.
 
-| Subpath                           | Holds                                                                                                        |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `@laceio/cardano/core`            | Ledger types as plain data, CBOR serialization, transaction inspectors, slot arithmetic, provider interfaces |
-| `@laceio/cardano/crypto`          | BIP32-Ed25519 keys and derivation, Ed25519 signatures, Blake2b                                               |
-| `@laceio/cardano/util`            | Opaque string types, hex and bech32 helpers, serialization of plain objects                                  |
-| `@laceio/cardano/key-management`  | Key agents from recovery words, accounts from a public key, derivation paths, CIP-8 data signing             |
-| `@laceio/cardano/input-selection` | Input selectors and selection constraints                                                                    |
-| `@laceio/cardano/tx-construction` | Fees, minimum ada, output validation, validity intervals, the script data hash, a body from a selection      |
-| `@laceio/cardano/dapp-connector`  | The wallet side of CIP-30, CIP-95 and CIP-142                                                                |
+| Subpath                          | Holds                                                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `@laceio/cardano/core`           | Ledger types as plain data, CBOR serialization, transaction inspectors, slot arithmetic, provider interfaces |
+| `@laceio/cardano/crypto`         | BIP32-Ed25519 keys and derivation, Ed25519 signatures, Blake2b                                               |
+| `@laceio/cardano/util`           | Opaque string types, hex and bech32 helpers, serialization of plain objects                                  |
+| `@laceio/cardano/key-management` | Key agents from recovery words, accounts from a public key, derivation paths, CIP-8 data signing             |
+| `@laceio/cardano/tx-builder`     | `TransactionBuilder`, its coin selectors, and the fee and minimum ada rules                                  |
+| `@laceio/cardano/dapp-connector` | The wallet side of CIP-30, CIP-95 and CIP-142                                                                |
 
 The subpaths resolve under every TypeScript `moduleResolution` setting, and
 each ships an ES module and a CommonJS build with its own declarations.
@@ -67,8 +65,7 @@ console.log(tx.getId(), tx.body().fee(), tx.body().outputs().length);
 - API reference, one page per subpath: [core](https://sdk.lace.io/docs/reference/cardano-core/),
   [crypto](https://sdk.lace.io/docs/reference/cardano-crypto/), [util](https://sdk.lace.io/docs/reference/cardano-util/),
   [key-management](https://sdk.lace.io/docs/reference/cardano-key-management/),
-  [input-selection](https://sdk.lace.io/docs/reference/cardano-input-selection/),
-  [tx-construction](https://sdk.lace.io/docs/reference/cardano-tx-construction/),
+  [tx-builder](https://sdk.lace.io/docs/reference/cardano-tx-builder/),
   [dapp-connector](https://sdk.lace.io/docs/reference/cardano-dapp-connector/).
 - Hardware wallets: [`@laceio/cardano-ledger`](https://www.npmjs.com/package/@laceio/cardano-ledger) and
   [`@laceio/cardano-trezor`](https://www.npmjs.com/package/@laceio/cardano-trezor), published separately so that a

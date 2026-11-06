@@ -26,6 +26,7 @@ export const stubSignTransaction = async ({
     txInKeyPathMap,
     dRepKeyHashHex: dRepKeyHash,
     scripts,
+    spentOutputAddresses,
   },
   signTransactionOptions: { extraSigners, additionalKeyPaths = [] } = {},
 }: StubSignTransactionProps): Promise<Cardano.Signatures> => {
@@ -40,6 +41,7 @@ export const stubSignTransaction = async ({
         txInKeyPathMap,
         dRepKeyHash,
         scripts,
+        spentOutputAddresses,
       ),
       ...additionalKeyPaths,
     ],

@@ -1,6 +1,6 @@
 import '@lace-contract/module';
-import { BigIntMath, isNotNil } from '@cardano-sdk/util';
 import { walletsActions } from '@lace-contract/wallet-repo';
+import { BigIntMath, isNotNil } from '@lace-lib/cardano-util';
 import { BigNumber } from '@lace-lib/util';
 import { createSelector, createSlice } from '@reduxjs/toolkit';
 import groupBy from 'lodash/groupBy';

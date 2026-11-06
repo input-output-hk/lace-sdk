@@ -1,5 +1,5 @@
-import { Percent } from '@cardano-sdk/util';
 import { walletsSelectors } from '@lace-contract/wallet-repo';
+import { Percent } from '@lace-lib/cardano-util';
 import { createSelector } from '@reduxjs/toolkit';
 import sum from 'lodash/sum';
 

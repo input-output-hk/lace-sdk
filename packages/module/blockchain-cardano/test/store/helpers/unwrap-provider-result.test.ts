@@ -1,5 +1,5 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
-import { createTestScheduler } from '@cardano-sdk/util-dev';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { Err, Ok } from '@lace-lib/util';
 import { EMPTY, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';

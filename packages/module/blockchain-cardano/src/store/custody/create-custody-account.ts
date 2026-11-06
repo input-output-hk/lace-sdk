@@ -27,12 +27,12 @@ import { custodyScriptWitnesses, readCustodyLogicRun } from './custody-scripts';
 import { finalizeCustodyBuild } from './custody-validation';
 
 import type { CustodyChain } from './custody-chain';
-import type { Serialization } from '@cardano-sdk/core';
 import type {
   CardanoCustodyBuildResult,
   CardanoCustodyCreateOperation,
   CardanoCustodyFeeFunding,
 } from '@lace-contract/cardano-context';
+import type { Serialization } from '@lace-lib/cardano-core';
 import type {
   CustodyAccountIdentity,
   CustodyDeviceKey,

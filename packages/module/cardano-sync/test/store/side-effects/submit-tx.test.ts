@@ -1,9 +1,9 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import {
   cardanoContextActions,
   CardanoTxId,
 } from '@lace-contract/cardano-context';
 import { chainId } from '@lace-contract/cardano-context/test/mocks';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 import { Err, HexBytes, Ok } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { of } from 'rxjs';
@@ -11,8 +11,8 @@ import { describe, it, vi } from 'vitest';
 
 import { submitTxSideEffect } from '../../../src/store/side-effects/submit-tx';
 
-import type { Cardano } from '@cardano-sdk/core';
 import type { CardanoProviderDependencies } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const actions = {
   ...cardanoContextActions,

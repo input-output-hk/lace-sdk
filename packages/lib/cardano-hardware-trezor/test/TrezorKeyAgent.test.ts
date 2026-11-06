@@ -6,6 +6,7 @@ import {
   KeyPurpose,
   KeyRole,
   TxInId,
+  errors,
   util,
 } from '@lace-lib/cardano-key-management';
 import * as Trezor from '@trezor/connect';
@@ -18,6 +19,7 @@ import {
   knownAddressKeyPath,
   knownAddressStakeKeyPath,
   minValidTxBody,
+  rewardAccount,
   stakeKeyHash,
   txIn as coreTxIn,
 } from './testData';
@@ -262,18 +264,26 @@ describe('TrezorKeyAgent', () => {
         },
       );
 
+      const script: Cardano.Script = {
+        __type: Cardano.ScriptType.Native,
+        keyHash: Crypto.Ed25519KeyHashHex(stakeKeyHash),
+        kind: Cardano.NativeScriptKind.RequireSignature,
+      };
+      const policyId = Cardano.PolicyId(
+        Serialization.Script.fromCore(script).hash(),
+      );
+
       await expect(
         keyAgent.signTransaction(
-          Serialization.TransactionBody.fromCore(minValidTxBody),
+          Serialization.TransactionBody.fromCore({
+            ...minValidTxBody,
+            mint: new Map([
+              [Cardano.AssetId.fromParts(policyId, Cardano.AssetName('')), 1n],
+            ]),
+          }),
           {
             knownAddresses: [knownAddress],
-            scripts: [
-              {
-                __type: Cardano.ScriptType.Native,
-                keyHash: Crypto.Ed25519KeyHashHex(stakeKeyHash),
-                kind: Cardano.NativeScriptKind.RequireSignature,
-              },
-            ],
+            scripts: [script],
             txInKeyPathMap: {
               [TxInId(coreTxIn)]: { index: 0, role: KeyRole.Internal },
             },
@@ -288,6 +298,115 @@ describe('TrezorKeyAgent', () => {
           ],
         }),
       );
+    });
+
+    it.each([
+      {
+        body: {
+          subTransactions: [
+            {
+              body: { inputs: [], outputs: [] },
+              witness: { signatures: new Map() },
+            },
+          ],
+        },
+        field: 'subTransactions',
+      },
+      {
+        body: {
+          accountBalanceIntervals: [
+            { interval: { exactBalance: 1n }, rewardAccount },
+          ],
+        },
+        field: 'accountBalanceIntervals',
+      },
+      {
+        body: {
+          requiredTopLevelGuards: [
+            {
+              credential: {
+                hash: stakeKeyHash,
+                type: Cardano.CredentialType.ScriptHash,
+              },
+              datum: null,
+            },
+          ],
+        },
+        field: 'requiredTopLevelGuards',
+      },
+    ] as { body: Partial<Cardano.TxBody>; field: string }[])(
+      'refuses a body with $field before reaching the device',
+      async ({ body, field }) => {
+        const cardanoSignTransaction = vi.spyOn(
+          Trezor.default,
+          'cardanoSignTransaction',
+        );
+        const keyAgent = new TrezorKeyAgent(
+          {
+            accountIndex: 0,
+            chainId: Cardano.ChainIds.Preview,
+            extendedAccountPublicKey: Crypto.Bip32PublicKeyHex(
+              'fc5ab25e830b67c47d0a17411bf7fdabf711a597fb6cf04102734b0a2934ceaaa65ff5e7c52498d52c07b8ddfcd436fc2b4d2775e2984a49d0c79f65ceee4779',
+            ),
+            isTrezorInitialized: true,
+            purpose: KeyPurpose.STANDARD,
+            trezorConfig: {
+              communicationType: CommunicationType.Node,
+              manifest: { appUrl: 'https://test.com', email: 'test@test.com' },
+            },
+          },
+          {
+            bip32Ed25519: await Crypto.SodiumBip32Ed25519.create(),
+            logger: dummyLogger,
+          },
+        );
+
+        const signing = keyAgent.signTransaction(
+          Serialization.TransactionBody.fromCore({
+            ...minValidTxBody,
+            ...body,
+          }),
+          { knownAddresses: [knownAddress], txInKeyPathMap: {} },
+        );
+
+        await expect(signing).rejects.toThrow(errors.HwMappingError);
+        await expect(signing).rejects.toThrow(field);
+        expect(cardanoSignTransaction).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('signSubTransaction', () => {
+    it('refuses to sign a sub transaction, which the Trezor Cardano app cannot sign', async () => {
+      const cardanoSignTransaction = vi.spyOn(
+        Trezor.default,
+        'cardanoSignTransaction',
+      );
+      const keyAgent = new TrezorKeyAgent(
+        {
+          accountIndex: 0,
+          chainId: Cardano.ChainIds.Preview,
+          extendedAccountPublicKey: Crypto.Bip32PublicKeyHex(
+            'fc5ab25e830b67c47d0a17411bf7fdabf711a597fb6cf04102734b0a2934ceaaa65ff5e7c52498d52c07b8ddfcd436fc2b4d2775e2984a49d0c79f65ceee4779',
+          ),
+          isTrezorInitialized: true,
+          purpose: KeyPurpose.STANDARD,
+          trezorConfig: {
+            communicationType: CommunicationType.Node,
+            manifest: { appUrl: 'https://test.com', email: 'test@test.com' },
+          },
+        },
+        {
+          bip32Ed25519: await Crypto.SodiumBip32Ed25519.create(),
+          logger: dummyLogger,
+        },
+      );
+
+      await expect(keyAgent.signSubTransaction()).rejects.toThrow(
+        'Sub transaction signing is not supported by Trezor devices',
+      );
+      expect(cardanoSignTransaction).not.toHaveBeenCalled();
+      cardanoSignTransaction.mockRestore();
     });
   });
 

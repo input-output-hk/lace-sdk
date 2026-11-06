@@ -20,12 +20,12 @@ import { MidnightWalletApi } from './midnight-wallet-api';
 import { supportedNetworksChannelProperties } from './supported-network-ids-channel';
 
 import type { ExtendedDAppConnectorWalletAPI } from './types';
-import type { ErrorClass, Shutdown } from '@cardano-sdk/util';
 import type {
   DappConnectorApi,
   FeatureFlagProbe,
   InjectDependencies,
 } from '@lace-contract/dapp-connector';
+import type { ErrorClass, Shutdown } from '@lace-lib/cardano-util';
 import type { RemoteAuthenticator } from '@lace-lib/dapp-connector';
 import type { RemoteApiProperties } from '@lace-lib/extension-messaging';
 import type { ConnectedAPI } from '@midnight-ntwrk/dapp-connector-api';

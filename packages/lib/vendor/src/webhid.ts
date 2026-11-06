@@ -3,7 +3,7 @@
  * (`@ledgerhq/hw-transport-webhid`), a LIGHT co-load group
  * ([ADR 37](../../../../docs/adr/37-host-supply-chain-isolation.md)).
  * WebHID is the ONE Ledger transport the closure admits (ADR 37 trim);
- * the node-hid / WebUSB transports `@cardano-sdk/hardware-ledger` statically
+ * the node-hid / WebUSB transports `@lace-lib/cardano-hardware-ledger` statically
  * requires are stubbed fail-loud in the build (`ledgerNodeTransportFailLoud`).
  *
  * CONSUMERS: every Ledger surface that opens a device — pairing

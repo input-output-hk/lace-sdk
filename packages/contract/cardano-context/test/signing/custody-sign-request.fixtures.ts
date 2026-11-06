@@ -1,6 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import {
   createCustodyAccountRecord,
   CURRENT_CUSTODY_CONTRACT_VERSION,
@@ -15,8 +14,9 @@ import {
   findCustodyLogic,
   serializeCustodyRequestedGrantScope,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountRedeemer,
   CustodyAccountState,

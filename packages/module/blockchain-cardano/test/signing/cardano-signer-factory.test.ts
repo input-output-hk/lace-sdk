@@ -1,4 +1,3 @@
-import { Serialization } from '@cardano-sdk/core';
 import {
   CardanoInMemoryDataSigner,
   CardanoInMemoryTransactionSigner,
@@ -7,6 +6,7 @@ import {
   createInputResolver,
 } from '@lace-contract/cardano-context';
 import { WalletType } from '@lace-contract/wallet-repo';
+import { Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import {
   CASE_B_TX,
@@ -22,9 +22,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { CardanoInMemorySignerFactory } from '../../src/signing/cardano-in-memory-signer-factory';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type {
   CardanoSignerContext,
   CardanoTransactionSignerContext,
@@ -35,6 +32,9 @@ import type {
   AnyAccount,
   AnyWallet,
 } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 const mockChainId: Cardano.ChainId = { networkId: 0, networkMagic: 1 };
 const mockAccountId = 'account-1' as AccountId;

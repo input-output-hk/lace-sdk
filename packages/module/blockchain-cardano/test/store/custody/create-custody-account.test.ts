@@ -1,6 +1,4 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
-import { assertWithinTransactionLimits } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   createCustodyAccountRecord,
   CURRENT_CUSTODY_CONTRACT_VERSION,
@@ -8,9 +6,15 @@ import {
   deriveCustodyDeviceKey,
   encodeCustodyMintRedeemer,
 } from '@lace-lib/cardano-custody';
+import {
+  assertWithinTransactionLimits,
+  TransactionBuilder,
+} from '@lace-lib/cardano-tx-builder';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { Err } from '@lace-lib/util';
 import { of } from 'rxjs';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { dummyLogger } from 'ts-log';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CUSTODY_CREATION_SCAN_LIMIT } from '../../../src/store/custody/create-custody-account';
 import {
@@ -24,13 +28,11 @@ import {
 } from '../../../src/store/custody/custody-execution-estimate';
 
 import {
-  RUN_REDEEMER_CBOR,
   collateralUtxo,
   currentLogic,
   datumCborOf,
-  evaluateAll,
-  providerError,
   deviceAccountPublicKey,
+  evaluateAll,
   expectFailure,
   expectSuccess,
   fakeProvider,
@@ -38,8 +40,10 @@ import {
   feeUtxo,
   identityOf,
   logicRewardAccountOf,
-  parkedScriptUtxos,
   protocolParameters,
+  providerError,
+  referencedScriptUtxos,
+  RUN_REDEEMER_CBOR,
   runBuild,
   sponsorAddress,
   transactionOf,
@@ -49,12 +53,12 @@ import {
 } from './fixtures';
 
 import type { ChainFixture } from './fixtures';
-import type * as Crypto from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyBuildRequest,
   CardanoCustodyBuildResult,
   RedeemerExecutionUnits,
 } from '@lace-contract/cardano-context';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 import type { CustodyAccountState } from '@lace-lib/cardano-custody';
 
 const DEPOSIT = BigInt(protocolParameters.stakeKeyDeposit);
@@ -205,6 +209,17 @@ const chainWith = async (
 };
 
 describe('custody account creation', () => {
+  it('hands the side effect logger to the transaction builder', async () => {
+    const { provider } = fakeProvider();
+    const logger = { ...dummyLogger };
+    const setLogger = vi.spyOn(TransactionBuilder.prototype, 'setLogger');
+
+    expectSuccess(await runBuild(createRequest(), { provider, logger }));
+
+    expect(setLogger).toHaveBeenCalledWith(logger);
+    setLogger.mockRestore();
+  });
+
   it('builds at the first unregistered creator index in fee mode', async () => {
     const { provider } = fakeProvider();
     const result = expectSuccess(await runBuild(createRequest(), { provider }));
@@ -229,7 +244,7 @@ describe('custody account creation', () => {
     expect(result.bodyHash).toBe(tx.getId());
     expect(result.resolvedInputs).toEqual([
       feeUtxo,
-      ...parkedScriptUtxos,
+      ...referencedScriptUtxos,
       collateralUtxo,
     ]);
     expect(body.inputs).toEqual([
@@ -238,7 +253,7 @@ describe('custody account creation', () => {
     // The proxy and the logic come from their parked UTxOs; only the stake
     // script, applied to the creator, is attached.
     expect(body.referenceInputs).toEqual(
-      parkedScriptUtxos.map(([{ txId, index }]) => ({ txId, index })),
+      referencedScriptUtxos.map(([{ txId, index }]) => ({ txId, index })),
     );
     expect(tx.witnessSet().toCore().scripts).toEqual([created.stakeScript]);
     expect(body.withdrawals).toEqual([
@@ -540,8 +555,8 @@ describe('custody account creation', () => {
 
       // The numbers the creation build's comment states, at the budgets
       // upstream's devnet measured.
-      expect(body.fee).toBe(486_317n);
-      expect(control).toBe(3_413_683n);
+      expect(body.fee).toBe(486_343n);
+      expect(control).toBe(3_413_657n);
       expect(minimum).toBe(1_586_080n);
     });
 

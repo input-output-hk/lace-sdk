@@ -52,7 +52,7 @@ import type * as WalletSdkFacade from '@midnightntwrk/wallet-sdk/facade';
 
 // ===== MOCKS =====
 
-vi.mock('@cardano-sdk/key-management', () => ({
+vi.mock('@lace-lib/cardano-key-management', () => ({
   emip3decrypt: vi.fn(),
   emip3encrypt: vi.fn(),
 }));

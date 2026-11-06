@@ -1,5 +1,5 @@
 // copied from @cardano-sdk/cardano-services-client
-import { Cardano, Milliseconds, Seconds } from '@cardano-sdk/core';
+import { Cardano, Milliseconds, Seconds } from '@lace-lib/cardano-core';
 import { toProviderError } from '@lace-lib/util-provider';
 
 import { BlockfrostProvider } from '../blockfrost-provider';
@@ -12,7 +12,7 @@ import type {
   NetworkInfoProvider,
   StakeSummary,
   SupplySummary,
-} from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
 

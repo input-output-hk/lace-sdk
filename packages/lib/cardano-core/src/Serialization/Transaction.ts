@@ -1,5 +1,6 @@
 import { HexBlob } from '@lace-lib/cardano-util';
 
+import { SerializationError, SerializationFailure } from '../errors';
 import { hexToBytes } from '../util/misc';
 
 import { AuxiliaryData } from './AuxiliaryData';
@@ -11,7 +12,15 @@ import type { DeserializationOptions } from './Common';
 import type * as Cardano from '../Cardano';
 import type { OpaqueString } from '@lace-lib/cardano-util';
 
-const ALONZO_ERA_TX_FRAME_SIZE = 4;
+/** The layouts a transaction array is written in. */
+enum TxFrame {
+  /** `[body, witness set, auxiliary data / nil]`, without the is_valid flag. */
+  Shelley,
+  /** `[body, witness set, is_valid, auxiliary data / nil]`, the flag before the auxiliary data. */
+  Alonzo,
+  /** `[body, witness set, auxiliary data / nil, is_valid]`, the flag after the auxiliary data, as a Dijkstra block carries it. */
+  Block,
+}
 
 /** Transaction serialized as CBOR, encoded as hex string */
 export type TxCBOR = HexBlob & OpaqueString<'TxCbor'>;
@@ -36,6 +45,7 @@ export class Transaction {
   #auxiliaryData: AuxiliaryData | undefined;
   // No public setter: authored transactions always carry true; decode and fromCore preserve it.
   #isValid = true;
+  #frame = TxFrame.Alonzo;
   // If the transaction object is constructed from a CBOR byte array, we are going to remember it and use it
   // when the object is re-serialized again to avoid changing the transaction during a round trip serialization.
   // This cache will be invalidated if any of the transaction properties changes after the object has been deserialized.
@@ -72,20 +82,21 @@ export class Transaction {
     if (this.#originalBytes) return this.#originalBytes;
 
     // CDDL
-    // transaction_mempool =
-    //   transaction /
-    //   [ transaction_body
-    //   , transaction_witness_set
-    //   , true
-    //   , auxiliary_data / nil
-    //   ]
+    // mempool_transaction =
+    //   [transaction_body, transaction_witness_set, auxiliary_data / nil]
+    //   / [transaction_body, transaction_witness_set, true, auxiliary_data / nil]
+    //
+    // block_transaction =
+    //   [transaction_body, transaction_witness_set, auxiliary_data / nil, bool]
     //
     // is_valid is deprecated in the Dijkstra era; the 4-element grace-period frame is only
     // legal with the literal value true, which stays byte-compatible with Conway consumers.
-    writer.writeStartArray(ALONZO_ERA_TX_FRAME_SIZE);
+    // A transaction decoded from a block keeps the block layout, with the flag last.
+    writer.writeStartArray(this.#frame === TxFrame.Shelley ? 3 : 4);
     writer.writeEncodedValue(hexToBytes(this.#body.toCbor()));
     writer.writeEncodedValue(hexToBytes(this.#witnessSet.toCbor()));
-    writer.writeBoolean(this.#isValid);
+
+    if (this.#frame === TxFrame.Alonzo) writer.writeBoolean(this.#isValid);
 
     if (this.#auxiliaryData) {
       writer.writeEncodedValue(hexToBytes(this.#auxiliaryData.toCbor()));
@@ -93,21 +104,33 @@ export class Transaction {
       writer.writeNull();
     }
 
+    if (this.#frame === TxFrame.Block) writer.writeBoolean(this.#isValid);
+
     return writer.encodeAsHex() as unknown as TxCBOR;
   }
 
   /**
    * Deserializes the transaction from a CBOR byte array.
    *
+   * Accepts a transaction as it is submitted, with or without the is_valid flag before the auxiliary data, and as a
+   * Dijkstra block carries it, with the flag after the auxiliary data. An edited transaction is written back in the
+   * layout it was read in.
+   *
    * @param cbor The CBOR encoded transaction object.
-   * @param options Deserialization options. When `strict` is true, throws on unknown map keys
-   * instead of skipping them.
+   * @param options Deserialization options forwarded to the body and witness set. See
+   * {@link DeserializationOptions} for the checks `strict` adds.
    * @returns The new transaction instance.
    */
   static fromCbor(cbor: TxCBOR, options?: DeserializationOptions): Transaction {
     const reader = new CborReader(cbor as unknown as HexBlob);
 
     const length = reader.readStartArray();
+
+    if (length !== null && length !== 3 && length !== 4)
+      throw new SerializationError(
+        SerializationFailure.InvalidType,
+        `Transaction frame must be 3 or 4 elements, found ${length}`,
+      );
 
     const bodyBytes = reader.readEncodedValue();
     const body = TransactionBody.fromCbor(
@@ -122,18 +145,39 @@ export class Transaction {
 
     // The is_valid flag was added in Alonzo; Mary era transactions only have three fields.
     // Alonzo through Conway record false for phase-2 failed transactions, so decode is permissive.
+    // A Dijkstra block moves the flag after the auxiliary data, which is never a boolean, so the
+    // type of the third element tells the two 4-element layouts apart.
+    let frame = TxFrame.Shelley;
     let isValid = true;
-    if (length === ALONZO_ERA_TX_FRAME_SIZE) isValid = reader.readBoolean();
+    if (length !== 3 && reader.peekState() === CborReaderState.Boolean) {
+      frame = TxFrame.Alonzo;
+      isValid = reader.readBoolean();
+    }
 
     let auxData;
-    if (reader.peekState() !== CborReaderState.Null)
+    if (reader.peekState() === CborReaderState.Null) {
+      reader.readNull();
+    } else {
       auxData = AuxiliaryData.fromCbor(
         HexBlob.fromBytes(reader.readEncodedValue()),
       );
+    }
+
+    if (
+      frame === TxFrame.Shelley &&
+      (length === 4 ||
+        (length === null && reader.peekState() !== CborReaderState.EndArray))
+    ) {
+      frame = TxFrame.Block;
+      isValid = reader.readBoolean();
+    }
+
+    if (length === null) reader.readEndArray();
 
     const tx = new Transaction(body, witnessSet, auxData);
 
     tx.#isValid = isValid;
+    tx.#frame = frame;
     tx.#originalBytes = cbor;
 
     return tx;
@@ -220,7 +264,8 @@ export class Transaction {
    * Gets the transaction is_valid flag.
    *
    * The flag is deprecated in the Dijkstra era; it has no setter and authored transactions
-   * always carry true. Transactions decoded from chain data surface the on-chain value.
+   * always carry true. Transactions decoded from chain data surface the on-chain value, and a
+   * transaction encoded without the flag is valid.
    *
    * @returns The is_valid flag.
    */

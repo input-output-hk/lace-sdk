@@ -1,7 +1,7 @@
 import { BlockfrostProvider } from '../blockfrost-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Fetches transaction details by id via Blockfrost `txs/{hash}`.

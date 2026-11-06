@@ -1,5 +1,5 @@
 import type { CardanoRewardAccount } from '../types';
-import type { Cardano, Serialization } from '@cardano-sdk/core';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
 
 /**
  * The reviewed-and-pinned set a sweep must fully evacuate: every UTxO the user

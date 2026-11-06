@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import { outpointKey } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { parseCustodyAccountTokenName } from '@lace-lib/cardano-custody';
 
 import {

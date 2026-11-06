@@ -186,10 +186,67 @@ describe('InMemoryKeyAgent', () => {
       txInKeyPathMap,
       expect.anything(),
       undefined,
+      undefined,
     ] as const;
     expect(ownSignatureKeyPaths).toBeCalledWith(...expectedArgs);
     expect(witnessSet.size).toBe(2);
     expect(typeof [...witnessSet.values()][0]).toBe('string');
+  });
+
+  test('signSubTransaction signs the sub transaction id with the keys its body and native scripts need', async () => {
+    ownSignatureKeyPaths.mockReturnValueOnce([{ index: 0, role: 0 }]);
+    const witnessScript: Cardano.NativeScript = {
+      __type: Cardano.ScriptType.Native,
+      keyHash: Crypto.Ed25519KeyHashHex('11'.repeat(28)),
+      kind: Cardano.NativeScriptKind.RequireSignature,
+    };
+    const contextScript: Cardano.NativeScript = {
+      __type: Cardano.ScriptType.Native,
+      kind: Cardano.NativeScriptKind.RequireTimeAfter,
+      slot: Cardano.Slot(1),
+    };
+    const subTransaction = new Serialization.SubTransaction(
+      Serialization.SubTransactionBody.fromCore({
+        inputs: [
+          {
+            index: 0,
+            txId: Cardano.TransactionId('22'.repeat(32)),
+          },
+        ],
+        outputs: [],
+      }),
+      Serialization.TransactionWitnessSet.fromCore({
+        scripts: [witnessScript],
+        signatures: new Map(),
+      }),
+    );
+
+    const knownAddresses: GroupedAddress[] = [];
+    const txInKeyPathMap = {};
+    const signatures = await keyAgent.signSubTransaction(subTransaction, {
+      knownAddresses,
+      scripts: [contextScript],
+      txInKeyPathMap,
+    });
+
+    expect(ownSignatureKeyPaths).toBeCalledWith(
+      subTransaction.body().toCore(),
+      knownAddresses,
+      txInKeyPathMap,
+      expect.anything(),
+      [contextScript, witnessScript],
+      undefined,
+    );
+    const [[publicKey, signature]] = [...signatures];
+    expect(publicKey).toBe(
+      await keyAgent.derivePublicKey({ index: 0, role: 0 }),
+    );
+    expect(
+      Crypto.Ed25519PublicKey.fromHex(publicKey).verify(
+        Crypto.Ed25519Signature.fromHex(signature),
+        HexBlob(subTransaction.getId()),
+      ),
+    ).toBe(true);
   });
 
   test('exportKeyPair', async () => {

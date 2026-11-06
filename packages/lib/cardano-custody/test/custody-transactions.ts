@@ -1,6 +1,6 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import {
   CURRENT_CUSTODY_CONTRACT_VERSION,
@@ -25,7 +25,7 @@ import type {
   CustodyGrant,
 } from '../src';
 import type { CustodyInspectionOptions } from '../src/analysis/inspect';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 export const PREPROD = Cardano.ChainIds.Preprod;
 

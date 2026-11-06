@@ -1,4 +1,4 @@
-import { toEmpty } from '@cardano-sdk/util-rxjs';
+import { toEmpty } from '@lace-lib/cardano-util-rxjs';
 import {
   concat,
   EMPTY,
@@ -16,8 +16,8 @@ import {
 
 import type { SideEffect } from '../../contract';
 import type { CardanoWalletAccount } from '../../util';
-import type { Cardano } from '@cardano-sdk/core';
 import type { SyncOperation, SyncOperationId } from '@lace-contract/sync';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 const SYNC_ROUND_TIMEOUT_MS = 60_000; // 60 seconds
 

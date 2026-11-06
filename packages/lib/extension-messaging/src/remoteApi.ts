@@ -2,8 +2,8 @@ import {
   fromSerializableObject,
   isPromise,
   toSerializableObject,
-} from '@cardano-sdk/util';
-import { TrackerSubject } from '@cardano-sdk/util-rxjs';
+} from '@lace-lib/cardano-util';
+import { TrackerSubject } from '@lace-lib/cardano-util-rxjs';
 import { NotImplementedError } from '@lace-lib/util';
 import {
   EMPTY,
@@ -63,7 +63,7 @@ import type {
   RequestMessage,
   ResponseMessage,
 } from './types';
-import type { ErrorClass } from '@cardano-sdk/util';
+import type { ErrorClass } from '@lace-lib/cardano-util';
 import type { Shutdown } from '@lace-lib/util';
 import type { Observable, Subscription, TeardownLogic } from 'rxjs';
 

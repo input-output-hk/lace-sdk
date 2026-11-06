@@ -6,7 +6,7 @@ import { toCardanoUtxo } from './fixtures/cardano';
 import { datumOf } from './fixtures/plutus';
 import { preprodUtxos } from './fixtures/preprod';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 describe('fromBlockfrostUtxo', () => {
   it('splits lovelace from native assets and keeps the datum', () => {

@@ -1,5 +1,5 @@
-import type { Cardano } from '@cardano-sdk/core';
-import type { TxEvaluator } from '@cardano-sdk/tx-construction';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { TxEvaluator } from '@lace-lib/cardano-tx-builder';
 
 // =====================================================================
 // Bounded ex-units evaluator for the cNIGHT designation tx.

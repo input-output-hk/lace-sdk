@@ -1,4 +1,4 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 
 const cred = (hash: string): Cardano.Credential => ({
   type: Cardano.CredentialType.KeyHash,

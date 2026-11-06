@@ -6,9 +6,9 @@
 // refusals for shapes it never builds are checked beside the contract's
 // rules.
 
-import { Cardano } from '@cardano-sdk/core';
-import { Hash32ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {

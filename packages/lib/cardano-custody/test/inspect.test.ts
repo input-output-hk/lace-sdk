@@ -1,6 +1,6 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { blake2b, Hash32ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { blake2b, Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -74,7 +74,7 @@ import {
 import type { CustodyAccountState } from '../src';
 import type { TransactionShape } from './custody-transactions';
 import type { Inspection } from './inspect-helpers';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 const TOKEN = Cardano.AssetId(`${TOKEN_POLICY}${TOKEN_NAME}`);
 const DATUM_HASH = Hash32ByteBase16('00'.repeat(32));

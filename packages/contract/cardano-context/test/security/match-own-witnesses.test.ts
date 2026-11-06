@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
 import { describe, expect, it } from 'vitest';
 
 import { computeOwnKeyHashes } from '../../src/security/match-own-witnesses';

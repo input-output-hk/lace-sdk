@@ -1,4 +1,4 @@
-import { Bip32Account } from '@cardano-sdk/key-management';
+import { Bip32Account } from '@lace-lib/cardano-key-management';
 
 import type { Bip32Ed25519 } from '@lace-contract/crypto';
 

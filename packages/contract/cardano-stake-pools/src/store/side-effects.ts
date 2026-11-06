@@ -1,6 +1,6 @@
-import { isNotNil } from '@cardano-sdk/util';
 import { CardanoNetworkId } from '@lace-contract/cardano-context';
 import { whileActive } from '@lace-contract/wallet-active-state';
+import { isNotNil } from '@lace-lib/cardano-util';
 import { Ok } from '@lace-lib/util';
 import {
   combineLatest,
@@ -31,7 +31,7 @@ import type {
   LaceStakePool,
   StakePoolsNetworkData,
 } from '../types';
-import type { Cardano, ProviderError } from '@cardano-sdk/core';
+import type { Cardano, ProviderError } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 

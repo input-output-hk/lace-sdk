@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
 import {
   createCustodyAccountRecord,
   CURRENT_CUSTODY_CONTRACT_VERSION,

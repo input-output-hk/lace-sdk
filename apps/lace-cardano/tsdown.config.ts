@@ -9,8 +9,7 @@ export const ENTRIES = [
   'crypto',
   'util',
   'key-management',
-  'input-selection',
-  'tx-construction',
+  'tx-builder',
   'dapp-connector',
 ] as const;
 

@@ -1,4 +1,8 @@
-import { Cardano, ProviderError, ProviderFailure } from '@cardano-sdk/core';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+} from '@lace-lib/cardano-core';
 import { Err, Ok } from '@lace-lib/util';
 import { from } from 'rxjs';
 
@@ -25,9 +29,10 @@ import type { Logger } from 'ts-log';
 //   v6: { result: [ { validator: { purpose: "spend", index: 0 },
 //                     budget: { memory, cpu } } ] }
 //
-// v6 also renames two purposes (`publish` for certificate, `withdraw`
-// for withdrawal) and the steps field (`cpu`), which is why the maps
-// below accept either spelling.
+// v6 also renames three purposes (`publish` for certificate, `withdraw`
+// for withdrawal, `guard` for the Dijkstra guarding purpose) and the
+// steps field (`cpu`), which is why the maps below accept either
+// spelling.
 //
 // The body is the transaction CBOR as a HEX STRING under
 // `Content-Type: application/cbor` — what Blockfrost's own client
@@ -55,6 +60,8 @@ const REDEEMER_PURPOSE_BY_NAME: Record<string, Cardano.RedeemerPurpose> = {
   withdraw: Cardano.RedeemerPurpose.withdrawal,
   vote: Cardano.RedeemerPurpose.vote,
   propose: Cardano.RedeemerPurpose.propose,
+  guarding: Cardano.RedeemerPurpose.guarding,
+  guard: Cardano.RedeemerPurpose.guarding,
 };
 
 const toExUnits = (budget: unknown): Cardano.ExUnits | undefined => {

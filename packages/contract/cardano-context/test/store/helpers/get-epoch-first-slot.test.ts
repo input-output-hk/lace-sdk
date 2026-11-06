@@ -1,9 +1,9 @@
-import { Cardano, Milliseconds } from '@cardano-sdk/core';
+import { Cardano, Milliseconds } from '@lace-lib/cardano-core';
 import { describe, it, expect } from 'vitest';
 
 import { getEpochFirstSlot } from '../../../src/store/helpers/get-epoch-first-slot';
 
-import type { EraSummary } from '@cardano-sdk/core';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 // slotLength / start.time are irrelevant to getEpochFirstSlot — only start.slot
 // and epochLength drive the epoch->slot walk.

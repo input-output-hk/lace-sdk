@@ -1,6 +1,6 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 // =====================================================================
 // DustAction redeemer CBOR encoder + Data.void() helper.

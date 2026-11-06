@@ -1,7 +1,7 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { BitcoinNetwork } from '@lace-contract/bitcoin-context';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 import { Err, Ok, Timestamp } from '@lace-lib/util';
 import { address as bitcoinAddress, networks, opcodes } from 'bitcoinjs-lib';
 import { of } from 'rxjs';

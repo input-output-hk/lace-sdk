@@ -15,11 +15,11 @@ import {
 } from 'rxjs';
 
 import type { SideEffect } from '../../sdk-contracts';
-import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type { HydraHeadsIndexSliceState } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** The accounts marked as holding tagged activities. */
 type TaggedAccounts = HydraHeadsIndexSliceState['activitiesTaggedByAccount'];

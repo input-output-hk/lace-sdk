@@ -1,11 +1,14 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Ed25519PublicKeyHex, Ed25519SignatureHex } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import {
   assertTransactionFullySigned,
   mergeVkeyWitnesses,
   verifyVkeyWitnesses,
 } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import {
+  Ed25519PublicKeyHex,
+  Ed25519SignatureHex,
+} from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { HexBytes } from '@lace-lib/util';
 
 import {
@@ -13,8 +16,8 @@ import {
   CardanoCustodyWitnessError,
 } from './cardano-custody-errors';
 
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type { CardanoVkeyWitness } from '@lace-contract/cardano-context';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 
 const VKEY_WITNESSES_KEY = 0n;
 const ED25519_PUBLIC_KEY_HEX_LENGTH = 64;

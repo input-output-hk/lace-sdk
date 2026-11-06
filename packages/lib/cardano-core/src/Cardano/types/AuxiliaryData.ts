@@ -5,6 +5,10 @@ import * as Serialization from '../../Serialization/AuxiliaryData';
 import type { Script } from './Script';
 import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 
+/**
+ * In decoded metadata, every entry of a repeated key takes the value of the first entry, and
+ * integer or text keys collapse into one entry. Use TransactionMetadatum.toCbor for exact data.
+ */
 export type MetadatumMap = Map<Metadatum, Metadatum>;
 
 export type Metadatum =

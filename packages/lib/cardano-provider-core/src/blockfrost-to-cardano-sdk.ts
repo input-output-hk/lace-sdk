@@ -1,6 +1,6 @@
 // copied from @cardano-sdk/cardano-services-client
-import { Cardano } from '@cardano-sdk/core';
-import { Hash32ByteBase16 } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 
 import { decodeInlineDatum, hashInlineDatum } from './inline-datum';
 
@@ -16,6 +16,37 @@ type BlockfrostInput = Pick<
 >;
 type BlockfrostOutputs = Responses['tx_content_utxo']['outputs'];
 type BlockfrostOutput = Unpacked<BlockfrostOutputs>;
+/**
+ * The reference-script fee tiers Dijkstra adds to the protocol parameters,
+ * read from a Blockfrost protocol parameters response when it carries them.
+ * Blockfrost's schema does not list them yet, so a response without them
+ * leaves them unset and the transaction builder prices reference scripts in
+ * Conway's tiers.
+ *
+ * @param blockfrost - The protocol parameters response.
+ * @returns The tiers the response carries.
+ */
+const referenceScriptCostTiers = (
+  blockfrost: object,
+): Partial<
+  Pick<
+    Cardano.ProtocolParameters,
+    'refScriptCostMultiplier' | 'refScriptCostStride'
+  >
+> => {
+  const {
+    ref_script_cost_multiplier: multiplier,
+    ref_script_cost_stride: stride,
+  } = blockfrost as Record<string, unknown>;
+  const isValue = (value: unknown): value is number | string =>
+    (typeof value === 'number' || typeof value === 'string') &&
+    Number(value) > 0;
+  return {
+    ...(isValue(stride) && { refScriptCostStride: Number(stride) }),
+    ...(isValue(multiplier) && { refScriptCostMultiplier: String(multiplier) }),
+  };
+};
+
 export type BlockfrostTransactionContent = Unpacked<
   Responses['address_transactions_content']
 >;
@@ -100,6 +131,7 @@ export const BlockfrostToCardanoSDK = {
           ['PlutusV1', Cardano.PlutusLanguageVersion.V1],
           ['PlutusV2', Cardano.PlutusLanguageVersion.V2],
           ['PlutusV3', Cardano.PlutusLanguageVersion.V3],
+          ['PlutusV4', Cardano.PlutusLanguageVersion.V4],
         ] as const
       ).flatMap(
         ([key, version]): [
@@ -156,6 +188,7 @@ export const BlockfrostToCardanoSDK = {
     poolDeposit: Number(blockfrost.pool_deposit),
     poolInfluence: blockfrost.a0.toString(),
     poolRetirementEpochBound: blockfrost.e_max,
+    ...referenceScriptCostTiers(blockfrost),
     prices: {
       memory: blockfrost.price_mem!,
       steps: blockfrost.price_step!,

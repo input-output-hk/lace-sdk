@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import { createInputResolver } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { expectCollateralGuardRefusesCaseB } from '@lace-lib/util-dev-cardano';
 import { firstValueFrom } from 'rxjs';
@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { RemoteSignerResultError } from '../src/cardano-remote-signer-factory';
 import { createRemoteCardanoVaultModule } from '../src/remote-cardano-vault-module';
 
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type {
   CardanoSignerFactory,
   CardanoTransactionSignerContext,
@@ -19,6 +18,7 @@ import type {
   AnyWallet,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { Mock } from 'vitest';
 
 const accountId = 'wallet-1-0-1' as AccountId;

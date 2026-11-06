@@ -1,7 +1,7 @@
-import { Cardano } from '@cardano-sdk/core';
 import { activitiesActions, ActivityType } from '@lace-contract/activities';
 import { UTXO_SYNC_CONFIRMATION_DEPTH } from '@lace-contract/cardano-context';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Timestamp } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { describe, it } from 'vitest';

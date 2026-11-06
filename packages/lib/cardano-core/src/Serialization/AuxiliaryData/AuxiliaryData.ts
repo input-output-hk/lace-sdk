@@ -42,14 +42,21 @@ export class AuxiliaryData {
   #plutusV3Scripts: Array<PlutusV3Script> | undefined;
   #plutusV4Scripts: Array<PlutusV4Script> | undefined;
   #originalBytes: HexBlob | undefined = undefined;
+  #decodedMetadata: HexBlob | undefined = undefined;
 
   /**
    * Serializes a AuxiliaryData into CBOR format.
+   * An instance decoded from CBOR returns the bytes it was decoded from while its metadata
+   * still encodes as it did when decoded.
    *
    * @returns The AuxiliaryData in CBOR format.
    */
   toCbor(): HexBlob {
-    if (this.#originalBytes) return this.#originalBytes;
+    if (
+      this.#originalBytes &&
+      this.#metadata?.toCbor() === this.#decodedMetadata
+    )
+      return this.#originalBytes;
 
     // CDDL
     // auxiliary_data =
@@ -306,6 +313,7 @@ export class AuxiliaryData {
     }
 
     auxData.#originalBytes = cbor;
+    auxData.#decodedMetadata = auxData.#metadata?.toCbor();
     return auxData;
   }
 

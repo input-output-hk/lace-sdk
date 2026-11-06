@@ -1,5 +1,5 @@
-import { toSerializableObject } from '@cardano-sdk/util';
 import * as fixture from '@lace-contract/midnight-context/src/stub-data';
+import { toSerializableObject } from '@lace-lib/cardano-util';
 import {
   createBackgroundMessenger,
   createSharedWorkerHostRuntime,

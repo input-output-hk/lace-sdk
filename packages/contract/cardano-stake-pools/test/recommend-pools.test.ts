@@ -8,7 +8,7 @@ import {
 
 import type { RecommendablePool } from '../src/recommend-pools';
 import type { StakePoolsNetworkData } from '../src/types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 // Mainnet-scale. Relative stake is measured against ada in CIRCULATION
 // (`maxLovelaceSupply - reserves` = 38e15 here), so saturation sits at 1/500th

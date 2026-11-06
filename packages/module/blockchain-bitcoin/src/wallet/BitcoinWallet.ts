@@ -35,7 +35,6 @@ import { BlockchainInputResolver } from './../providers';
 
 import type { BitcoinWalletInfo, DerivedAddress } from '../common';
 import type { InputResolver } from './../providers';
-import type { ProviderError } from '@cardano-sdk/core';
 import type {
   BitcoinEstimatedFees,
   BitcoinFeeMarketProvider,
@@ -44,6 +43,7 @@ import type {
   BitcoinUTxO,
   BitcoinInputEntry,
 } from '@lace-contract/bitcoin-context';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable, Subscription } from 'rxjs';
 import type { Logger } from 'ts-log';

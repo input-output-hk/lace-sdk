@@ -1,4 +1,5 @@
 import {
+  HexBlob,
   InvalidArgumentError,
   InvalidStateError,
 } from '@lace-lib/cardano-util';
@@ -8,7 +9,6 @@ import { CborSet, Credential, Hash } from '../Common';
 
 import type { Cardano } from '../..';
 import type * as Crypto from '@lace-lib/cardano-crypto';
-import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** The wire representation used by a {@link Guards} instance. */
 export enum GuardsKind {
@@ -21,6 +21,28 @@ type KeyHashSet = CborSet<
   Hash<Crypto.Ed25519KeyHashHex>
 >;
 type CredentialSet = CborSet<Cardano.Credential, Credential>;
+
+const KEY_HASH_SIZE = 28;
+
+/**
+ * Deserializes a key hash guard, which must be 28 bytes long.
+ *
+ * @param cbor The CBOR encoded key hash.
+ * @returns The key hash.
+ */
+const keyHashFromCbor = (cbor: HexBlob): Hash<Crypto.Ed25519KeyHashHex> => {
+  const keyHash = new CborReader(cbor).readByteString();
+
+  if (keyHash.length !== KEY_HASH_SIZE)
+    throw new InvalidArgumentError(
+      'cbor',
+      `Expected a key hash of ${KEY_HASH_SIZE} bytes, but got ${keyHash.length} bytes`,
+    );
+
+  return Hash.fromCore(
+    HexBlob.fromBytes(keyHash) as unknown as Crypto.Ed25519KeyHashHex,
+  );
+};
 
 /**
  * Guards are credentials (key hashes or script hashes) that must approve the transaction.
@@ -58,6 +80,8 @@ export class Guards {
    * is a CBOR array, every element is decoded as a full credential; otherwise every element is
    * decoded as a bare key hash. An empty set decodes as key hash form: the Dijkstra guards rule
    * is non-empty, but pre-Conway required_signers was a plain set and empty sets exist on chain.
+   * For the same reason repeated key hashes are kept, while the credential form, which only
+   * exists since Dijkstra, must not repeat a credential.
    *
    * @param cbor The CBOR encoded guards.
    * @returns The new Guards instance.
@@ -73,14 +97,29 @@ export class Guards {
 
     reader.readStartArray();
 
-    if (reader.peekState() === CborReaderState.StartArray)
-      return new Guards(undefined, CborSet.fromCbor(cbor, Credential.fromCbor));
+    if (reader.peekState() === CborReaderState.StartArray) {
+      const credentials: CredentialSet = CborSet.fromCbor(
+        cbor,
+        Credential.fromCbor,
+      );
+      const distinct = new Set(
+        credentials.toCore().map(({ type, hash }) => `${type}:${hash}`),
+      );
+
+      if (distinct.size !== credentials.size())
+        throw new InvalidArgumentError(
+          'cbor',
+          'Credential form guards must not contain duplicate credentials',
+        );
+
+      return new Guards(undefined, credentials);
+    }
 
     return new Guards(
       CborSet.fromCbor<
         Crypto.Ed25519KeyHashHex,
         Hash<Crypto.Ed25519KeyHashHex>
-      >(cbor, Hash.fromCbor),
+      >(cbor, keyHashFromCbor),
     );
   }
 

@@ -23,10 +23,10 @@ import {
 
 import type { CardanoCustodyRequestedGrantScope } from './cardano-custody-device-signer';
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type { CardanoCustodyAccount } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountIdentity,
   CustodyAccountRecord,

@@ -55,7 +55,7 @@ export type {
 export { FEATURE_FLAG_CARDANO } from '@lace-contract/cardano-context';
 export { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
 export type { AppConfig } from '@lace-contract/module';
-export { Cardano, Serialization } from '@cardano-sdk/core';
+export { Cardano, Serialization } from '@lace-lib/cardano-core';
 export { AccountId, WalletId, WalletType } from '@lace-contract/wallet-repo';
 export { createTxBuilder, waitForNetworkInfo } from './create-tx-builder';
 export type {
@@ -74,7 +74,7 @@ export type {
   SubmitCardanoTxProps,
   WalletWithCardanoSubmit,
 } from './submit-cardano-tx';
-export { HexBlob } from '@cardano-sdk/util';
+export { HexBlob } from '@lace-lib/cardano-util';
 export { Milliseconds } from '@lace-lib/util';
 export { HexBytes } from '@lace-lib/util';
 export * as m from './modules-cardano';

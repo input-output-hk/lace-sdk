@@ -2,14 +2,14 @@ import {
   Cardano,
   createTxInspector,
   transactionSummaryInspector,
-} from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
+} from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
 import { dummyLogger } from 'ts-log';
 import { describe, expect, it } from 'vitest';
 
 import { computeOwnNetCoins } from '../../../src/store/helpers/compute-own-net-coins';
 
-import type { Milliseconds } from '@cardano-sdk/core';
+import type { Milliseconds } from '@lace-lib/cardano-core';
 
 const ADA = (amount: number) => BigInt(amount) * 1_000_000n;
 
@@ -83,7 +83,6 @@ type TxSpec = {
   fee: bigint;
   certificates?: Cardano.HydratedCertificate[];
   withdrawals?: Cardano.Withdrawal[];
-  donation?: bigint;
 };
 
 const buildTx = (spec: TxSpec) =>
@@ -99,7 +98,6 @@ const buildTx = (spec: TxSpec) =>
       fee: spec.fee,
       certificates: spec.certificates ?? [],
       withdrawals: spec.withdrawals ?? [],
-      donation: spec.donation,
       validityInterval: {},
     },
   } as unknown as Cardano.HydratedTx);
@@ -487,16 +485,23 @@ describe('computeOwnNetCoins', () => {
   });
 
   it('does not read an unaccounted SHORTFALL as own value the account never spent', async () => {
-    // A treasury donation is coin the inspector does not model, so it reports
-    // 45 ADA LESS than nothing unaccounted for. The first sweep's resolution of
-    // the 50 ADA input is what keeps that shortfall visible rather than masked.
+    // The deposit of another party's stake key registration is coin the
+    // inspector does not count for this account, so it reports 45 ADA LESS than
+    // nothing unaccounted for. The first sweep's resolution of the 50 ADA input
+    // is what keeps that shortfall visible rather than masked.
     const resolvedOnce = utxo(1, ADA(50), OWN_A);
     const neverResolved = utxo(2, ADA(5), OWN_A);
     const spec: TxSpec = {
       inputs: [resolvedOnce, neverResolved],
       outputs: [output(ADA(4), OWN_A)],
       fee: ADA(1),
-      donation: ADA(50),
+      certificates: [
+        {
+          __typename: Cardano.CertificateType.Registration,
+          stakeCredential: foreignStakeCredential,
+          deposit: ADA(50),
+        } as Cardano.HydratedCertificate,
+      ],
     };
     const { ownNetCoins, summary, truth } = await run(spec, {
       unresolvableOnSecondSweep: [resolvedOnce],

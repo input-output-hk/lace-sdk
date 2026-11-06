@@ -118,3 +118,20 @@ describe('TransactionUnspentOutput', () => {
     expect(utxo.toCore()).toEqual(core);
   });
 });
+
+describe('TransactionUnspentOutput inline datum of 0', () => {
+  const cborWithInlineDatumOfZero = HexBlob(
+    '82825820e023858050f8c136d9426f8adc8f194f08f020f96cd413cfa5806c6df31be8cd197defa400583910e1aa09455c5e1f8084da98c2d4f46f044eca9b69e440546ab8c91bb90af8e74fe63a594094bfaf1de7f540ef173ba6b44172bc54f270d11201821b083c63e600c53ed5a2581c4a1c412d8e2b3015a7fb7d382808fb7cb721bf93a56e8bb6661cdebea241310354a0922852f5e796b32f5fcee0d11011098574ca9802581c60b55c3d28fe9c98bb6010d72bf626f729f50fe18455dd567d30e525a2470bbef5ca07cbe9014d7a8aa8d5fcf68b885dcb1e8a031b4560a942742c916b028201d818410003d81849820082041a00cf3bdf',
+  );
+
+  it('keeps an inline datum of 0 when rebuilt from its core form', () => {
+    const core = TransactionUnspentOutput.fromCbor(
+      cborWithInlineDatumOfZero,
+    ).toCore();
+    const rebuilt = TransactionUnspentOutput.fromCore(core);
+
+    expect(core[1].datum).toEqual(0n);
+    expect(rebuilt.output().toCore().datum).toEqual(0n);
+    expect(rebuilt.toCbor()).toEqual(cborWithInlineDatumOfZero);
+  });
+});

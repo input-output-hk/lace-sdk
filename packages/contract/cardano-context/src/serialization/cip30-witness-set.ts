@@ -1,8 +1,8 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
 import { encodeCborSet } from './cbor-set-encoding';
 
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const VKEY_WITNESSES_KEY = 0n;
 

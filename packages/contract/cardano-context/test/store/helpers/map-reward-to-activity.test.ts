@@ -1,7 +1,7 @@
-import { Cardano, Milliseconds } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { TokenId } from '@lace-contract/tokens';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano, Milliseconds } from '@lace-lib/cardano-core';
 import { BigNumber } from '@lace-lib/util';
 import { describe, it, expect } from 'vitest';
 
@@ -12,7 +12,7 @@ import {
 } from '../../../src/store/helpers';
 
 import type { Reward } from '../../../src';
-import type { EraSummary } from '@cardano-sdk/core';
+import type { EraSummary } from '@lace-lib/cardano-core';
 import type { Timestamp } from '@lace-lib/util';
 
 describe('mapRewardToActivity', () => {

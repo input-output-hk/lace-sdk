@@ -1,16 +1,16 @@
 // copied from @cardano-sdk/cardano-services-client and removed getAssets that won't be used
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
-import { Asset, Cardano } from '@cardano-sdk/core';
-import { isNotNil } from '@cardano-sdk/util';
+import { Asset, Cardano } from '@lace-lib/cardano-core';
+import { isNotNil } from '@lace-lib/cardano-util';
 import { toProviderError } from '@lace-lib/util-provider';
 import omit from 'lodash/omit.js';
 
 import { BlockfrostProvider } from '../blockfrost-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { GetAssetArgs } from '@cardano-sdk/core';
 import type { CardanoTokenMetadata } from '@lace-contract/cardano-context';
+import type { GetAssetArgs } from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
 

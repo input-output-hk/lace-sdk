@@ -12,7 +12,7 @@ import { failCustodyBuild } from './build-failure';
 import { readFromProvider } from './custody-chain';
 
 import type { CustodyChain } from './custody-chain';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountIdentity,
   CustodyAccountRecord,

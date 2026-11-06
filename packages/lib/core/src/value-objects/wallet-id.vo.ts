@@ -1,4 +1,4 @@
-// Wallet identifier — double BLAKE2b-128, via `@cardano-sdk/crypto` through the
+// Wallet identifier: double BLAKE2b-128, via `@lace-lib/cardano-crypto` through the
 // `@lace-lib/vendor` seam (ADR 37). The SDK's `blake2b.hash` hex-decodes its input and
 // hex-encodes the digest; chaining two over a 16-byte digest derives the walletId. Host,
 // guest and migration agree on the id for a given key/mnemonic because they run the same

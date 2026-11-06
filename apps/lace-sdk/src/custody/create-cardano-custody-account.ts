@@ -40,12 +40,12 @@ import type {
   CardanoCustodySponsorLease,
 } from './cardano-custody-sponsor';
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
-import type { Cardano } from '@cardano-sdk/core';
 import type {
   CardanoCustodyDeviceBinding,
   CardanoCustodyWalletEntity,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 
 /** The options of `createCardanoCustodyAccount`. */

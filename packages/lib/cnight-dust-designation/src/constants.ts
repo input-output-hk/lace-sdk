@@ -3,7 +3,7 @@
 // =====================================================================
 // `buildNightDesignationTxBlueprint` computes the script output's
 // min-utxo coin dynamically via `computeMinimumCoinQuantity` from
-// `@cardano-sdk/tx-construction`, using the protocol's
+// `@lace-lib/cardano-tx-builder`, using the protocol's
 // `coinsPerUtxoByte` parameter and the actual output shape (script
 // address + one DUST-mapping NFT + inline DustMappingDatum). That
 // dynamic value is what production txs use, so this constant is

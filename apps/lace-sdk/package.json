@@ -45,7 +45,7 @@
     "dist"
   ],
   "dependencies": {
-    "@laceio/cardano": "0.1.2-canary.0",
+    "@laceio/cardano": "0.2.0-canary.0",
     "@reduxjs/toolkit": "^2.6.1",
     "bignumber.js": "9.0.1",
     "lodash": "^4.17.21",

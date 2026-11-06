@@ -1,7 +1,7 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
-import type { Cardano } from '@cardano-sdk/core';
 import type { WalletId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Tagged } from 'type-fest';
 
 export type ScriptWalletId = Tagged<string, 'ScriptWalletId'> & WalletId;

@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import {
   ACCOUNT_VALIDATOR_COMPILED_CODE,
@@ -16,8 +16,8 @@ import { fail, ok } from './result';
 
 import type { CustodyReferenceScript } from './blueprint';
 import type { CustodyResult } from './result';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * A logic script accounts of a contract version may run: a logic validator

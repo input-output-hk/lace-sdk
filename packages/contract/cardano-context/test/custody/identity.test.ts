@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Ed25519KeyHashHex, Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Ed25519KeyHashHex, Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import { describe, expect, it } from 'vitest';
 
 import { verifyCardanoCustodyAccountIdentity } from '../../src';

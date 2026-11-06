@@ -1,4 +1,4 @@
-import { coalesceValueQuantities } from '@cardano-sdk/core';
+import { coalesceValueQuantities } from '@lace-lib/cardano-core';
 import { BigNumber } from '@lace-lib/util';
 import {
   combineLatest,

@@ -1,9 +1,3 @@
-import {
-  createTxInspector,
-  transactionSummaryInspector,
-  Cardano,
-  type Milliseconds,
-} from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import {
   autoDismissFailureOnSuccess,
@@ -12,6 +6,12 @@ import {
 } from '@lace-contract/failures';
 import { TokenId } from '@lace-contract/tokens';
 import { AccountId } from '@lace-contract/wallet-repo';
+import {
+  createTxInspector,
+  transactionSummaryInspector,
+  Cardano,
+  type Milliseconds,
+} from '@lace-lib/cardano-core';
 import { BigNumber, Err, Ok, Timestamp, type Result } from '@lace-lib/util';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
 import { retryBackoff } from 'backoff-rxjs';

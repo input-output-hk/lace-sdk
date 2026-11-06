@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import { TokenId } from '@lace-contract/tokens';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

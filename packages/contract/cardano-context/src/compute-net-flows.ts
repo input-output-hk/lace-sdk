@@ -1,5 +1,5 @@
-import type { Cardano } from '@cardano-sdk/core';
-import type { TokenTransferValue as SdkTokenTransferValue } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { TokenTransferValue as SdkTokenTransferValue } from '@lace-lib/cardano-core';
 
 export type TokenTransferValue = {
   /** Coins follow SDK tokenTransferInspector sign convention: negative = spending (from entries), positive = receiving (to entries). */

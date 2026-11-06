@@ -1,4 +1,4 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 import { describe, expect, it } from 'vitest';
 
 import { isRetriableError } from '../src/is-retriable-error';

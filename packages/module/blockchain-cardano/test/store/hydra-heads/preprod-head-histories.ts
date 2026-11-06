@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 
 import recorded from './preprod-head-histories.blockfrost.json';

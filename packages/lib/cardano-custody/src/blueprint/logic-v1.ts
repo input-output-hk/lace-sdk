@@ -4,8 +4,8 @@
 // applies it, so runtime code needs neither the blueprint nor a UPLC library.
 // test/blueprint.test.ts ties both constants to the vendored plutus.json.
 
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * Compiled code of logic version 1 (`logic_v1.logic_v1`) applied to the

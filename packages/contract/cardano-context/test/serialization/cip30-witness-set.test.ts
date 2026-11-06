@@ -1,5 +1,8 @@
-import { Serialization, setInConwayEra } from '@cardano-sdk/core';
-import { Ed25519PublicKeyHex, Ed25519SignatureHex } from '@cardano-sdk/crypto';
+import { Serialization, setInConwayEra } from '@lace-lib/cardano-core';
+import {
+  Ed25519PublicKeyHex,
+  Ed25519SignatureHex,
+} from '@lace-lib/cardano-crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -7,7 +10,7 @@ import {
   countTransactionSignatures,
 } from '../../src/serialization/cip30-witness-set';
 
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const SET_TAG = 'd90102';
 

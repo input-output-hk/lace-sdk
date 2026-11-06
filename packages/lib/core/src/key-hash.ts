@@ -1,6 +1,6 @@
 /**
  * BLAKE2b-224 hash of an Ed25519 public key — the Cardano credential / key-hash form
- * (payment / stake / DRep key hashes), via `@cardano-sdk/crypto`'s
+ * (payment / stake / DRep key hashes), via `@lace-lib/cardano-crypto`'s
  * `Ed25519PublicKey.hash()` through the `@lace-lib/vendor` seam (ADR 37). The Tagged
  * `Ed25519KeyHashHex` return lets callers consume it without re-wrapping (ADR 13).
  */

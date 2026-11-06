@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import {
   classifyCustodyAddress,
   CURRENT_CUSTODY_CONTRACT_VERSION,
@@ -6,8 +6,8 @@ import {
   SUPPORTED_CUSTODY_CONTRACT_VERSIONS,
 } from '@lace-lib/cardano-custody';
 
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
 import type { CardanoCustodyGrantScopeRequest } from '@lace-contract/cardano-context';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /**
  * The account validator hash of every custody contract version this SDK

@@ -29,7 +29,7 @@ import type {
 } from '../codecs/account-state';
 import type { CustodyResult } from '../result';
 import type { CustodyGrantViolation } from './rules';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export type CustodyStateTransitionError =
   | {

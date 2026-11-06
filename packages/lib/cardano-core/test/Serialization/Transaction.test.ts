@@ -19,6 +19,13 @@ const CLI_TX =
 const TX_SET_ENTROPY_TO_EMPTY =
   '83a50081825820bf30608a974d09c56dd62ca10199ec11746ea2d90dbd83649d4f37c629b1ba840001818258390117d237fb8f952c995cd28f73c555adc2307322d819b7f565196ce754348144bff68f23c1386b85dea0f8425ca574b1a11e188ffaba67537c1a0048f96f021a000351d1031a019732f30682a7581c162f94554ac8c225383a2248c245659eda870eaa82d0ef25fc7dcd82a10d8100581c2075a095b3c844a29c24317a94a643ab8e22d54a3a3a72a420260af6a10d8100581c268cfc0b89e910ead22e0ade91493d8212f53f3e2164b2e4bef0819ba10d8100581c60baee25cbc90047e83fd01e1e57dc0b06d3d0cb150d0ab40bbfead1a10d8100581cad5463153dc3d24b9ff133e46136028bdc1edbb897f5a7cf1b37950ca10d8100581cb9547b8a57656539a8d9bc42c008e38d9c8bd9c8adbb1e73ad529497a10d8100581cf7b341c14cd58fca4195a9b278cce1ef402dc0e06deb77e543cd1757a10d8100190103a1008882582061261a95b7613ee6bf2067dad77b70349729b0c50d57bc1cf30de0db4a1e73a858407d72721e7504e12d50204f7d9e9d9fe60d9c6a4fd18ad629604729df4f7f3867199b62885623fab68a02863e7877955ca4a56c867157a559722b7b350b668a0b8258209180d818e69cd997e34663c418a648c076f2e19cd4194e486e159d8580bc6cda5840af668e57c98f0c3d9b47c66eb9271213c39b4ea1b4d543b0892f03985edcef4216d1f98f7b731eedc260a2154124b5cab015bfeaf694d58966d124ad2ff60f0382582089c29f8c4af27b7accbe589747820134ebbaa1caf3ce949270a3d0c7dcfd541b58401ad69342385ba6c3bef937a79456d7280c0d539128072db15db120b1579c46ba95d18c1fa073d7dbffb4d975b1e02ebb7372936940cff0a96fce950616d2f504825820f14f712dc600d793052d4842d50cefa4e65884ea6cf83707079eb8ce302efc855840638f7410929e7eab565b1451effdfbeea2a8839f7cfcc4c4483c4931d489547a2e94b73e4b15f8494de7f42ea31e573c459a9a7e5269af17b0978e70567de80e8258208b53207629f9a30e4b2015044f337c01735abe67243c19470c9dae8c7b73279858400c4ed03254c33a19256b7a3859079a9b75215cad83871a9b74eb51d8bcab52911c37ea5c43bdd212d006d1e6670220ff1d03714addf94f490e482edacbb08f068258205fddeedade2714d6db2f9e1104743d2d8d818ecddc306e176108db14caadd4415840bf48f5dd577b5cb920bfe60e13c8b1b889366c23e2f2e28d51814ed23def3a0ff4a1964f806829d40180d83b5230728409c1f18ddb5a61c44e614b823bd43f01825820cbc6b506e94fbefe442eecee376f3b3ebaf89415ef5cd2efb666e06ddae48393584089bff8f81a20b22f2c3f8a2288b15f1798b51f3363e0437a46c0a2e4e283b7c1018eba0b2b192d6d522ac8df2f2e95b4c8941b387cda89857ab0ae77db14780c825820e8c03a03c0b2ddbea4195caf39f41e669f7d251ecf221fbb2f275c0a5d7e05d158402643ac53dd4da4f6e80fb192b2bf7d1dd9a333bbacea8f07531ba450dd8fb93e481589d370a6ef33a97e03b2f5816e4b2c6a8abf606a859108ba6f416e530d07f6';
 
+/**
+ * Transaction with required guards and a require guard native script, constructed and validated
+ * against cardano-ledger 9b81d9943ce79b8531e9d8e2c5f9adcb158677cb dijkstra.cddl.
+ */
+const REQUIRE_GUARD_TX =
+  '83a400d90102818258200f3abbc8fc19c2e61bab6059bf8a466e6e754833a08a62a6c56fe0e78f19d9d5000180020a0e828201581caabbccddeeff00112233445566778899aabbccddeeff0011223344558201581cbaf8f17908592241efd1f36ec3a12fd5e8dc907c83da9d9400210aeea101d901028182068201581caabbccddeeff00112233445566778899aabbccddeeff001122334455f6';
+
 describe('Transaction', () => {
   afterEach(() => setInConwayEra(true));
 
@@ -229,6 +236,191 @@ describe('Transaction', () => {
       expect(reparsed.isValid()).toEqual(true);
       expect(reparsed.toCore().isValid).toEqual(true);
     });
+
+    it.each([
+      ['a transaction that sets entropy to empty', TX_SET_ENTROPY_TO_EMPTY],
+      [
+        'a transaction with guards and a require guard script',
+        REQUIRE_GUARD_TX,
+      ],
+      ['a minimal transaction', withoutFlagVector.hex],
+    ])('keeps the 3-element frame when %s is edited', (_, hex) => {
+      const tx = Transaction.fromCbor(TxCBOR(hex));
+
+      tx.setWitnessSet(tx.witnessSet());
+
+      expect(tx.isValid()).toEqual(true);
+      expect(tx.toCbor().slice(0, 2)).toEqual('83');
+      expect(tx.toCbor()).toEqual(hex);
+    });
+
+    it.each([
+      ['a Babbage transaction', TX],
+      ['a minimal transaction with is_valid true', graceVector.hex],
+    ])('keeps the 4-element frame when %s is edited', (_, hex) => {
+      const tx = Transaction.fromCbor(TxCBOR(hex));
+
+      tx.setWitnessSet(tx.witnessSet());
+
+      expect(tx.toCbor().slice(0, 2)).toEqual('84');
+      expect(tx.toCbor()).toEqual(hex);
+    });
+
+    it('keeps the 4-element frame and the false flag when a decoded transaction is edited', () => {
+      const falseFlagHex = graceVector.hex.replace('a0f5f6', 'a0f4f6');
+      const tx = Transaction.fromCbor(TxCBOR(falseFlagHex));
+
+      tx.setWitnessSet(tx.witnessSet());
+
+      expect(tx.toCbor().slice(0, 2)).toEqual('84');
+      expect(tx.toCbor()).toEqual(falseFlagHex);
+      expect(Transaction.fromCbor(tx.toCbor()).isValid()).toEqual(false);
+    });
+
+    it('writes the 4-element frame with is_valid false when rebuilt from a core form', () => {
+      const core = Transaction.fromCbor(TxCBOR(withoutFlagVector.hex)).toCore();
+      const tx = Transaction.fromCore({ ...core, isValid: false });
+
+      expect(tx.isValid()).toEqual(false);
+      expect(tx.toCbor()).toEqual(graceVector.hex.replace('a0f5f6', 'a0f4f6'));
+    });
+
+    it('writes the 4-element frame for a 3-element transaction rebuilt from its core form', () => {
+      const tx = Transaction.fromCbor(TxCBOR(withoutFlagVector.hex));
+
+      expect(Transaction.fromCore(tx.toCore()).toCbor()).toEqual(
+        graceVector.hex,
+      );
+    });
+  });
+
+  describe('block frame (Dijkstra)', () => {
+    const blockVector = (name: string) =>
+      vectorsForRule('block_transaction').find(v => v.name === name)!;
+    const valid = blockVector('valid');
+    const invalid = blockVector('phase-2-invalid');
+    const indefinite = blockVector('indefinite-length');
+    const payment = blockVector('musashi-payment');
+    const batch = blockVector('musashi-sub-transactions');
+    const metadata = blockVector('musashi-metadata');
+    const minimal = vectorsForRule('transaction').find(
+      v => v.name === 'minimal-without-is-valid',
+    )!;
+
+    it.each([
+      { flag: true, vector: valid },
+      { flag: false, vector: invalid },
+      { flag: true, vector: indefinite },
+      { flag: true, vector: payment },
+      { flag: true, vector: batch },
+      { flag: true, vector: metadata },
+    ])(
+      'reads $vector.name with the flag after the auxiliary data',
+      ({ vector, flag }) => {
+        const tx = Transaction.fromCbor(TxCBOR(vector.hex));
+
+        expect(tx.isValid()).toEqual(flag);
+        expect(tx.toCore().isValid).toEqual(flag);
+        expect(tx.toCbor()).toEqual(vector.hex);
+      },
+    );
+
+    it('identifies a block transaction by its body, as the submitted one', () => {
+      expect(Transaction.fromCbor(TxCBOR(valid.hex)).getId()).toEqual(
+        Transaction.fromCbor(TxCBOR(minimal.hex)).getId(),
+      );
+      expect(Transaction.fromCbor(TxCBOR(payment.hex)).getId()).toEqual(
+        '0422da720f9902c5d5278d201a4c2948f0044de149b34dd08ad070092d74906c',
+      );
+      expect(Transaction.fromCbor(TxCBOR(metadata.hex)).getId()).toEqual(
+        'ed395d2dcbce33b53d9838359b1df364bc7d72a31f64478c3af2133ad4fbf5ce',
+      );
+    });
+
+    it('reads the auxiliary data of a block transaction', () => {
+      const tx = Transaction.fromCbor(TxCBOR(metadata.hex));
+
+      expect(tx.auxiliaryData()?.metadata()?.metadata()?.has(674n)).toEqual(
+        true,
+      );
+    });
+
+    it('reads the sub transactions of a block transaction', () => {
+      const tx = Transaction.fromCbor(TxCBOR(batch.hex));
+
+      expect(tx.body().subTransactions()?.size()).toBeGreaterThan(0);
+    });
+
+    it.each([
+      { flag: false, vector: invalid },
+      { flag: true, vector: metadata },
+    ])(
+      'keeps the flag after the auxiliary data when $vector.name is edited',
+      ({ vector, flag }) => {
+        const tx = Transaction.fromCbor(TxCBOR(vector.hex));
+
+        tx.setWitnessSet(tx.witnessSet());
+
+        expect(tx.toCbor()).toEqual(vector.hex);
+        expect(Transaction.fromCbor(tx.toCbor()).isValid()).toEqual(flag);
+      },
+    );
+
+    it('writes an edited indefinite-length block transaction as a definite-length array', () => {
+      const tx = Transaction.fromCbor(TxCBOR(indefinite.hex));
+
+      tx.setWitnessSet(tx.witnessSet());
+
+      expect(tx.toCbor()).toEqual(valid.hex);
+    });
+
+    it.each([
+      {
+        flag: false,
+        hex: '9fa300d901028001800200a0f4f6ff',
+        written: '84a300d901028001800200a0f4f6',
+      },
+      {
+        flag: true,
+        hex: '9fa300d901028001800200a0f6ff',
+        written: '83a300d901028001800200a0f6',
+      },
+    ])(
+      'writes the edited indefinite-length frame $hex in the layout it was read in',
+      ({ flag, hex, written }) => {
+        const tx = Transaction.fromCbor(TxCBOR(hex));
+
+        tx.setWitnessSet(tx.witnessSet());
+
+        expect(tx.isValid()).toEqual(flag);
+        expect(tx.toCbor()).toEqual(written);
+      },
+    );
+
+    it('writes a block transaction rebuilt from its core form with the flag before the auxiliary data', () => {
+      const core = Transaction.fromCbor(TxCBOR(invalid.hex)).toCore();
+
+      expect(Transaction.fromCore(core).toCbor()).toEqual(
+        invalid.hex.replace('a0f6f4', 'a0f4f6'),
+      );
+    });
+
+    it.each([
+      ['the flag is missing', '84a300d901028001800200a0f6'],
+      ['the fourth element is not a boolean', '84a300d901028001800200a0f6f6'],
+      [
+        'an indefinite-length frame ends with a null',
+        '9fa300d901028001800200a0f6f6ff',
+      ],
+      [
+        'an indefinite-length frame has an element after the flag',
+        '9fa300d901028001800200a0f6f5f5ff',
+      ],
+      ['the frame has five elements', '85a300d901028001800200a0f5f6f5'],
+      ['the frame has two elements', '82a300d901028001800200a0'],
+    ])('rejects a block transaction where %s', (_, hex) => {
+      expect(() => Transaction.fromCbor(TxCBOR(hex))).toThrow();
+    });
   });
 
   it('can roundtrip tx with ttl 0 and no outputs (pre-Conway pin: legacy untagged vector)', () => {
@@ -243,10 +435,10 @@ describe('Transaction', () => {
 });
 
 describe('Transaction strict deserialization', () => {
-  // [{0: [], 1: [], 2: 0, 27: [1, 2]}, {}, true, null] - body has unknown key 27
-  const txWithUnknownBodyKey = '84a4008001800200181b820102a0f5f6';
-  // [{0: [], 1: [], 2: 0}, {0: [], 8: [1, 2]}, true, null] - witness set has unknown key 8
-  const txWithUnknownWitnessSetKey = '84a3008001800200a2008008820102f5f6';
+  // [{0: [], 1: [], 2: 0, 28: [1, 2]}, {}, true, null] - body has unknown key 28
+  const txWithUnknownBodyKey = '84a4008001800200181c820102a0f5f6';
+  // [{0: [], 1: [], 2: 0}, {0: [], 9: [1, 2]}, true, null] - witness set has unknown key 9
+  const txWithUnknownWitnessSetKey = '84a3008001800200a2008009820102f5f6';
 
   it('deserializes transactions with unknown body keys by default', () => {
     const tx = Transaction.fromCbor(TxCBOR(txWithUnknownBodyKey));
@@ -257,7 +449,7 @@ describe('Transaction strict deserialization', () => {
   it('throws on unknown body keys when strict', () => {
     expect(() =>
       Transaction.fromCbor(TxCBOR(txWithUnknownBodyKey), { strict: true }),
-    ).toThrow('Unknown transaction body map key: 27');
+    ).toThrow('Unknown transaction body map key: 28');
   });
 
   it('throws on unknown witness set keys when strict', () => {
@@ -265,6 +457,83 @@ describe('Transaction strict deserialization', () => {
       Transaction.fromCbor(TxCBOR(txWithUnknownWitnessSetKey), {
         strict: true,
       }),
-    ).toThrow('Unknown transaction witness set map key: 8');
+    ).toThrow('Unknown transaction witness set map key: 9');
   });
+});
+
+describe('Transaction repeated map keys', () => {
+  const output =
+    'a300583900537ba48a023f0a3c65e54977ffc2d78c143fb418ef6db058e006d78a7c16240714ea0e12b41a914f2945784ac494bb19573f0ca61a08afa8010a0114';
+  const proposalPrefix =
+    '841a000f4240581de1cb0ec2692497b458e46812c8a5bfa2931d1a2d965a99893828ec810f';
+  const anchor =
+    '827668747470733a2f2f7777772e736f6d6575726c2e696f58200000000000000000000000000000000000000000000000000000000000000000';
+
+  it.each([
+    [
+      'a repeated body key',
+      '84a40080018002000200a0f5f6',
+      'Duplicate transaction body map key: 2',
+    ],
+    [
+      'a repeated witness set key',
+      '84a3008001800200a200800080f5f6',
+      'Duplicate transaction witness set map key: 0',
+    ],
+    [
+      'a repeated output key',
+      `84a300800181${output}0200a0f5f6`,
+      'Duplicate transaction output map key: 1',
+    ],
+    [
+      'a repeated key in a protocol parameter update proposal',
+      `84a40080018002000682a1581c${'00'.repeat(28)}a20000000001a0f5f6`,
+      'Duplicate protocol parameter update map key: 0',
+    ],
+    [
+      'a repeated key in a parameter change action',
+      `84a40080018002001481${proposalPrefix}8400f6a200000000f6${anchor}a0f5f6`,
+      'Duplicate protocol parameter update map key: 0',
+    ],
+  ])('rejects %s', (_, hex, error) => {
+    expect(() => Transaction.fromCbor(TxCBOR(hex))).toThrow(error);
+  });
+
+  it('accepts a hard fork minor protocol version beyond 32 bits by default and rejects it when strict', () => {
+    const cbor = TxCBOR(
+      `84a40080018002001481${proposalPrefix}8301f6820c1b0000000100000000${anchor}a0f5f6`,
+    );
+
+    expect(Transaction.fromCbor(cbor).toCbor()).toEqual(cbor);
+    expect(() => Transaction.fromCbor(cbor, { strict: true })).toThrow(
+      'Minor protocol version must be a uint of size 4',
+    );
+  });
+
+  const unknownKeyProposal = `${proposalPrefix}8400f6a1183900f6${anchor}`;
+
+  it.each([
+    [
+      'a protocol parameter update proposal',
+      `84a40080018002000682a1581c${'00'.repeat(28)}a118390000a0f5f6`,
+    ],
+    [
+      'a parameter change action',
+      `84a40080018002001481${unknownKeyProposal}a0f5f6`,
+    ],
+    [
+      'a parameter change action inside a sub transaction',
+      `84a4008001800200178183a3008001801481${unknownKeyProposal}a0f6a0f5f6`,
+    ],
+  ])(
+    'accepts an unknown protocol parameter update key in %s by default and rejects it when strict',
+    (_, hex) => {
+      const cbor = TxCBOR(hex);
+
+      expect(Transaction.fromCbor(cbor).toCbor()).toEqual(cbor);
+      expect(() => Transaction.fromCbor(cbor, { strict: true })).toThrow(
+        'Unknown protocol parameter update map key: 57',
+      );
+    },
+  );
 });

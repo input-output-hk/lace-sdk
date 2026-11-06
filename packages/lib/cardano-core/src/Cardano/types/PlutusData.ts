@@ -18,6 +18,11 @@ export type PlutusList = {
   items: PlutusData[];
 };
 
+/**
+ * In decoded Plutus data, every entry of a repeated key in `data` takes the value of the first
+ * entry, and integer keys collapse into one entry. Only `data` loses entries: `cbor`
+ * keeps the exact decoded bytes and PlutusData.fromCore uses it.
+ */
 export type PlutusMap = {
   /** This may be set when deserializing a datum. Useful for round-trip reserialization. */
   cbor?: HexBlob;

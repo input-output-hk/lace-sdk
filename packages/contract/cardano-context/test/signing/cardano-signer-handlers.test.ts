@@ -1,9 +1,9 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   deriveCustodyDeviceKey,
   verifyCustodyDataSignature,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -51,7 +51,7 @@ import {
   words,
 } from './sign-with-words.fixtures';
 
-import type { HexBlob as HexBlobType } from '@cardano-sdk/util';
+import type { HexBlob as HexBlobType } from '@lace-lib/cardano-util';
 
 const accountPayload = {
   knownAddresses,

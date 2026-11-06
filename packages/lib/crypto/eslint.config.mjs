@@ -35,6 +35,8 @@ export default defineConfig(
                 '@lace-lib/vendor/*',
                 '@cardano-sdk',
                 '@cardano-sdk/*',
+                '@lace-lib/cardano-*',
+                '@lace-lib/cardano-*/*',
               ],
               message:
                 'The passkey and crypto libs must stay free of the Cardano SDK dependency closure so a hosted signer page can bundle them on their own.',

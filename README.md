@@ -42,7 +42,8 @@ the commit its release tag points at:
 - **Builds are reproducible**: the same source produces the same bytes, so a
   release can be rebuilt from this repository and compared.
 - **Every release is checked before it publishes**: a release that breaks an
-  export without the required version bump and prior deprecation stops.
+  export without the required version bump, or from 1.0 without a prior
+  deprecation, stops.
   [Releases and compatibility](https://sdk.lace.io/docs/releases/) describes
   the guarantees in full.
 

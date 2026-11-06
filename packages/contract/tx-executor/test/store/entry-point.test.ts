@@ -1,4 +1,4 @@
-import { createTestScheduler } from '@cardano-sdk/util-dev';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeEntryPoint } from '../../src/store/entry-point';

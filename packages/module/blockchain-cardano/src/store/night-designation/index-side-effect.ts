@@ -39,10 +39,10 @@ import { resolveAccountKeyHashes } from './account-key-hashes';
 import { findRegistrationUtxo } from './registration-utxo';
 
 import type { SideEffect } from '../../sdk-contracts';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type { SideEffectDependencies } from '@lace-contract/module';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 
 // =====================================================================

@@ -1,19 +1,17 @@
 import {
-  Cardano,
-  ProviderError,
-  ProviderFailure,
-  Serialization,
-} from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
-import { mockProviders } from '@cardano-sdk/util-dev';
-import {
   CardanoAccountId,
   CardanoCustodyWalletId,
   cardanoCustodyActions,
   classifyCardanoCustodyAccount,
 } from '@lace-contract/cardano-context';
 import { BlockchainNetworkId } from '@lace-contract/network';
+import {
+  Cardano,
+  ProviderError,
+  ProviderFailure,
+  Serialization,
+} from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
 import {
   CURRENT_CUSTODY_CONTRACT_VERSION,
   CUSTODY_DEVICE_KEY_PATH,
@@ -23,6 +21,8 @@ import {
   encodeCustodyAccountState,
   encodeCustodyGrant,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
+import { mockProviders } from '@lace-lib/cardano-util-dev';
 import { BigNumber, Err, Ok } from '@lace-lib/util';
 import { Serializable } from '@lace-lib/util-store';
 import { firstValueFrom, of } from 'rxjs';
@@ -31,7 +31,6 @@ import { vi } from 'vitest';
 
 import { makeCustodyTransactionBuilding } from '../../../src/store/custody/build-side-effect';
 
-import type { EraSummary } from '@cardano-sdk/core';
 import type {
   CardanoCustodyAccount,
   CardanoCustodyBuildError,
@@ -42,6 +41,7 @@ import type {
   RedeemerExecutionUnits,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { EraSummary } from '@lace-lib/cardano-core';
 import type {
   CustodyAccountIdentity,
   CustodyAccountState,
@@ -153,6 +153,18 @@ export const parkedScriptUtxos: Cardano.Utxo[] = (
         : currentLogic.script,
   },
 ]);
+
+/**
+ * Orders inputs as a built transaction lists them, the ledger's set order:
+ * by transaction id, then by index.
+ */
+export const compareInputs = (a: Cardano.TxIn, b: Cardano.TxIn): number =>
+  a.txId === b.txId ? a.index - b.index : a.txId < b.txId ? -1 : 1;
+
+/** The parked proxy and logic UTxOs in the order a transaction references them. */
+export const referencedScriptUtxos: Cardano.Utxo[] = [
+  ...parkedScriptUtxos,
+].sort(([a], [b]) => compareInputs(a, b));
 
 /** The `Run` redeemer of a logic withdrawal, as CBOR. */
 export const RUN_REDEEMER_CBOR = 'd87980';

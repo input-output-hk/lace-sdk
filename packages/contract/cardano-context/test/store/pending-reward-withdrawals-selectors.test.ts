@@ -1,9 +1,9 @@
 // The pending-withdrawal selectors (LW-15725) read activities as they come
 // back from persistence: encoded by Serializable, through JSON, decoded by
 // the activities selectors. Quantities must survive exactly.
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber, Timestamp } from '@lace-lib/util';
 import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';

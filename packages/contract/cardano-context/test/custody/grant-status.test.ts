@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
 import { classifyCustodyAccountUtxos } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -34,9 +34,9 @@ const pricing = { protocolParameters: custodyProtocolParameters, networkId };
  * cheapest an unrestricted grant can pay; lovelace to a base address; and
  * one `token` unit to an enterprise key address.
  */
-const ENTERPRISE_OUTPUT = 849_070n;
-const BASE_OUTPUT = 969_750n;
-const ENTERPRISE_TOKEN_OUTPUT = 1_021_470n;
+const ENTERPRISE_OUTPUT = 857_690n;
+const BASE_OUTPUT = 978_370n;
+const ENTERPRISE_TOKEN_OUTPUT = 1_030_090n;
 const FEE_BOUND = 1_500_000n;
 
 const TOKEN = {

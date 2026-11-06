@@ -1,4 +1,4 @@
-import { toEmpty } from '@cardano-sdk/util-rxjs';
+import { toEmpty } from '@lace-lib/cardano-util-rxjs';
 import { firstStateOfStatus } from '@lace-lib/util-store';
 import {
   filter,

@@ -2,12 +2,12 @@ import { BitcoinNetwork } from '@lace-contract/bitcoin-context';
 import { networkSelectors } from '@lace-contract/network';
 import { createAction, createSelector, createSlice } from '@reduxjs/toolkit';
 
-import type { ProviderFailure } from '@cardano-sdk/core';
 import type {
   BitcoinBlockInfo,
   BitcoinNetworkId,
 } from '@lace-contract/bitcoin-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { ProviderFailure } from '@lace-lib/cardano-core';
 import type { PayloadAction } from '@reduxjs/toolkit';
 
 export type BitcoinHistoryFetchError = {

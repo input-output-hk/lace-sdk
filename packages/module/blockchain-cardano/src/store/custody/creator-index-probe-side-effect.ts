@@ -7,7 +7,6 @@ import { readCustodyCreatorIndex } from './custody-creator-index';
 
 import type { CustodyCreatorIndexState } from './custody-creator-index';
 import type { CustodySideEffect } from '../../custody-contracts';
-import type { Cardano } from '@cardano-sdk/core';
 import type {
   CardanoCustodyBuildError,
   CardanoCustodyCreatorIndexProbeError,
@@ -15,6 +14,7 @@ import type {
   CardanoCustodyCreatorIndexProbeResult,
   CardanoProvider,
 } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Logger } from 'ts-log';
 
 // =====================================================================

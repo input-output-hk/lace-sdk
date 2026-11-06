@@ -5,8 +5,8 @@
 // test/blueprint.test.ts ties them to the vendored preprod.json and to the
 // vendored scripts.
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /**
  * A UTxO the contract's network setup created to hold one contract script as

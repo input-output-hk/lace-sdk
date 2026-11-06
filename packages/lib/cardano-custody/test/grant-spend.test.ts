@@ -6,9 +6,9 @@
 // each refused case names the violation it expects, and validity bounds are
 // slots read through an injected converter.
 
-import { Cardano } from '@cardano-sdk/core';
-import { Hash32ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -38,7 +38,7 @@ import type {
   CustodyScope,
   CustodyValueDelta,
 } from '../src';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 interface CustodyGrantSpendContext {
   readonly inputs: readonly Cardano.TxOut[];

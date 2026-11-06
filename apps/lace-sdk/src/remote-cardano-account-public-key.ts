@@ -1,4 +1,4 @@
-import { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
+import { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 import { RemoteSignerResultError } from './cardano-remote-signer-factory';
 

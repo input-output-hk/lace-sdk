@@ -1,4 +1,4 @@
-import * as Crypto from '@cardano-sdk/crypto';
+import * as Crypto from '@lace-lib/cardano-crypto';
 
 import { fail, ok } from './result';
 

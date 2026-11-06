@@ -1,11 +1,11 @@
-import { Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Serialization } from '@lace-lib/cardano-core';
 import {
   classifyCustodyAccountUtxos,
   CUSTODY_MAX_GRANTS,
   deriveCustodyDeviceKey,
   parseCustodyAccountRecord,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import {
   isRecord,
@@ -14,8 +14,11 @@ import {
   parseExtendedAccountPublicKey,
 } from './request-parsing';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@cardano-sdk/crypto';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519KeyHashHex,
+} from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountIdentity,
   CustodyGrantUtxo,

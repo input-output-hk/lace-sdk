@@ -1,10 +1,9 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import {
   Ed25519KeyHashHex,
   Hash28ByteBase16,
   Hash32ByteBase16,
-} from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+} from '@lace-lib/cardano-crypto';
 import {
   CURRENT_CUSTODY_CONTRACT_VERSION,
   CUSTODY_MAX_GRANT_BATCH,
@@ -12,6 +11,7 @@ import {
   custodyGrantAssetId,
   encodeCustodyAccountState,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {

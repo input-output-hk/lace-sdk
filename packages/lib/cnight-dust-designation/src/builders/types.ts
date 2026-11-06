@@ -2,8 +2,8 @@ import type { CardanoPaymentKeyHash } from '../value-objects/cardano-payment-key
 import type { CardanoStakeKeyHash } from '../value-objects/cardano-stake-key-hash.vo';
 import type { MidnightCoinPubkey } from '../value-objects/midnight-coin-pubkey.vo';
 import type { CardanoDustNetwork } from '../value-objects/network-id.vo';
-import type { Cardano } from '@cardano-sdk/core';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 // =====================================================================
 // Builder input + output shapes.

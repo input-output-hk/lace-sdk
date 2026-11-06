@@ -3,6 +3,7 @@ import {
   genericErrorResults,
   type TxExecutorImplementation,
 } from '@lace-contract/tx-executor';
+import { Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { combineLatest, mergeMap, map, of, take } from 'rxjs';
 
@@ -25,7 +26,10 @@ export const makeSubmitTx =
           );
         }
         return dependencies.cardanoProvider
-          .submitTx({ signedTransaction: props.serializedTx }, { chainId })
+          .submitTx(
+            { signedTransaction: Serialization.TxCBOR(props.serializedTx) },
+            { chainId },
+          )
           .pipe(
             mergeMap(result => {
               if (!result.isOk()) {

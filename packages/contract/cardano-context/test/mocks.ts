@@ -1,7 +1,7 @@
-import { Cardano } from '@cardano-sdk/core';
 import { BlockchainNetworkId } from '@lace-contract/network';
 import { TokenId } from '@lace-contract/tokens';
 import { AccountId, WalletId, WalletType } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber, HexBytes, Timestamp } from '@lace-lib/util';
 
 import {
@@ -14,7 +14,6 @@ import type {
   CardanoBip32AccountProps,
   CardanoTransactionHistoryItem,
 } from '../src';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import type { Address, AnyAddress } from '@lace-contract/addresses';
 import type { RawToken, TokenContextData } from '@lace-contract/tokens';
 import type {
@@ -23,6 +22,7 @@ import type {
   InMemoryWallet,
   InMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 export const midnightAccount: InMemoryWalletAccount = {
   accountId: AccountId('mn1'),

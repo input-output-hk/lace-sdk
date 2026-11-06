@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { firstValueFrom, from, of, throwError } from 'rxjs';
 
 import { CardanoInMemoryDataSigner } from './cardano-in-memory-data-signer';
@@ -15,9 +15,9 @@ import type {
   CardanoSignRequest,
   CardanoSignResult,
 } from './types';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { SignerAuth } from '@lace-contract/signer';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 /** The words derive a different account key than the one being signed for. */
 export class AccountKeyMismatchError extends Error {

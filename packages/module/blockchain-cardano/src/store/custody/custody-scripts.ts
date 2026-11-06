@@ -1,5 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import { CardanoRewardAccount } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   custodyReferenceScriptUtxos,
   encodeCustodyLogicRedeemer,

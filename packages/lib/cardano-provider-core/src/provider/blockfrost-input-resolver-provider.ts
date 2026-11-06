@@ -7,7 +7,7 @@ import { BlockfrostProvider } from '../blockfrost-provider';
 import { BlockfrostToCardanoSDK } from '../blockfrost-to-cardano-sdk';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
 
@@ -30,6 +30,8 @@ export class BlockfrostInputResolverProvider
 
   /**
    * Resolves a transaction input (`Cardano.TxIn`) to its corresponding output (`Cardano.TxOut`).
+   * The output carries no reference script, as Blockfrost lists only its hash,
+   * so it cannot price or run a reference script on its own.
    *
    * @param input - The transaction input to resolve, including its transaction ID and index.
    * @returns A promise that resolves to the corresponding `Cardano.TxOut` if found, or `null` if not.
@@ -46,20 +48,24 @@ export class BlockfrostInputResolverProvider
   }
 
   /**
-   * Fetches and caches the transaction output (`Cardano.TxOut`) for a given transaction input (`Cardano.TxIn`).
+   * Fetches the outputs of a transaction, keyed by output index, so that every
+   * input spending one of them resolves from a single request. The outputs
+   * carry no reference script, as Blockfrost lists only its hash.
    *
-   * @param txIn - The transaction input to fetch and cache the output for.
-   * @returns A promise that resolves to the corresponding `Cardano.TxOut` if found, or `null` if not.
+   * @param txId - The id of the transaction whose outputs are fetched.
+   * @returns A promise that resolves to the outputs, or `null` if the transaction is not found.
    */
-  private async fetchTxOut(txIn: Cardano.TxIn): Promise<Cardano.TxOut | null> {
+  public async resolveTransactionOutputs(
+    txId: Cardano.TransactionId,
+  ): Promise<Map<number, Cardano.TxOut> | null> {
     let response;
 
     try {
       response = await this.request<Responses['tx_content_utxo']>(
-        `txs/${txIn.txId}/utxos`,
+        `txs/${txId}/utxos`,
       );
     } catch (error: unknown) {
-      this.logger.error(`Failed to fetch transaction ${txIn.txId}`, error);
+      this.logger.error(`Failed to fetch transaction ${txId}`, error);
 
       if (isNotFoundError(error)) {
         return null;
@@ -68,20 +74,33 @@ export class BlockfrostInputResolverProvider
       throw error;
     }
 
-    for (const blockfrostUTxO of response.outputs) {
-      if (blockfrostUTxO.output_index !== txIn.index) {
-        continue;
-      }
+    return new Map(
+      response.outputs.map(blockfrostUTxO => [
+        blockfrostUTxO.output_index,
+        BlockfrostToCardanoSDK.txOut(blockfrostUTxO),
+      ]),
+    );
+  }
 
-      const coreTxOut = BlockfrostToCardanoSDK.txOut(blockfrostUTxO);
+  /**
+   * Fetches the transaction output (`Cardano.TxOut`) for a given transaction input (`Cardano.TxIn`).
+   *
+   * @param txIn - The transaction input to fetch the output for.
+   * @returns A promise that resolves to the corresponding `Cardano.TxOut` if found, or `null` if not.
+   */
+  private async fetchTxOut(txIn: Cardano.TxIn): Promise<Cardano.TxOut | null> {
+    const outputs = await this.resolveTransactionOutputs(txIn.txId);
+    if (!outputs) return null;
 
-      this.logger.debug(
-        `Resolved input ${txIn.txId}#${txIn.index} from Blockfrost`,
-      );
-      return coreTxOut;
+    const coreTxOut = outputs.get(txIn.index);
+    if (!coreTxOut) {
+      this.logger.error(`Failed to resolve input ${txIn.txId}#${txIn.index}`);
+      return null;
     }
 
-    this.logger.error(`Failed to resolve input ${txIn.txId}#${txIn.index}`);
-    return null;
+    this.logger.debug(
+      `Resolved input ${txIn.txId}#${txIn.index} from Blockfrost`,
+    );
+    return coreTxOut;
   }
 }

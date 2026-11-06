@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { docCommentProblems, readExportDocs } from '../scripts/doc-comments';
 
-import type { ExportDoc } from '../scripts/doc-comments';
+import type { ExportDoc, ReadExportDocsProps } from '../scripts/doc-comments';
 
 const OPTIONS: ts.CompilerOptions = {
   module: ts.ModuleKind.ESNext,
@@ -18,7 +18,10 @@ const OPTIONS: ts.CompilerOptions = {
 };
 
 /** Writes `files` under a fresh directory whose `workspace/` is the workspace root. */
-const fixture = (files: Record<string, string>) => {
+const fixture = (
+  files: Record<string, string>,
+  isPublishedElsewhere?: ReadExportDocsProps['isPublishedElsewhere'],
+) => {
   const directory = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), 'doc-comments-')),
   );
@@ -33,6 +36,7 @@ const fixture = (files: Record<string, string>) => {
       entries: entries.map(entry => path.join(workspaceRoot, entry)),
       options: OPTIONS,
       workspaceRoot,
+      isPublishedElsewhere,
     });
 };
 
@@ -101,6 +105,25 @@ export { installed } from 'third-party';
       { entry: 'sdk/index.ts', name: 'outside', status: 'third-party' },
       { entry: 'sdk/index.ts', name: 'installed', status: 'third-party' },
     ]);
+  });
+
+  it('exempts workspace declarations another published package documents', () => {
+    const read = fixture(
+      {
+        'workspace/domain/index.ts': `export const published = 1;`,
+        'workspace/lib/index.ts': `export const bundled = 2;`,
+        'workspace/sdk/index.ts': `
+export { published } from '../domain';
+export { bundled } from '../lib';
+`,
+      },
+      file => file.includes(`${path.sep}domain${path.sep}`),
+    );
+
+    expect(statuses(read('sdk/index.ts'))).toEqual({
+      bundled: 'undocumented',
+      published: 'third-party',
+    });
   });
 
   it('requires a doc comment on each half of a type and value sharing a name', () => {

@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { syncActions } from '@lace-contract/sync';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Timestamp } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { combineLatest, filter, map } from 'rxjs';

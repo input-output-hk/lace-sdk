@@ -1,6 +1,6 @@
 /**
  * BIP32-Ed25519 soft (non-hardened) public-child key derivation — CIP-1852, via
- * `@cardano-sdk/crypto`'s `SodiumBip32Ed25519` through the `@lace-lib/vendor` seam
+ * `@lace-lib/cardano-crypto`'s `SodiumBip32Ed25519` through the `@lace-lib/vendor` seam
  * (ADR 37).
  *
  * From an account-level extended public key (xpub = the m/1852'/1815'/account' node)

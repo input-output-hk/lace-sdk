@@ -1,4 +1,3 @@
-import { HexBlob } from '@cardano-sdk/util';
 import {
   decodeCustodyStateDevices,
   decodeCustodyStateLogic,
@@ -6,6 +5,7 @@ import {
   isCustodyDataOrigin,
   isCustodyDataPurpose,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import {
   CardanoCustodyRequestRefusedError,
@@ -17,7 +17,7 @@ import { parseCardanoCustodyChainId } from './custody-sign-request';
 import { isRecord, MalformedRequestError } from './request-parsing';
 
 import type { CardanoCustodyRequestDevice } from './custody-request-context';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type {
   CustodyAccountIdentity,
   CustodyDataPurpose,

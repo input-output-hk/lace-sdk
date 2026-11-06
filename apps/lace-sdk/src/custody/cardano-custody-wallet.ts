@@ -20,7 +20,6 @@ import {
 } from './cardano-custody-errors';
 
 import type { CardanoContextObservables } from '../create-tx-builder';
-import type { Cardano, EraSummary } from '@cardano-sdk/core';
 import type { Activity, activitiesSelectors } from '@lace-contract/activities';
 import type {
   CardanoCustodyAccount,
@@ -42,6 +41,7 @@ import type {
   WalletId,
   walletsSelectors,
 } from '@lace-contract/wallet-repo';
+import type { Cardano, EraSummary } from '@lace-lib/cardano-core';
 import type { HexBytes } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 

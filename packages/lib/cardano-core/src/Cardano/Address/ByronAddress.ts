@@ -27,7 +27,10 @@ export type ByronAttributes = {
    */
   derivationPath?: HexBlob;
 
-  /** Protocol magic (if not 0, then it's a testnet). */
+  /**
+   * Protocol magic, present only on test networks. Any present value, including 0, identifies a
+   * test network.
+   */
   magic?: number;
 };
 
@@ -153,8 +156,8 @@ export class ByronAddress {
     const { root, attrs, type } = props.byronAddressContent!;
     let mapSize = 0;
 
-    if (attrs.derivationPath) ++mapSize;
-    if (attrs.magic) ++mapSize;
+    if (attrs.derivationPath !== undefined) ++mapSize;
+    if (attrs.magic !== undefined) ++mapSize;
 
     const writer = new CborWriter();
 
@@ -162,7 +165,7 @@ export class ByronAddress {
     writer.writeByteString(Buffer.from(root, 'hex'));
     writer.writeStartMap(mapSize);
 
-    if (attrs.derivationPath) {
+    if (attrs.derivationPath !== undefined) {
       // The path must be stored pre-encoded as CBOR.
       const encodedPathCbor = new CborWriter()
         .writeByteString(Buffer.from(attrs.derivationPath, 'hex'))
@@ -172,7 +175,7 @@ export class ByronAddress {
       writer.writeByteString(encodedPathCbor);
     }
 
-    if (attrs.magic) {
+    if (attrs.magic !== undefined) {
       // The magic must be stored pre-encoded as CBOR.
       const encodedMagicCbor = new CborWriter().writeInt(attrs.magic).encode();
 

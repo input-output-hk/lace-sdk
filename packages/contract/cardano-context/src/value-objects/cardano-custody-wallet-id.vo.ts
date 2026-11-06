@@ -1,9 +1,9 @@
-import { blake2b } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { blake2b } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
 import type { WalletId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import type { Tagged } from 'type-fest';
 
 const WALLET_ID_BYTES = 16;

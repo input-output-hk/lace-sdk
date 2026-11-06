@@ -1,10 +1,3 @@
-import { Cardano, Milliseconds, Serialization } from '@cardano-sdk/core';
-import {
-  Ed25519PrivateKey,
-  Hash28ByteBase16,
-  ready,
-} from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import { ActivityType } from '@lace-contract/activities';
 import {
   applyInFlightUtxoAdjustments,
@@ -15,7 +8,14 @@ import {
   classifyCardanoCustodyAccount,
   isCardanoCustodyAccount,
 } from '@lace-contract/cardano-context';
+import { Cardano, Milliseconds, Serialization } from '@lace-lib/cardano-core';
+import {
+  Ed25519PrivateKey,
+  Hash28ByteBase16,
+  ready,
+} from '@lace-lib/cardano-crypto';
 import { CURRENT_CUSTODY_CONTRACT_VERSION } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { BehaviorSubject, combineLatest, map, Subject } from 'rxjs';
 import { vi } from 'vitest';
 
@@ -52,7 +52,6 @@ import { vkeyWitnessSetOf } from '../../src/custody/cardano-custody-witnesses';
 import type { CustodyTransactionShape } from '../../../../packages/contract/cardano-context/test/signing/custody-sign-request.fixtures';
 import type { WalletWithCardanoCustody } from '../../src/custody/cardano-custody-wallet';
 import type { requestCardanoCustodyBuild } from '../../src/custody/request-cardano-custody-build';
-import type { EraSummary } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type {
   CardanoCustodyBuildRequest,
@@ -71,6 +70,7 @@ import type {
   AnyWallet,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { EraSummary } from '@lace-lib/cardano-core';
 import type { CustodyGrant } from '@lace-lib/cardano-custody';
 
 type CardanoCustodyBuildOutcome = Awaited<

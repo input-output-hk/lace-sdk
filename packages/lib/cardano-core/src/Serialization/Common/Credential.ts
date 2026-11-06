@@ -12,6 +12,7 @@ import type { Cardano } from '../..';
 import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 const CREDENTIAL_ARRAY_SIZE = 2;
+const CREDENTIAL_HASH_SIZE = 28;
 
 /**
  * Reads a credential type discriminant from the reader, throwing if it is not a known credential type.
@@ -43,6 +44,12 @@ export class Credential {
     return writer.encodeAsHex();
   }
 
+  /**
+   * Deserializes a credential from a CBOR byte array. The hash must be 28 bytes long.
+   *
+   * @param cbor The CBOR encoded credential.
+   * @returns The new Credential instance.
+   */
   static fromCbor(cbor: HexBlob): Credential {
     const reader = new CborReader(cbor);
     if (reader.readStartArray() !== CREDENTIAL_ARRAY_SIZE)
@@ -52,9 +59,15 @@ export class Credential {
       );
 
     const type = readCredentialType(reader);
-    const hash = HexBlob.fromBytes(
-      reader.readByteString(),
-    ) as unknown as Hash28ByteBase16;
+    const hashBytes = reader.readByteString();
+
+    if (hashBytes.length !== CREDENTIAL_HASH_SIZE)
+      throw new InvalidArgumentError(
+        'cbor',
+        `Expected a credential hash of ${CREDENTIAL_HASH_SIZE} bytes, but got ${hashBytes.length} bytes`,
+      );
+
+    const hash = HexBlob.fromBytes(hashBytes) as unknown as Hash28ByteBase16;
 
     reader.readEndArray();
     return new Credential({ hash, type });

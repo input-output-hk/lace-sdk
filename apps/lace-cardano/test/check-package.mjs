@@ -150,7 +150,7 @@ try {
     '`' + manifest.name + '/${name}`',
   )};
   const core = modules.core;
-  const txConstruction = modules['tx-construction'];
+  const txBuilder = modules['tx-builder'];
   const crypto = modules.crypto;
   await crypto.ready();
   // The error core throws is the class the util entry exports: the entries
@@ -167,7 +167,11 @@ try {
     address: core.Cardano.Address.fromBech32('addr_test1qqydn46r6mhge0kfpqmt36m6q43knzsd9ga32n96m89px3nuzcjqw982pcftgx53fu5527z2cj2tkx2h8ux2vxsg475qypp3m9').getNetworkId(),
     keyHash: crypto.Ed25519PublicKey.fromHex('0b1c96fad4179d7910bd9485ac28c4c11368c83d18d01b29d4cf84d8ff6a06c4').hash().hex(),
     blob: modules.util.HexBlob('ab'),
-    builderExcluded: typeof txConstruction.GenericTxBuilder,
+    builder: typeof txBuilder.TransactionBuilder,
+    minAda: txBuilder.minAdaRequired({
+      address: core.Cardano.PaymentAddress('addr_test1qqydn46r6mhge0kfpqmt36m6q43knzsd9ga32n96m89px3nuzcjqw982pcftgx53fu5527z2cj2tkx2h8ux2vxsg475qypp3m9'),
+      value: { coins: 1000000n },
+    }, 4310n).toString(),
   }));
 })().catch(error => { console.error(error); process.exit(1); });
 `;
@@ -192,10 +196,11 @@ try {
     assert.match(result.keyHash, /^[0-9a-f]{56}$/, `${file}: key hash`);
     assert.equal(result.blob, 'ab', `${file}: HexBlob`);
     assert.equal(
-      result.builderExcluded,
-      'undefined',
-      `${file}: the transaction builder is not published here`,
+      result.builder,
+      'function',
+      `${file}: the transaction builder is published`,
     );
+    assert.equal(result.minAda, '978370', `${file}: minimum ada`);
   }
 
   // Every module the declarations import is a declared dependency: a

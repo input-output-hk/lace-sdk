@@ -1,4 +1,3 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   BITCOIN_FEATURE_FLAG,
   BITCOIN_MEMPOOL_FEE_MARKET_FEATURE_FLAG,
@@ -7,6 +6,7 @@ import {
 } from '@lace-contract/bitcoin-context';
 import { FEATURE_FLAG_CARDANO } from '@lace-contract/cardano-context';
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Milliseconds } from '@lace-lib/util';
 import { describe, expect, it } from 'vitest';
 

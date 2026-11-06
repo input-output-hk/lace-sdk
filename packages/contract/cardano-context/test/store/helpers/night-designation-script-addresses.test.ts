@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { classifyTxAsNightDesignation } from '../../../src/store/helpers/night-designation-script-addresses';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 // The classifier only does string-equality lookups against the
 // registry, so tests can pass plain strings cast to the tagged type.

@@ -11,23 +11,26 @@ import type { HexBlob } from '@lace-lib/cardano-util';
 
 const INTERVAL_ARRAY_SIZE = 2;
 const BOTH_NIL_MESSAGE = 'Both interval bounds cannot be nil.';
+const EXACT_WITH_BOUNDS_MESSAGE =
+  'An exact balance cannot be combined with interval bounds.';
 
 /**
- * A half-open account balance range asserting that an account balance b satisfies
- * inclusiveLowerBound <= b < exclusiveUpperBound at validation time (Dijkstra
- * account_balance_interval).
+ * A condition on an account balance b checked at validation time (Dijkstra
+ * account_balance_interval). It is either a half-open range asserting that
+ * inclusiveLowerBound <= b < exclusiveUpperBound, or an exact balance that b must equal.
  *
- * On the wire this is a fixed 2-element array [inclusive_lower_bound, exclusive_upper_bound]
+ * On the wire a range is a 2-element array [inclusive_lower_bound, exclusive_upper_bound]
  * where an absent bound encodes as CBOR null (nil). At most one bound may be nil; a bound of 0
- * is a valid coin value distinct from nil.
+ * is a valid coin value distinct from nil. An exact balance is a bare coin.
  */
 export class AccountBalanceInterval {
   #inclusiveLowerBound: Cardano.Lovelace | undefined;
   #exclusiveUpperBound: Cardano.Lovelace | undefined;
+  #exactBalance: Cardano.Lovelace | undefined;
   #originalBytes: HexBlob | undefined = undefined;
 
   /**
-   * Initializes a new instance of the AccountBalanceInterval class.
+   * Initializes a new instance of the AccountBalanceInterval class as a half-open range.
    *
    * @param inclusiveLowerBound The inclusive lower bound in lovelace, or undefined for no lower bound.
    * @param exclusiveUpperBound The exclusive upper bound in lovelace, or undefined for no upper bound.
@@ -41,6 +44,19 @@ export class AccountBalanceInterval {
   }
 
   /**
+   * Creates an interval asserting that the account balance equals the given amount.
+   *
+   * @param exactBalance The exact balance in lovelace.
+   * @returns The new AccountBalanceInterval instance.
+   */
+  static newExact(exactBalance: Cardano.Lovelace): AccountBalanceInterval {
+    const interval = new AccountBalanceInterval();
+    interval.#exactBalance = exactBalance;
+
+    return interval;
+  }
+
+  /**
    * Serializes an AccountBalanceInterval into CBOR format.
    *
    * @returns The AccountBalanceInterval in CBOR format.
@@ -48,19 +64,25 @@ export class AccountBalanceInterval {
   toCbor(): HexBlob {
     if (this.#originalBytes) return this.#originalBytes;
 
+    const writer = new CborWriter();
+
+    if (this.#exactBalance !== undefined) {
+      writer.writeInt(this.#exactBalance);
+      return writer.encodeAsHex();
+    }
+
     if (
       this.#inclusiveLowerBound === undefined &&
       this.#exclusiveUpperBound === undefined
     )
       throw new InvalidStateError(BOTH_NIL_MESSAGE);
 
-    const writer = new CborWriter();
-
     // CDDL
     // account_balance_interval =
     //   [  inclusive_lower_bound : coin, exclusive_upper_bound : coin/ nil
     //   // inclusive_lower_bound : coin/ nil, exclusive_upper_bound : coin
     //   ]
+    //   / coin
     writer.writeStartArray(INTERVAL_ARRAY_SIZE);
 
     if (this.#inclusiveLowerBound === undefined) {
@@ -79,7 +101,8 @@ export class AccountBalanceInterval {
   }
 
   /**
-   * Deserializes an AccountBalanceInterval from a CBOR byte array.
+   * Deserializes an AccountBalanceInterval from a CBOR byte array. Accepts the bare coin form
+   * and both definite and indefinite length arrays.
    *
    * @param cbor The CBOR encoded AccountBalanceInterval object.
    * @returns The new AccountBalanceInterval instance.
@@ -87,8 +110,15 @@ export class AccountBalanceInterval {
   static fromCbor(cbor: HexBlob): AccountBalanceInterval {
     const reader = new CborReader(cbor);
 
+    if (reader.peekState() === CborReaderState.UnsignedInteger) {
+      const exact = AccountBalanceInterval.newExact(reader.readInt());
+      exact.#originalBytes = cbor;
+
+      return exact;
+    }
+
     const length = reader.readStartArray();
-    if (length !== INTERVAL_ARRAY_SIZE)
+    if (length !== null && length !== INTERVAL_ARRAY_SIZE)
       throw new SerializationError(
         SerializationFailure.InvalidType,
         `account_balance_interval must be an array of ${INTERVAL_ARRAY_SIZE} elements, but got ${length}`,
@@ -131,6 +161,9 @@ export class AccountBalanceInterval {
    * @returns The Core AccountBalanceInterval object.
    */
   toCore(): Cardano.AccountBalanceInterval {
+    if (this.#exactBalance !== undefined)
+      return { exactBalance: this.#exactBalance };
+
     return {
       ...(this.#inclusiveLowerBound !== undefined && {
         inclusiveLowerBound: this.#inclusiveLowerBound,
@@ -150,6 +183,16 @@ export class AccountBalanceInterval {
   static fromCore(
     interval: Cardano.AccountBalanceInterval,
   ): AccountBalanceInterval {
+    if (interval.exactBalance !== undefined) {
+      if (
+        interval.inclusiveLowerBound !== undefined ||
+        interval.exclusiveUpperBound !== undefined
+      )
+        throw new InvalidArgumentError('interval', EXACT_WITH_BOUNDS_MESSAGE);
+
+      return AccountBalanceInterval.newExact(interval.exactBalance);
+    }
+
     if (
       interval.inclusiveLowerBound === undefined &&
       interval.exclusiveUpperBound === undefined
@@ -163,12 +206,13 @@ export class AccountBalanceInterval {
   }
 
   /**
-   * Sets the inclusive lower bound of this interval.
+   * Sets the inclusive lower bound of this interval, turning an exact balance into a range.
    *
    * @param inclusiveLowerBound The inclusive lower bound in lovelace, or undefined for no lower bound.
    */
   setInclusiveLowerBound(inclusiveLowerBound?: Cardano.Lovelace): void {
     this.#inclusiveLowerBound = inclusiveLowerBound;
+    this.#exactBalance = undefined;
     this.#originalBytes = undefined;
   }
 
@@ -182,7 +226,7 @@ export class AccountBalanceInterval {
   }
 
   /**
-   * Sets the exclusive upper bound of this interval.
+   * Sets the exclusive upper bound of this interval, turning an exact balance into a range.
    *
    * @param exclusiveUpperBound The exclusive upper bound in lovelace, or undefined for no upper bound.
    */
@@ -190,6 +234,7 @@ export class AccountBalanceInterval {
     exclusiveUpperBound: Cardano.Lovelace | undefined,
   ): void {
     this.#exclusiveUpperBound = exclusiveUpperBound;
+    this.#exactBalance = undefined;
     this.#originalBytes = undefined;
   }
 
@@ -200,5 +245,26 @@ export class AccountBalanceInterval {
    */
   exclusiveUpperBound(): Cardano.Lovelace | undefined {
     return this.#exclusiveUpperBound;
+  }
+
+  /**
+   * Sets the exact balance the account must hold, replacing any range bounds.
+   *
+   * @param exactBalance The exact balance in lovelace.
+   */
+  setExactBalance(exactBalance: Cardano.Lovelace): void {
+    this.#exactBalance = exactBalance;
+    this.#inclusiveLowerBound = undefined;
+    this.#exclusiveUpperBound = undefined;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the exact balance the account must hold.
+   *
+   * @returns The exact balance in lovelace, or undefined when this interval is a range.
+   */
+  exactBalance(): Cardano.Lovelace | undefined {
+    return this.#exactBalance;
   }
 }

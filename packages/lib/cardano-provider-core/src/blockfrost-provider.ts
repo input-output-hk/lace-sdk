@@ -1,9 +1,9 @@
 // copied from @cardano-sdk/cardano-services-client
-import { contextLogger } from '@cardano-sdk/util';
+import { contextLogger } from '@lace-lib/cardano-util';
 import { toProviderError } from '@lace-lib/util-provider';
 
 import type { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import type { HealthCheckResponse, Provider } from '@cardano-sdk/core';
+import type { HealthCheckResponse, Provider } from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Logger } from 'ts-log';
 import type { AsyncReturnType } from 'type-fest';

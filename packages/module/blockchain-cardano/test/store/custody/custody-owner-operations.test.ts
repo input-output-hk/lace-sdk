@@ -1,6 +1,5 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
 import {
   custodyGrantAssetId,
   decodeCustodyAccountState,
@@ -8,6 +7,7 @@ import {
   encodeCustodyAccountRedeemer,
   encodeCustodyMintRedeemer,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { Err } from '@lace-lib/util';
 import { of } from 'rxjs';
 import { describe, expect, it } from 'vitest';
@@ -21,9 +21,6 @@ import {
 import { custodyExecutionEstimate } from '../../../src/store/custody/custody-execution-estimate';
 
 import {
-  EXPIRY_MS,
-  RUN_REDEEMER_CBOR,
-  TESTNET_BYRON_ADDRESS,
   accountId,
   accountState,
   chainId,
@@ -37,10 +34,11 @@ import {
   evaluateAll,
   expectFailure,
   expectSuccess,
+  EXPIRY_MS,
   fakeProvider,
   fundUtxo,
-  grantUtxo,
   granteeKeyHash,
+  grantUtxo,
   identity,
   keyHash,
   logicRewardAccountOf,
@@ -52,8 +50,11 @@ import {
   protocolParameters,
   providerError,
   recipientAddress,
+  referencedScriptUtxos,
+  RUN_REDEEMER_CBOR,
   runBuild,
   sponsorAddress,
+  TESTNET_BYRON_ADDRESS,
   transactionOf,
   unparkedChainId,
   version,
@@ -1274,10 +1275,12 @@ describe('custody owner operations', () => {
         }),
       );
       const transaction = transactionOf(result);
-      const auxiliaryData = transaction.auxiliaryData()?.toCore();
-      expect(auxiliaryData).toEqual({ blob: paymentReference });
+      const auxiliaryData = transaction.auxiliaryData();
+      expect(auxiliaryData?.toCore()).toEqual({ blob: paymentReference });
+      const written = auxiliaryData?.toCbor() ?? HexBlob('');
+      expect(written.startsWith('d90103')).toBe(true);
       expect(transaction.body().toCore().auxiliaryDataHash).toBe(
-        Cardano.computeAuxiliaryDataHash(auxiliaryData),
+        Crypto.blake2b.hash(written, 32),
       );
     });
 
@@ -1553,7 +1556,7 @@ describe('custody owner operations', () => {
           ),
         ).toEqual([{ stakeAddress: logicRewardAccountOf(), quantity: 0n }]);
         expect(body.referenceInputs).toEqual(
-          parkedScriptUtxos.map(([{ txId, index }]) => ({ txId, index })),
+          referencedScriptUtxos.map(([{ txId, index }]) => ({ txId, index })),
         );
         expect(tx.witnessSet().toCore().scripts).toEqual(
           isStakeOperation ? [identity.stakeScript] : undefined,
@@ -1571,7 +1574,7 @@ describe('custody owner operations', () => {
       const tx = transactionOf(result);
       const body = bodyOf(result);
       expect(body.referenceInputs).toEqual(
-        parkedScriptUtxos.map(([{ txId, index }]) => ({ txId, index })),
+        referencedScriptUtxos.map(([{ txId, index }]) => ({ txId, index })),
       );
       expect(tx.witnessSet().toCore().scripts).toBeUndefined();
       expect(body.withdrawals).toEqual([

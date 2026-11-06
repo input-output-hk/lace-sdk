@@ -1,4 +1,3 @@
-import { Percent } from '@cardano-sdk/util';
 import { ActivityType } from '@lace-contract/activities';
 import {
   MidnightAccountId,
@@ -6,6 +5,7 @@ import {
   toUnshieldedTokenType,
 } from '@lace-contract/midnight-context';
 import * as fixture from '@lace-contract/midnight-context/src/stub-data';
+import { Percent } from '@lace-lib/cardano-util';
 import { BigNumber } from '@lace-lib/util';
 import {
   MidnightBech32m,

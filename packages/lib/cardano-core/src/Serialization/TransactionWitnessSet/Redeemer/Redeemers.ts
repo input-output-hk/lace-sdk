@@ -6,9 +6,9 @@ import { CborReader, CborReaderState, CborWriter } from '../../CBOR';
 import { ExUnits } from '../../Common';
 import { PlutusData } from '../../PlutusData';
 
+import { readRedeemerKey } from './readRedeemerKey';
 import { Redeemer } from './Redeemer';
 
-import type { RedeemerTag } from './RedeemerTag';
 import type { Cardano } from '../../..';
 
 const MAP_INDEX_EMBEDDED_GROUP_SIZE = 2;
@@ -87,8 +87,7 @@ export class Redeemers {
             'cbor',
             `Redeemers map index should be an array of ${MAP_INDEX_EMBEDDED_GROUP_SIZE} elements, but got an array of ${indexLength} elements`,
           );
-        const tag: RedeemerTag = Number(reader.readUInt()) as RedeemerTag;
-        const index = reader.readUInt();
+        const { tag, index } = readRedeemerKey(reader);
         reader.readEndArray();
 
         // Read value cbor

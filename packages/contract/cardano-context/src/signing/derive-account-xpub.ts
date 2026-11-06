@@ -1,12 +1,12 @@
-import { SodiumBip32Ed25519 } from '@cardano-sdk/crypto';
-import { KeyPurpose, util } from '@cardano-sdk/key-management';
+import { SodiumBip32Ed25519 } from '@lace-lib/cardano-crypto';
+import { KeyPurpose, util } from '@lace-lib/cardano-key-management';
 import { SecretBox } from '@lace-lib/core';
 
+import type { AuthSecret } from '@lace-contract/authentication-prompt';
 import type {
   Bip32PrivateKeyHex,
   Bip32PublicKeyHex,
-} from '@cardano-sdk/crypto';
-import type { AuthSecret } from '@lace-contract/authentication-prompt';
+} from '@lace-lib/cardano-crypto';
 import type { HexBytes } from '@lace-lib/util';
 
 /**

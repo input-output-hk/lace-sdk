@@ -5,7 +5,7 @@ import {
   resolveValidityInterval,
 } from '../../../src/store/composer/resolve-validity-interval';
 
-import type { EraSummary } from '@cardano-sdk/core';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 // =====================================================================
 // A validity interval is counted in SLOTS from the chain tip. Two

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Runs the Cardano JS SDK's own end-to-end wallet suite against the ported
 # sources: a checkout of cardano-js-sdk at the commit the port was taken from,
-# with the seven published packages' sources replaced by the workspace's, built
-# with upstream's toolchain and run on upstream's local test network.
+# with the sources of the published packages ported from it replaced by the
+# workspace's, built with upstream's toolchain and run on upstream's local test
+# network. The transaction builder the package publishes is the wallet's own,
+# not upstream's, so upstream's input selection and transaction construction
+# keep their own sources.
 #
 # This is a proof, not a gate: it needs Docker, several gigabytes of disk and
 # about an hour, so it has its own Nx target (`lace-cardano:upstream-e2e`) and
@@ -20,7 +23,7 @@ set -euo pipefail
 # The commit the port was taken from; the tags of the ported packages resolve to it.
 UPSTREAM_COMMIT=48019e49
 UPSTREAM_REPO=input-output-hk/cardano-js-sdk
-PUBLISHED_PACKAGES=(core crypto util key-management input-selection tx-construction dapp-connector)
+PUBLISHED_PACKAGES=(core crypto util key-management dapp-connector)
 ALL_PACKAGES=("${PUBLISHED_PACKAGES[@]}" util-rxjs util-dev hardware-ledger hardware-trezor)
 
 workspace=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)

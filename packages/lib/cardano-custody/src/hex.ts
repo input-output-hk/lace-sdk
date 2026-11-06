@@ -1,6 +1,6 @@
-import { InvalidStringError } from '@cardano-sdk/util';
+import { InvalidStringError } from '@lace-lib/cardano-util';
 
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** Byte length of every key hash and script hash the contract handles. */
 export const HASH_28_BYTE_LENGTH = 28;

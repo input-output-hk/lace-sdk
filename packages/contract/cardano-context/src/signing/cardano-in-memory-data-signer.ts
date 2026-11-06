@@ -9,9 +9,9 @@ import type {
   CardanoSignDataRequest,
   CardanoSignDataResult,
 } from './types';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { SignerAuth } from '@lace-contract/signer';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { Observable } from 'rxjs';
 
 export interface CardanoInMemoryDataSignerProps {

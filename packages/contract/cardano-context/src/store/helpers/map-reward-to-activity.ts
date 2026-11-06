@@ -1,6 +1,6 @@
-import { createSlotTimeCalc, Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { TokenId } from '@lace-contract/tokens';
+import { createSlotTimeCalc, Cardano } from '@lace-lib/cardano-core';
 import { BigNumber, Timestamp } from '@lace-lib/util';
 
 import {
@@ -17,8 +17,8 @@ import type {
   MissingActivityData,
   MissingRewardData,
 } from './find-missing-activities';
-import type { EraSummary } from '@cardano-sdk/core';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 export const REWARD_SPENDABLE_DELAY_EPOCHS = 2;
 

@@ -1,6 +1,6 @@
-import { createTestScheduler } from '@cardano-sdk/util-dev';
 import { getTestAuthSecretDeps } from '@lace-contract/authentication-prompt';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
+import { createTestScheduler } from '@lace-lib/cardano-util-dev';
 import { HexBytes } from '@lace-lib/util';
 import { describe, expect, test, vi } from 'vitest';
 

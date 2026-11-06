@@ -8,8 +8,8 @@ import {
 import { BlockfrostProvider } from '../blockfrost-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { Cardano } from '@cardano-sdk/core';
 import type { BlockfrostPartialStakePool } from '@lace-contract/cardano-stake-pools';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Logger } from 'ts-log';
 
 export class BlockfrostStakePoolProvider extends BlockfrostProvider {

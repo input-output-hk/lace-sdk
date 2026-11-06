@@ -1,9 +1,9 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   CardanoNetworkId,
   getCardanoChainIdByTestnetId,
   getCardanoTestnetIdByNetworkMagic,
 } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { filter, map } from 'rxjs';
 
 import type { SideEffect } from '../sdk-contracts';

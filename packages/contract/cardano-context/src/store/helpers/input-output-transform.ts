@@ -1,7 +1,7 @@
 import { transformTokenMap } from './transformers';
 
 import type { AssetMetadataMap, TxInput, TxOutputInput } from '../../types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Transforms transaction input/output into TxOutputInput format

@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 /** Derive review identity from ledger bytes, never from display metadata. */
 export const getCardanoAssetIdentity = (assetId: string) => {

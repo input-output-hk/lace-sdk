@@ -1,7 +1,7 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Hash32ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 import { ACCOUNT_VALIDATOR_HASH } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import { classifyCardanoCustodyAccount } from '../../src/custody/account-state';

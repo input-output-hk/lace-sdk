@@ -110,7 +110,7 @@ describe('parseTxSignResponse', () => {
     expect(parseTxSignResponse(cbor).witnesses).toEqual([{ vkey, signature }]);
   });
 
-  it('yields witnesses usable with @cardano-sdk/core VkeyWitness', () => {
+  it('yields witnesses usable with @lace-lib/cardano-core VkeyWitness', () => {
     const vkeyWitnessSet = encodeVkeyWitnessSet([[vkey, signature]], true);
     const cbor = encodeCardanoTxSignResponse({ requestId, vkeyWitnessSet });
     const [witness] = parseTxSignResponse(cbor).witnesses;

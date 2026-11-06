@@ -2,7 +2,7 @@ import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
 import { retryBackoff } from 'backoff-rxjs';
 import { defer, first, map } from 'rxjs';
 
-import type { ProviderError } from '@cardano-sdk/core';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 

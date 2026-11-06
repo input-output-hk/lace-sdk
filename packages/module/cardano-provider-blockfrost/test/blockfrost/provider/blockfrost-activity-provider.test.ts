@@ -1,6 +1,12 @@
-import { Cardano, ProviderFailure } from '@cardano-sdk/core';
-import { logger } from '@cardano-sdk/util-dev';
 import { CardanoPaymentAddress } from '@lace-contract/cardano-context';
+import {
+  Cardano,
+  ProviderFailure,
+  Serialization,
+} from '@lace-lib/cardano-core';
+import { Hash28ByteBase16, blake2b } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
+import { createDijkstraBatchFixture, logger } from '@lace-lib/cardano-util-dev';
 import { Timestamp } from '@lace-lib/util';
 import { HttpClientError, ProviderError } from '@lace-lib/util-provider';
 import { firstValueFrom } from 'rxjs';
@@ -168,6 +174,488 @@ describe('BlockfrostActivityProvider', () => {
       ).unwrap();
 
       expect(txDetails.body.donation).toEqual(1_000_000n);
+    });
+
+    it('copies the guards and direct deposits of a Dijkstra transaction from the parsed cbor into the body', async () => {
+      const txCborWithGuardsAndDirectDeposits: Responses['tx_content_cbor'] = {
+        cbor: '84a500818258207577617e7378a6a3f6f09185c662feeb86428366430b263e399879152c9e55fe01018282583900f84435ea4e419e66b7b2f5e639137c42faf38c55a35cb5549d47872ce1efac84e56a57f4e8bfc75efcac6941ad0bee0e7f0bb4cd2bc7c04d1a01298be0825839001d67cd7aeaaedee4fe73ecaabe7cc892a48fb450119dda0ddd76f9252e7b13f6d9124a16ddfec464771f57e184571fb3cb8f8b3c1a7558681ace1ce4cd021a0002917d0e818201581cb1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b11819a1581de02e7b13f6d9124a16ddfec464771f57e184571fb3cb8f8b3c1a7558681a000f4240a100818258207afdd392701bfe44e3b6a59f173177685689a6672e7b71647ea7087ea1aaf5a158400ba94aff77ac8c05e4df45ff4e2cfc70ee8e92bf0efade11507122da68b8b18bbc1a7b7b08538681c083232a8cb9d964380f2bb899ab4b18a6384887b80a6301f5f6',
+      };
+
+      mockResponses(request, [
+        [`txs/${txId}`, { data: txDetailsResponse }],
+        [`txs/${txId}/cbor`, { data: txCborWithGuardsAndDirectDeposits }],
+        [`txs/${txId}/utxos`, { data: txUtxosResponse }],
+      ]);
+
+      const txDetails = (
+        await firstValueFrom(provider.getTransactionDetails(txId))
+      ).unwrap();
+
+      expect(txDetails.body.guards).toEqual([
+        {
+          type: Cardano.CredentialType.ScriptHash,
+          hash: Hash28ByteBase16('b1'.repeat(28)),
+        },
+      ]);
+      expect(txDetails.body.directDeposits).toEqual([
+        {
+          stakeAddress: Cardano.RewardAccount(
+            'stake_test1uqh8kylkmyfy59kalmzxgacl2lscg4clk09clzeurf64s6qv5wk3l',
+          ),
+          quantity: 1_000_000n,
+        },
+      ]);
+    });
+
+    it('leaves the guards and direct deposits out of a transaction that carries none', async () => {
+      mockResponses(request, [
+        [`txs/${txId}`, { data: txDetailsResponse }],
+        [`txs/${txId}/cbor`, { data: txCborResponse }],
+        [`txs/${txId}/utxos`, { data: txUtxosResponse }],
+      ]);
+
+      const txDetails = (
+        await firstValueFrom(provider.getTransactionDetails(txId))
+      ).unwrap();
+
+      expect(txDetails.body.guards).toBeUndefined();
+      expect(txDetails.body.directDeposits).toBeUndefined();
+    });
+
+    it('leaves the Dijkstra batch fields out of a transaction that carries none', async () => {
+      mockResponses(request, [
+        [`txs/${txId}`, { data: txDetailsResponse }],
+        [`txs/${txId}/cbor`, { data: txCborResponse }],
+        [`txs/${txId}/utxos`, { data: txUtxosResponse }],
+      ]);
+
+      const txDetails = (
+        await firstValueFrom(provider.getTransactionDetails(txId))
+      ).unwrap();
+
+      expect(txDetails.body).not.toHaveProperty('requiredTopLevelGuards');
+      expect(txDetails.body).not.toHaveProperty('accountBalanceIntervals');
+      expect(txDetails.body).not.toHaveProperty(
+        'startingAccountBalanceIntervals',
+      );
+      expect(txDetails.body).not.toHaveProperty('subTransactions');
+    });
+
+    describe('of a Dijkstra batch', () => {
+      const [
+        [{ txId: COUNTERPARTY_1_UTXO_TX_ID }],
+        [{ txId: COUNTERPARTY_2_UTXO_TX_ID }],
+        [{ txId: WALLET_UTXO_TX_ID }],
+      ] = createDijkstraBatchFixture().externalUtxos;
+      const REFERENCE_UTXO_TX_ID = Cardano.TransactionId(
+        '4000000000000000000000000000000000000000000000000000000000000004',
+      );
+      const referenceAddress = Cardano.PaymentAddress(
+        'addr_test1qruygd02feqeue4hkt67vwgn03p04uuv2k34ed25n4rcwt8pa7kgfet22l6w3078tm72c62p4597urnlpw6v6278cpxs8jxykl',
+      );
+
+      /** A Blockfrost output paying `coins` lovelace to `address`. */
+      const blockfrostOutput = (
+        address: string,
+        outputIndex: number,
+        coins: bigint,
+      ): Responses['tx_content_utxo']['outputs'][number] => ({
+        address,
+        amount: [{ quantity: coins.toString(), unit: 'lovelace' }],
+        collateral: false,
+        consumed_by_tx: null,
+        data_hash: null,
+        inline_datum: null,
+        output_index: outputIndex,
+        reference_script_hash: null,
+      });
+
+      /** A Blockfrost input spending the 1 ada output `txHash#outputIndex` held by `address`. */
+      const blockfrostInput = (
+        address: string,
+        txHash: Cardano.TransactionId,
+        outputIndex: number,
+      ): Responses['tx_content_utxo']['inputs'][number] => ({
+        address,
+        amount: [{ quantity: '1000000', unit: 'lovelace' }],
+        collateral: false,
+        data_hash: null,
+        inline_datum: null,
+        output_index: outputIndex,
+        reference: false,
+        reference_script_hash: null,
+        tx_hash: txHash,
+      });
+
+      /**
+       * The fixture batch with all four Dijkstra batch fields, the given
+       * reference input on its second sub transaction and that sub transaction body
+       * encoded with an untagged input set, so its id differs from the id of
+       * the body serialized again from its core form.
+       */
+      const createBatch = (
+        referenceInput: Cardano.TxIn = { index: 0, txId: REFERENCE_UTXO_TX_ID },
+      ) => {
+        const fixture = createDijkstraBatchFixture();
+        const [subTx1, subTx2] = fixture.tx.body.subTransactions!;
+        const subTx2Body: Cardano.SubTransactionBody = {
+          ...subTx2.body,
+          referenceInputs: [referenceInput],
+        };
+        const body: Cardano.TxBody = {
+          ...fixture.tx.body,
+          requiredTopLevelGuards: [
+            {
+              credential: {
+                hash: Hash28ByteBase16('b1'.repeat(28)),
+                type: Cardano.CredentialType.KeyHash,
+              },
+              datum: null,
+            },
+          ],
+          startingAccountBalanceIntervals: [
+            {
+              interval: { exactBalance: 0n },
+              rewardAccount: fixture.actors.walletRewardAccount,
+            },
+          ],
+          subTransactions: [subTx1, { ...subTx2, body: subTx2Body }],
+        };
+        const canonicalSubTx2Body =
+          Serialization.SubTransactionBody.fromCore(subTx2Body).toCbor();
+        const untaggedSubTx2Body = HexBlob(
+          canonicalSubTx2Body.replace('d90102', ''),
+        );
+        const cbor = Serialization.TxCBOR(
+          new Serialization.Transaction(
+            Serialization.TransactionBody.fromCore(body),
+            Serialization.TransactionWitnessSet.fromCore(fixture.tx.witness),
+          )
+            .toCbor()
+            .replace(canonicalSubTx2Body, untaggedSubTx2Body),
+        );
+        const transaction = Serialization.Transaction.fromCbor(cbor);
+        return {
+          body,
+          cbor,
+          fixture,
+          subTxIds: transaction
+            .body()
+            .subTransactions()!
+            .values()
+            .map(subTransaction => subTransaction.getId()),
+          batchTxId: transaction.getId(),
+          untaggedSubTx2Body,
+        };
+      };
+
+      /** Mocks the Blockfrost responses for the batch and the producers of its external inputs. */
+      const mockBatchResponses = (
+        { batchTxId, cbor, fixture }: ReturnType<typeof createBatch>,
+        overrides: [string, unknown][] = [],
+      ) => {
+        const { actors } = fixture;
+        mockResponses(request, [
+          ...overrides,
+          [`txs/${batchTxId}`, { data: txDetailsResponse }],
+          [`txs/${batchTxId}/cbor`, { data: { cbor } }],
+          [
+            `txs/${batchTxId}/utxos`,
+            {
+              data: {
+                hash: batchTxId,
+                inputs: [
+                  blockfrostInput(actors.walletAddress, WALLET_UTXO_TX_ID, 0),
+                ],
+                outputs: [
+                  blockfrostOutput(actors.walletAddress, 0, 5_700_000n),
+                ],
+              },
+            },
+          ],
+          [
+            `txs/${COUNTERPARTY_1_UTXO_TX_ID}/utxos`,
+            {
+              data: {
+                hash: COUNTERPARTY_1_UTXO_TX_ID,
+                inputs: [],
+                outputs: [
+                  blockfrostOutput(actors.counterparty1Address, 0, 10_000_000n),
+                ],
+              },
+            },
+          ],
+          [
+            `txs/${COUNTERPARTY_2_UTXO_TX_ID}/utxos`,
+            {
+              data: {
+                hash: COUNTERPARTY_2_UTXO_TX_ID,
+                inputs: [],
+                outputs: [
+                  blockfrostOutput(actors.counterparty2Address, 0, 6_000_000n),
+                ],
+              },
+            },
+          ],
+          [
+            `txs/${REFERENCE_UTXO_TX_ID}/utxos`,
+            {
+              data: {
+                hash: REFERENCE_UTXO_TX_ID,
+                inputs: [],
+                outputs: [blockfrostOutput(referenceAddress, 0, 2_000_000n)],
+              },
+            },
+          ],
+        ]);
+      };
+
+      it('copies the four Dijkstra batch fields from the parsed cbor into the body', async () => {
+        const batch = createBatch();
+        mockBatchResponses(batch);
+
+        const txDetails = (
+          await firstValueFrom(provider.getTransactionDetails(batch.batchTxId))
+        ).unwrap();
+
+        expect(txDetails.body.requiredTopLevelGuards).toEqual(
+          batch.body.requiredTopLevelGuards,
+        );
+        expect(txDetails.body.accountBalanceIntervals).toEqual(
+          batch.body.accountBalanceIntervals,
+        );
+        expect(txDetails.body.startingAccountBalanceIntervals).toEqual(
+          batch.body.startingAccountBalanceIntervals,
+        );
+        expect(txDetails.body.subTransactions).toHaveLength(2);
+      });
+
+      it('hydrates each sub transaction with its witness set, auxiliary data and input addresses', async () => {
+        const batch = createBatch();
+        const { actors } = batch.fixture;
+        const [subTx1, subTx2] = batch.body.subTransactions!;
+        mockBatchResponses(batch);
+
+        const txDetails = (
+          await firstValueFrom(provider.getTransactionDetails(batch.batchTxId))
+        ).unwrap();
+
+        expect(txDetails.body.subTransactions).toEqual([
+          {
+            ...subTx1,
+            body: {
+              ...subTx1.body,
+              inputs: [
+                {
+                  address: actors.counterparty1Address,
+                  index: 0,
+                  txId: COUNTERPARTY_1_UTXO_TX_ID,
+                },
+              ],
+            },
+            id: batch.subTxIds[0],
+          },
+          {
+            ...subTx2,
+            body: {
+              ...subTx2.body,
+              inputs: [
+                {
+                  address: actors.counterparty2Address,
+                  index: 0,
+                  txId: COUNTERPARTY_2_UTXO_TX_ID,
+                },
+                {
+                  address: actors.counterparty2Address,
+                  index: 1,
+                  txId: batch.subTxIds[0],
+                },
+              ],
+              referenceInputs: [
+                {
+                  address: referenceAddress,
+                  index: 0,
+                  txId: REFERENCE_UTXO_TX_ID,
+                },
+              ],
+            },
+            id: batch.subTxIds[1],
+          },
+        ]);
+      });
+
+      it('identifies a sub transaction by the hash of its body bytes as found on chain', async () => {
+        const batch = createBatch();
+        const [, subTx2] = batch.body.subTransactions!;
+        mockBatchResponses(batch);
+
+        const txDetails = (
+          await firstValueFrom(provider.getTransactionDetails(batch.batchTxId))
+        ).unwrap();
+
+        const subTx2Id = txDetails.body.subTransactions![1].id;
+        expect(subTx2Id).toEqual(
+          blake2b.hash<Cardano.TransactionId>(batch.untaggedSubTx2Body, 32),
+        );
+        expect(subTx2Id).toEqual(batch.subTxIds[1]);
+        expect(subTx2Id).not.toEqual(
+          Serialization.SubTransaction.fromCore(subTx2).getId(),
+        );
+      });
+
+      it('resolves an input spending an output of the batch itself without a request', async () => {
+        const batch = createBatch();
+        mockBatchResponses(batch);
+
+        const txDetails = (
+          await firstValueFrom(provider.getTransactionDetails(batch.batchTxId))
+        ).unwrap();
+
+        expect(txDetails.body.subTransactions![1].body.inputs[1]).toEqual({
+          address: batch.fixture.actors.counterparty2Address,
+          index: 1,
+          txId: batch.subTxIds[0],
+        });
+        expect(request).not.toHaveBeenCalledWith(
+          `txs/${batch.subTxIds[0]}/utxos`,
+          undefined,
+        );
+      });
+
+      it('resolves a sub transaction input listed among the transaction utxos without requesting its producer', async () => {
+        const batch = createBatch();
+        const { actors } = batch.fixture;
+        const listedAddress = Cardano.PaymentAddress(
+          txUtxosResponse.inputs[0].address,
+        );
+        mockBatchResponses(batch, [
+          [
+            `txs/${batch.batchTxId}/utxos`,
+            {
+              data: {
+                hash: batch.batchTxId,
+                inputs: [
+                  blockfrostInput(actors.walletAddress, WALLET_UTXO_TX_ID, 0),
+                  blockfrostInput(listedAddress, COUNTERPARTY_1_UTXO_TX_ID, 0),
+                ],
+                outputs: [
+                  blockfrostOutput(actors.walletAddress, 0, 5_700_000n),
+                ],
+              },
+            },
+          ],
+          [
+            `txs/${COUNTERPARTY_1_UTXO_TX_ID}/utxos`,
+            new HttpClientError(500, 'Internal server error'),
+          ],
+        ]);
+
+        const txDetails = (
+          await firstValueFrom(provider.getTransactionDetails(batch.batchTxId))
+        ).unwrap();
+
+        expect(txDetails.body.subTransactions![0].body.inputs).toEqual([
+          {
+            address: listedAddress,
+            index: 0,
+            txId: COUNTERPARTY_1_UTXO_TX_ID,
+          },
+        ]);
+        expect(request).not.toHaveBeenCalledWith(
+          `txs/${COUNTERPARTY_1_UTXO_TX_ID}/utxos`,
+          undefined,
+        );
+      });
+
+      it('resolves the other sub transaction inputs through the transactions that produced them', async () => {
+        const batch = createBatch();
+        mockBatchResponses(batch);
+
+        const txDetails = (
+          await firstValueFrom(provider.getTransactionDetails(batch.batchTxId))
+        ).unwrap();
+
+        expect(txDetails.body.subTransactions![0].body.inputs[0].address).toBe(
+          batch.fixture.actors.counterparty1Address,
+        );
+        expect(request).toHaveBeenCalledWith(
+          `txs/${COUNTERPARTY_1_UTXO_TX_ID}/utxos`,
+          undefined,
+        );
+        expect(request).toHaveBeenCalledWith(
+          `txs/${COUNTERPARTY_2_UTXO_TX_ID}/utxos`,
+          undefined,
+        );
+        expect(request).toHaveBeenCalledWith(
+          `txs/${REFERENCE_UTXO_TX_ID}/utxos`,
+          undefined,
+        );
+      });
+
+      it('requests a transaction that produced several sub transaction inputs once', async () => {
+        const batch = createBatch({
+          index: 1,
+          txId: COUNTERPARTY_1_UTXO_TX_ID,
+        });
+        const { actors } = batch.fixture;
+        mockBatchResponses(batch, [
+          [
+            `txs/${COUNTERPARTY_1_UTXO_TX_ID}/utxos`,
+            {
+              data: {
+                hash: COUNTERPARTY_1_UTXO_TX_ID,
+                inputs: [],
+                outputs: [
+                  blockfrostOutput(actors.counterparty1Address, 0, 10_000_000n),
+                  blockfrostOutput(referenceAddress, 1, 2_000_000n),
+                ],
+              },
+            },
+          ],
+        ]);
+
+        const txDetails = (
+          await firstValueFrom(provider.getTransactionDetails(batch.batchTxId))
+        ).unwrap();
+
+        expect(txDetails.body.subTransactions![0].body.inputs[0].address).toBe(
+          actors.counterparty1Address,
+        );
+        expect(txDetails.body.subTransactions![1].body.referenceInputs).toEqual(
+          [
+            {
+              address: referenceAddress,
+              index: 1,
+              txId: COUNTERPARTY_1_UTXO_TX_ID,
+            },
+          ],
+        );
+        expect(
+          request.mock.calls.filter(
+            ([endpoint]) =>
+              endpoint === `txs/${COUNTERPARTY_1_UTXO_TX_ID}/utxos`,
+          ),
+        ).toHaveLength(1);
+      });
+
+      it('fails when a sub transaction input cannot be resolved', async () => {
+        const batch = createBatch();
+        mockBatchResponses(batch, [
+          [
+            `txs/${REFERENCE_UTXO_TX_ID}/utxos`,
+            new HttpClientError(404, 'Transaction not found'),
+          ],
+        ]);
+
+        const result = await firstValueFrom(
+          provider.getTransactionDetails(batch.batchTxId),
+        );
+
+        expect(result.isErr()).toBe(true);
+        expect(result.unwrapErr()).toMatchObject({
+          reason: ProviderFailure.NotFound,
+        });
+      });
     });
 
     /**

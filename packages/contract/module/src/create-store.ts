@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { isNotNil } from '@cardano-sdk/util';
+import { isNotNil } from '@lace-lib/cardano-util';
 import {
   applyMiddleware,
   combineReducers,

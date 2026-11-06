@@ -6,12 +6,12 @@ import { passkeyAccountPublicKey } from './passkey-account-public-key';
 import { PasskeyWalletMismatchError } from './passkey-wallet-mismatch-error';
 
 import type { LaceWallet } from './create-lace-wallet';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import type { CardanoBip32AccountProps } from '@lace-contract/cardano-context';
 import type {
   LazyInMemoryWallet,
   LazyInMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import type { PasskeyCredentialRef, PasskeyKeySource } from '@lace-lib/passkey';
 
 /**

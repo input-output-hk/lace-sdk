@@ -3,7 +3,7 @@ import { BigNumber } from '@lace-lib/util';
 
 import { LOVELACE_TOKEN_ID } from '../../const';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** Tokens of one address: its value, with `rewards` added to the lovelace. */
 export const toAccountTokens = (value: Cardano.Value, rewards: bigint) => [

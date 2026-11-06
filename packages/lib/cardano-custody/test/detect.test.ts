@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Hash28ByteBase16, Hash32ByteBase16 } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16, Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 import { describe, expect, it } from 'vitest';
 
 import { CURRENT_CUSTODY_CONTRACT_VERSION, detectCustodyEffects } from '../src';

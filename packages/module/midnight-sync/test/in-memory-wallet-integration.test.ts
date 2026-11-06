@@ -1,4 +1,3 @@
-import { util } from '@cardano-sdk/key-management';
 import { AuthSecret } from '@lace-contract/authentication-prompt';
 import {
   type MidnightAccountProps,
@@ -6,6 +5,7 @@ import {
 } from '@lace-contract/midnight-context';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { WalletId } from '@lace-contract/wallet-repo';
+import { util } from '@lace-lib/cardano-key-management';
 import { ByteArray } from '@lace-lib/util';
 import { HexBytes } from '@lace-lib/util';
 import { Roles } from '@midnightntwrk/wallet-sdk-hd';

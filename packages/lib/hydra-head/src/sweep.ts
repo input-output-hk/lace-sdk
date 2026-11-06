@@ -10,7 +10,7 @@ import type {
   HydraHeadFunds,
   HydraUtxo,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * How a validator address is read: pages of `pageSize` UTxOs, at most

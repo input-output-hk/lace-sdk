@@ -1,10 +1,10 @@
-import { Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
 import { ActivityType } from '@lace-contract/activities';
 import {
   mergeVkeyWitnesses,
   verifyVkeyWitnesses,
 } from '@lace-contract/cardano-context';
+import { Serialization } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { HexBytes } from '@lace-lib/util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -55,13 +55,13 @@ import {
 import { collateral, createSponsorFake, NOW } from './custody-sponsor-fake';
 
 import type { requestCardanoCustodyBuild } from '../../src/custody/request-cardano-custody-build';
-import type { Cardano } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildError,
   CardanoCustodyBuildRequest,
 } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 
 type CardanoCustodyBuildOutcome = Awaited<
   ReturnType<typeof requestCardanoCustodyBuild>

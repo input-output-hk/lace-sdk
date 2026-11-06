@@ -12,6 +12,7 @@ import {
   PlutusV1Script,
   PlutusV2Script,
   PlutusV3Script,
+  PlutusV4Script,
 } from '../Scripts';
 
 import { BootstrapWitness } from './BootstrapWitness';
@@ -27,6 +28,7 @@ type CddlScripts = {
   plutusV1?: CborSet<ReturnType<PlutusV1Script['toCore']>, PlutusV1Script>;
   plutusV2?: CborSet<ReturnType<PlutusV2Script['toCore']>, PlutusV2Script>;
   plutusV3?: CborSet<ReturnType<PlutusV3Script['toCore']>, PlutusV3Script>;
+  plutusV4?: CborSet<ReturnType<PlutusV4Script['toCore']>, PlutusV4Script>;
 };
 
 /**
@@ -60,6 +62,9 @@ export class TransactionWitnessSet {
   #plutusV3Scripts:
     | CborSet<ReturnType<PlutusV3Script['toCore']>, PlutusV3Script>
     | undefined;
+  #plutusV4Scripts:
+    | CborSet<ReturnType<PlutusV4Script['toCore']>, PlutusV4Script>
+    | undefined;
   #originalBytes: HexBlob | undefined = undefined;
 
   /**
@@ -82,6 +87,7 @@ export class TransactionWitnessSet {
     //   , ? 5: redeemers
     //   , ? 6: nonempty_set<plutus_v2_script>
     //   , ? 7: nonempty_set<plutus_v3_script>
+    //   , ? 8: nonempty_set<plutus_v4_script>
     //   }
     //
     // redeemers =
@@ -165,11 +171,23 @@ export class TransactionWitnessSet {
       );
     }
 
+    if (
+      this.#plutusV4Scripts !== undefined &&
+      this.#plutusV4Scripts.size() > 0
+    ) {
+      writer.writeInt(8n);
+      writer.writeEncodedValue(
+        Buffer.from(this.#plutusV4Scripts.toCbor(), 'hex'),
+      );
+    }
+
     return writer.encodeAsHex();
   }
 
   /**
    * Deserializes the TransactionWitnessSet from a CBOR byte array.
+   *
+   * A map key may appear only once.
    *
    * @param cbor The CBOR encoded TransactionWitnessSet object.
    * @param options Deserialization options. When `strict` is true, throws on unknown map keys
@@ -183,11 +201,20 @@ export class TransactionWitnessSet {
     const reader = new CborReader(cbor);
 
     const witness = new TransactionWitnessSet();
+    const seenKeys = new Set<bigint>();
 
     reader.readStartMap();
 
     while (reader.peekState() !== CborReaderState.EndMap) {
       const key = reader.readInt();
+
+      if (seenKeys.has(key))
+        throw new SerializationError(
+          SerializationFailure.InvalidType,
+          `Duplicate transaction witness set map key: ${key}`,
+        );
+
+      seenKeys.add(key);
 
       switch (key) {
         case 0n:
@@ -252,6 +279,14 @@ export class TransactionWitnessSet {
             ),
           );
           break;
+        case 8n:
+          witness.setPlutusV4Scripts(
+            CborSet.fromCbor(
+              HexBlob.fromBytes(reader.readEncodedValue()),
+              PlutusV4Script.fromCbor,
+            ),
+          );
+          break;
         default:
           if (options?.strict)
             throw new SerializationError(
@@ -313,6 +348,7 @@ export class TransactionWitnessSet {
       if (scripts.plutusV1) witness.setPlutusV1Scripts(scripts.plutusV1);
       if (scripts.plutusV2) witness.setPlutusV2Scripts(scripts.plutusV2);
       if (scripts.plutusV3) witness.setPlutusV3Scripts(scripts.plutusV3);
+      if (scripts.plutusV4) witness.setPlutusV4Scripts(scripts.plutusV4);
     }
 
     if (coreWitness.redeemers) {
@@ -513,6 +549,30 @@ export class TransactionWitnessSet {
   }
 
   /**
+   * Sets the set of plutus v4 scripts required by this transaction.
+   *
+   * @param plutusV4Scripts The set of plutus v4 scripts.
+   */
+  setPlutusV4Scripts(
+    plutusV4Scripts: CborSet<
+      ReturnType<PlutusV4Script['toCore']>,
+      PlutusV4Script
+    >,
+  ) {
+    this.#plutusV4Scripts = plutusV4Scripts;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the set of plutus v4 scripts required by this transaction.
+   *
+   * @returns The set of plutus v4 scripts.
+   */
+  plutusV4Scripts() {
+    return this.#plutusV4Scripts;
+  }
+
+  /**
    * Gets all the scripts present in this witness as Core scripts.
    *
    * @returns The list of scripts.
@@ -528,9 +588,12 @@ export class TransactionWitnessSet {
     const plutusV3 = this.#plutusV3Scripts
       ? this.#plutusV3Scripts.toCore()
       : [];
+    const plutusV4 = this.#plutusV4Scripts
+      ? this.#plutusV4Scripts.toCore()
+      : [];
     const native = this.#nativeScripts ? this.#nativeScripts.toCore() : [];
 
-    return [...plutusV1, ...plutusV2, ...plutusV3, ...native];
+    return [...plutusV1, ...plutusV2, ...plutusV3, ...plutusV4, ...native];
   }
 
   /**
@@ -540,15 +603,16 @@ export class TransactionWitnessSet {
    * @private
    */
   static #getCddlScripts(scripts: Array<Cardano.Script>): CddlScripts {
-    const [coreNative, coreV1, coreV2, coreV3] = scripts.reduce<
+    const [coreNative, coreV1, coreV2, coreV3, coreV4] = scripts.reduce<
       [
         Cardano.NativeScript[] | null,
         Cardano.PlutusScript[] | null,
         Cardano.PlutusScript[] | null,
         Cardano.PlutusScript[] | null,
+        Cardano.PlutusScript[] | null,
       ]
     >(
-      ([native, v1, v2, v3], script) => {
+      ([native, v1, v2, v3, v4], script) => {
         if (script.__type === ScriptType.Native) {
           native ? native.push(script) : (native = [script]);
         } else {
@@ -562,6 +626,9 @@ export class TransactionWitnessSet {
             case PlutusLanguageVersion.V3:
               v3 ? v3.push(script) : (v3 = [script]);
               break;
+            case PlutusLanguageVersion.V4:
+              v4 ? v4.push(script) : (v4 = [script]);
+              break;
             default:
               throw new SerializationError(
                 SerializationFailure.InvalidScriptType,
@@ -569,9 +636,9 @@ export class TransactionWitnessSet {
               );
           }
         }
-        return [native, v1, v2, v3];
+        return [native, v1, v2, v3, v4];
       },
-      [null, null, null, null],
+      [null, null, null, null, null],
     );
 
     return {
@@ -586,6 +653,9 @@ export class TransactionWitnessSet {
       }),
       ...(coreV3 && {
         plutusV3: CborSet.fromCore(coreV3, PlutusV3Script.fromCore),
+      }),
+      ...(coreV4 && {
+        plutusV4: CborSet.fromCore(coreV4, PlutusV4Script.fromCore),
       }),
     };
   }
@@ -615,6 +685,8 @@ export class TransactionWitnessSet {
     if (this.#plutusV2Scripts !== undefined && this.#plutusV2Scripts.size() > 0)
       ++mapSize;
     if (this.#plutusV3Scripts !== undefined && this.#plutusV3Scripts.size() > 0)
+      ++mapSize;
+    if (this.#plutusV4Scripts !== undefined && this.#plutusV4Scripts.size() > 0)
       ++mapSize;
 
     return mapSize;

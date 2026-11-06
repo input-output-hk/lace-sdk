@@ -6,7 +6,6 @@ import { buildCustodyGrantSpend } from './custody-grant-spend';
 import { buildCustodyOwnerOperation } from './custody-owner-operations';
 
 import type { CustodyAccountSnapshot } from './custody-account';
-import type { Cardano, EraSummary } from '@cardano-sdk/core';
 import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildRequest,
@@ -14,6 +13,8 @@ import type {
   CardanoProvider,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano, EraSummary } from '@lace-lib/cardano-core';
+import type { Logger } from 'ts-log';
 
 /** Where a custody build reads the store and the chain. */
 interface CustodyBuildSources {
@@ -23,6 +24,8 @@ interface CustodyBuildSources {
   readonly provider: CardanoProvider;
   /** POSIX milliseconds of the build. */
   readonly now: number;
+  /** Receives the transaction builder's warnings. */
+  readonly logger?: Logger;
 }
 
 const ACCOUNT_OPERATION_TYPES: ReadonlySet<string> = new Set<

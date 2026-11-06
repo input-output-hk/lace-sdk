@@ -1,5 +1,5 @@
 // only tested in ../e2e tests
-import { contextLogger, isNotNil } from '@cardano-sdk/util';
+import { contextLogger, isNotNil } from '@lace-lib/cardano-util';
 import { retryBackoff } from 'backoff-rxjs';
 import {
   BehaviorSubject,

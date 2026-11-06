@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber, Err, Ok } from '@lace-lib/util';
 import { isNotFoundError } from '@lace-lib/util-provider';
 import { catchError, defer, from, map, of } from 'rxjs';
@@ -6,13 +6,13 @@ import { catchError, defer, from, map, of } from 'rxjs';
 import { BlockfrostProvider } from '../blockfrost-provider';
 
 import type { Responses } from '@blockfrost/blockfrost-js';
-import type { ProviderError } from '@cardano-sdk/core';
 import type {
   GetAccountRewardsProps,
   GetRewardAccountInfoProps,
   Reward,
   RewardAccountInfo,
 } from '@lace-contract/cardano-context';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Observable } from 'rxjs';

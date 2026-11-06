@@ -1,9 +1,9 @@
 import { UtxoCacheKey } from '../../value-objects';
 
 import type { AccountUtxoEntry, CardanoContextSliceState } from '../slice';
-import type { Cardano } from '@cardano-sdk/core';
 import type { PersistedState } from '@lace-contract/module';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Serializable } from '@lace-lib/util-store';
 import type { PersistedState as ReduxPersistedState } from 'redux-persist';
 

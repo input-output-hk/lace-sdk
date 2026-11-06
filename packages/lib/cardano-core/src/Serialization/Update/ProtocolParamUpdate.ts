@@ -1,6 +1,7 @@
 import { HexBlob, InvalidArgumentError } from '@lace-lib/cardano-util';
 
 import { EpochNo } from '../../Cardano/types/Block';
+import { SerializationError, SerializationFailure } from '../../errors';
 import { CborReader, CborReaderState, CborWriter } from '../CBOR';
 import { ExUnits, ProtocolVersion, UnitInterval } from '../Common';
 
@@ -10,8 +11,10 @@ import { ExUnitPrices } from './ExUnitPrices';
 import { PoolVotingThresholds } from './PoolVotingThresholds';
 
 import type * as Cardano from '../../Cardano';
+import type { DeserializationOptions } from '../Common';
 
 const MAX_WORD32 = 4_294_967_295;
+const MAX_WORD16 = 65_535;
 
 const assertUint32 = (argName: string, value: number): void => {
   if (!Number.isInteger(value) || value < 0 || value > MAX_WORD32)
@@ -29,12 +32,83 @@ const assertPositiveWord32 = (argName: string, value: number): void => {
     );
 };
 
+/**
+ * Asserts that a value fits in an unsigned 16 bit integer.
+ *
+ * @param argName The name of the argument, used in the error.
+ * @param value The value to check.
+ */
+const assertUint16 = (argName: string, value: number): void => {
+  if (!Number.isInteger(value) || value < 0 || value > MAX_WORD16)
+    throw new InvalidArgumentError(
+      argName,
+      `Expected an integer between 0 and ${MAX_WORD16}, but got ${value}`,
+    );
+};
+
 const assertPositiveInterval = (argName: string, value: UnitInterval): void => {
   if (value.numerator() < 1n || value.denominator() < 1n)
     throw new InvalidArgumentError(
       argName,
       `Expected a positive interval, but got ${value.numerator()}/${value.denominator()}`,
     );
+};
+
+/**
+ * Reads a rational that must be greater than zero.
+ *
+ * @param reader The CBOR reader positioned at the value.
+ * @param argName The name of the parameter, used in the error.
+ * @returns The value read.
+ */
+const readPositiveInterval = (
+  reader: CborReader,
+  argName: string,
+): UnitInterval => {
+  const value = UnitInterval.fromCbor(
+    HexBlob.fromBytes(reader.readEncodedValue()),
+  );
+  assertPositiveInterval(argName, value);
+  return value;
+};
+
+/**
+ * Reads an integer that must fit in an unsigned 32 bit integer.
+ *
+ * @param reader The CBOR reader positioned at the value.
+ * @param argName The name of the parameter, used in the error.
+ * @returns The value read.
+ */
+const readUint32 = (reader: CborReader, argName: string): number => {
+  const value = Number(reader.readInt());
+  assertUint32(argName, value);
+  return value;
+};
+
+/**
+ * Reads an integer that must fit in an unsigned 32 bit integer and be greater than zero.
+ *
+ * @param reader The CBOR reader positioned at the value.
+ * @param argName The name of the parameter, used in the error.
+ * @returns The value read.
+ */
+const readPositiveWord32 = (reader: CborReader, argName: string): number => {
+  const value = Number(reader.readInt());
+  assertPositiveWord32(argName, value);
+  return value;
+};
+
+/**
+ * Reads an integer that must fit in an unsigned 16 bit integer.
+ *
+ * @param reader The CBOR reader positioned at the value.
+ * @param argName The name of the parameter, used in the error.
+ * @returns The value read.
+ */
+const readUint16 = (reader: CborReader, argName: string): number => {
+  const value = Number(reader.readInt());
+  assertUint16(argName, value);
+  return value;
 };
 
 /**
@@ -80,6 +154,25 @@ export class ProtocolParamUpdate {
   #maxRefScriptSizePerTx: number | undefined;
   #refScriptCostStride: number | undefined;
   #refScriptCostMultiplier: UnitInterval | undefined;
+  #maxPledgeLeverage: UnitInterval | null | undefined;
+  #minPoolMargin: UnitInterval | undefined;
+  #leiosAnnouncementPeriodLength: number | undefined;
+  #leiosVotePeriodLength: number | undefined;
+  #leiosDiffusionPeriodLength: number | undefined;
+  #leiosCommitteeSize: number | undefined;
+  #leiosQuorumStakeThreshold: UnitInterval | undefined;
+  #maxEndorserBlockReferencesSize: number | undefined;
+  #maxEndorserBlockTxsSize: number | undefined;
+  #maxEndorserBlockExUnits: ExUnits | undefined;
+  #maxRefScriptSizePerEndorserBlock: number | undefined;
+  #perasMinCandidateBlockAge: number | undefined;
+  #perasHealingFactor: UnitInterval | undefined;
+  #perasCertBoost: number | undefined;
+  #perasTargetCommitteeSize: number | undefined;
+  #perasBootstrapRound: number | null | undefined;
+  #perasQuorumThresholdSafetyMargin: UnitInterval | undefined;
+  #refInputsCostPerMultiAssetPolicy: Cardano.Lovelace | undefined;
+  #refInputsCostPerDatumByte: Cardano.Lovelace | undefined;
   #originalBytes: HexBlob | undefined = undefined;
 
   /**
@@ -129,6 +222,25 @@ export class ProtocolParamUpdate {
     //   , ? 35: uint .size 4           ; max refScript size per tx
     //   , ? 36: positive_word32        ; refScript cost stride
     //   , ? 37: positive_interval      ; refScript cost multiplier
+    //   , ? 38: max_pledge_leverage    ; max pledge leverage
+    //   , ? 39: unit_interval          ; min pool margin
+    //   , ? 40: uint .size 4           ; leios announcement period length in ms
+    //   , ? 41: uint .size 4           ; leios vote period length in ms
+    //   , ? 42: uint .size 4           ; leios diffusion period length in ms
+    //   , ? 43: uint .size 2           ; leios committee size
+    //   , ? 44: unit_interval          ; leios quorum stake threshold
+    //   , ? 45: uint .size 4           ; max endorser block references size
+    //   , ? 46: uint .size 4           ; max endorser block txs size
+    //   , ? 47: ex_units               ; max endorser block ex units
+    //   , ? 48: uint .size 4           ; max ref script size per endorser block
+    //   , ? 49: uint .size 4           ; peras minimum candidate block age in slots
+    //   , ? 50: positive_interval      ; peras healing factor
+    //   , ? 51: uint .size 2           ; peras certificate boost
+    //   , ? 52: uint .size 2           ; peras target committee size
+    //   , ? 53: nil / uint .size 4     ; peras bootstrap round
+    //   , ? 54: unit_interval          ; peras quorum threshold safety margin
+    //   , ? 55: coin                   ; minfee per multi-asset policy id in reference inputs
+    //   , ? 56: coin                   ; minfee per datum byte in reference inputs
     //   }
     writer.writeStartMap(this.#getMapSize());
 
@@ -352,23 +464,183 @@ export class ProtocolParamUpdate {
       );
     }
 
+    if (this.#maxPledgeLeverage !== undefined) {
+      writer.writeInt(38n);
+      if (this.#maxPledgeLeverage === null) {
+        writer.writeNull();
+      } else {
+        writer.writeEncodedValue(
+          Buffer.from(this.#maxPledgeLeverage.toCbor(), 'hex'),
+        );
+      }
+    }
+
+    if (this.#minPoolMargin !== undefined) {
+      writer.writeInt(39n);
+      writer.writeEncodedValue(
+        Buffer.from(this.#minPoolMargin.toCbor(), 'hex'),
+      );
+    }
+
+    if (this.#leiosAnnouncementPeriodLength !== undefined) {
+      assertUint32(
+        'leiosAnnouncementPeriodLength',
+        this.#leiosAnnouncementPeriodLength,
+      );
+      writer.writeInt(40n);
+      writer.writeInt(this.#leiosAnnouncementPeriodLength);
+    }
+
+    if (this.#leiosVotePeriodLength !== undefined) {
+      assertUint32('leiosVotePeriodLength', this.#leiosVotePeriodLength);
+      writer.writeInt(41n);
+      writer.writeInt(this.#leiosVotePeriodLength);
+    }
+
+    if (this.#leiosDiffusionPeriodLength !== undefined) {
+      assertUint32(
+        'leiosDiffusionPeriodLength',
+        this.#leiosDiffusionPeriodLength,
+      );
+      writer.writeInt(42n);
+      writer.writeInt(this.#leiosDiffusionPeriodLength);
+    }
+
+    if (this.#leiosCommitteeSize !== undefined) {
+      assertUint16('leiosCommitteeSize', this.#leiosCommitteeSize);
+      writer.writeInt(43n);
+      writer.writeInt(this.#leiosCommitteeSize);
+    }
+
+    if (this.#leiosQuorumStakeThreshold !== undefined) {
+      writer.writeInt(44n);
+      writer.writeEncodedValue(
+        Buffer.from(this.#leiosQuorumStakeThreshold.toCbor(), 'hex'),
+      );
+    }
+
+    if (this.#maxEndorserBlockReferencesSize !== undefined) {
+      assertUint32(
+        'maxEndorserBlockReferencesSize',
+        this.#maxEndorserBlockReferencesSize,
+      );
+      writer.writeInt(45n);
+      writer.writeInt(this.#maxEndorserBlockReferencesSize);
+    }
+
+    if (this.#maxEndorserBlockTxsSize !== undefined) {
+      assertUint32('maxEndorserBlockTxsSize', this.#maxEndorserBlockTxsSize);
+      writer.writeInt(46n);
+      writer.writeInt(this.#maxEndorserBlockTxsSize);
+    }
+
+    if (this.#maxEndorserBlockExUnits !== undefined) {
+      writer.writeInt(47n);
+      writer.writeEncodedValue(
+        Buffer.from(this.#maxEndorserBlockExUnits.toCbor(), 'hex'),
+      );
+    }
+
+    if (this.#maxRefScriptSizePerEndorserBlock !== undefined) {
+      assertUint32(
+        'maxRefScriptSizePerEndorserBlock',
+        this.#maxRefScriptSizePerEndorserBlock,
+      );
+      writer.writeInt(48n);
+      writer.writeInt(this.#maxRefScriptSizePerEndorserBlock);
+    }
+
+    if (this.#perasMinCandidateBlockAge !== undefined) {
+      assertUint32(
+        'perasMinCandidateBlockAge',
+        this.#perasMinCandidateBlockAge,
+      );
+      writer.writeInt(49n);
+      writer.writeInt(this.#perasMinCandidateBlockAge);
+    }
+
+    if (this.#perasHealingFactor !== undefined) {
+      assertPositiveInterval('perasHealingFactor', this.#perasHealingFactor);
+      writer.writeInt(50n);
+      writer.writeEncodedValue(
+        Buffer.from(this.#perasHealingFactor.toCbor(), 'hex'),
+      );
+    }
+
+    if (this.#perasCertBoost !== undefined) {
+      assertUint16('perasCertBoost', this.#perasCertBoost);
+      writer.writeInt(51n);
+      writer.writeInt(this.#perasCertBoost);
+    }
+
+    if (this.#perasTargetCommitteeSize !== undefined) {
+      assertUint16('perasTargetCommitteeSize', this.#perasTargetCommitteeSize);
+      writer.writeInt(52n);
+      writer.writeInt(this.#perasTargetCommitteeSize);
+    }
+
+    if (this.#perasBootstrapRound === null) {
+      writer.writeInt(53n);
+      writer.writeNull();
+    } else if (this.#perasBootstrapRound !== undefined) {
+      assertUint32('perasBootstrapRound', this.#perasBootstrapRound);
+      writer.writeInt(53n);
+      writer.writeInt(this.#perasBootstrapRound);
+    }
+
+    if (this.#perasQuorumThresholdSafetyMargin !== undefined) {
+      writer.writeInt(54n);
+      writer.writeEncodedValue(
+        Buffer.from(this.#perasQuorumThresholdSafetyMargin.toCbor(), 'hex'),
+      );
+    }
+
+    if (this.#refInputsCostPerMultiAssetPolicy !== undefined) {
+      writer.writeInt(55n);
+      writer.writeInt(this.#refInputsCostPerMultiAssetPolicy);
+    }
+
+    if (this.#refInputsCostPerDatumByte !== undefined) {
+      writer.writeInt(56n);
+      writer.writeInt(this.#refInputsCostPerDatumByte);
+    }
+
     return writer.encodeAsHex();
   }
 
   /**
    * Deserializes the ProtocolParamUpdate from a CBOR byte array.
    *
+   * The integer parameters introduced in the Dijkstra era must fit in their 16 or 32 bit size,
+   * and the reference script cost stride must also be greater than zero, as must the reference
+   * script cost multiplier and the Peras healing factor. A key may appear only once, and unknown
+   * keys are skipped unless `strict` is set.
+   *
    * @param cbor The CBOR encoded ProtocolParamUpdate object.
+   * @param options Deserialization options. When `strict` is true, throws on unknown map keys
+   * and forwards the options to the protocol version decoding.
    * @returns The new ProtocolParamUpdate instance.
    */
-  static fromCbor(cbor: HexBlob): ProtocolParamUpdate {
+  static fromCbor(
+    cbor: HexBlob,
+    options?: DeserializationOptions,
+  ): ProtocolParamUpdate {
     const reader = new CborReader(cbor);
     const params = new ProtocolParamUpdate();
+    const seenKeys = new Set<bigint>();
 
     reader.readStartMap();
 
     while (reader.peekState() !== CborReaderState.EndMap) {
       const key = reader.readInt();
+
+      if (seenKeys.has(key))
+        throw new SerializationError(
+          SerializationFailure.InvalidType,
+          `Duplicate protocol parameter update map key: ${key}`,
+        );
+
+      seenKeys.add(key);
 
       switch (key) {
         case 0n:
@@ -433,6 +705,7 @@ export class ProtocolParamUpdate {
         case 14n:
           params.#protocolVersion = ProtocolVersion.fromCbor(
             HexBlob.fromBytes(reader.readEncodedValue()),
+            options,
           );
           break;
         case 16n:
@@ -504,19 +777,144 @@ export class ProtocolParamUpdate {
           );
           break;
         case 34n:
-          params.#maxRefScriptSizePerBlock = Number(reader.readInt());
+          params.#maxRefScriptSizePerBlock = readUint32(
+            reader,
+            'maxRefScriptSizePerBlock',
+          );
           break;
         case 35n:
-          params.#maxRefScriptSizePerTx = Number(reader.readInt());
+          params.#maxRefScriptSizePerTx = readUint32(
+            reader,
+            'maxRefScriptSizePerTx',
+          );
           break;
         case 36n:
-          params.#refScriptCostStride = Number(reader.readInt());
+          params.#refScriptCostStride = readPositiveWord32(
+            reader,
+            'refScriptCostStride',
+          );
           break;
         case 37n:
-          params.#refScriptCostMultiplier = UnitInterval.fromCbor(
+          params.#refScriptCostMultiplier = readPositiveInterval(
+            reader,
+            'refScriptCostMultiplier',
+          );
+          break;
+        case 38n:
+          if (reader.peekState() === CborReaderState.Null) {
+            reader.readNull();
+            params.#maxPledgeLeverage = null;
+          } else {
+            params.#maxPledgeLeverage = UnitInterval.fromCbor(
+              HexBlob.fromBytes(reader.readEncodedValue()),
+            );
+          }
+          break;
+        case 39n:
+          params.#minPoolMargin = UnitInterval.fromCbor(
             HexBlob.fromBytes(reader.readEncodedValue()),
           );
           break;
+        case 40n:
+          params.#leiosAnnouncementPeriodLength = readUint32(
+            reader,
+            'leiosAnnouncementPeriodLength',
+          );
+          break;
+        case 41n:
+          params.#leiosVotePeriodLength = readUint32(
+            reader,
+            'leiosVotePeriodLength',
+          );
+          break;
+        case 42n:
+          params.#leiosDiffusionPeriodLength = readUint32(
+            reader,
+            'leiosDiffusionPeriodLength',
+          );
+          break;
+        case 43n:
+          params.#leiosCommitteeSize = readUint16(reader, 'leiosCommitteeSize');
+          break;
+        case 44n:
+          params.#leiosQuorumStakeThreshold = UnitInterval.fromCbor(
+            HexBlob.fromBytes(reader.readEncodedValue()),
+          );
+          break;
+        case 45n:
+          params.#maxEndorserBlockReferencesSize = readUint32(
+            reader,
+            'maxEndorserBlockReferencesSize',
+          );
+          break;
+        case 46n:
+          params.#maxEndorserBlockTxsSize = readUint32(
+            reader,
+            'maxEndorserBlockTxsSize',
+          );
+          break;
+        case 47n:
+          params.#maxEndorserBlockExUnits = ExUnits.fromCbor(
+            HexBlob.fromBytes(reader.readEncodedValue()),
+          );
+          break;
+        case 48n:
+          params.#maxRefScriptSizePerEndorserBlock = readUint32(
+            reader,
+            'maxRefScriptSizePerEndorserBlock',
+          );
+          break;
+        case 49n:
+          params.#perasMinCandidateBlockAge = readUint32(
+            reader,
+            'perasMinCandidateBlockAge',
+          );
+          break;
+        case 50n:
+          params.#perasHealingFactor = readPositiveInterval(
+            reader,
+            'perasHealingFactor',
+          );
+          break;
+        case 51n:
+          params.#perasCertBoost = readUint16(reader, 'perasCertBoost');
+          break;
+        case 52n:
+          params.#perasTargetCommitteeSize = readUint16(
+            reader,
+            'perasTargetCommitteeSize',
+          );
+          break;
+        case 53n:
+          if (reader.peekState() === CborReaderState.Null) {
+            reader.readNull();
+            params.#perasBootstrapRound = null;
+          } else {
+            params.#perasBootstrapRound = readUint32(
+              reader,
+              'perasBootstrapRound',
+            );
+          }
+          break;
+        case 54n:
+          params.#perasQuorumThresholdSafetyMargin = UnitInterval.fromCbor(
+            HexBlob.fromBytes(reader.readEncodedValue()),
+          );
+          break;
+        case 55n:
+          params.#refInputsCostPerMultiAssetPolicy = reader.readInt();
+          break;
+        case 56n:
+          params.#refInputsCostPerDatumByte = reader.readInt();
+          break;
+        default:
+          if (options?.strict)
+            throw new SerializationError(
+              SerializationFailure.UnknownField,
+              `Unknown protocol parameter update map key: ${key}`,
+            );
+
+          reader.skipValue();
       }
     }
 
@@ -529,6 +927,14 @@ export class ProtocolParamUpdate {
 
   /**
    * Creates a Core ProtocolParamUpdate object from the current ProtocolParamUpdate object.
+   *
+   * The extra entropy (key 13) is set to an empty string for the neutral nonce (encoded as [0])
+   * and to the hex of the hash for a seed (encoded as [1, hash]). fromCore rebuilds both forms,
+   * and toCbor returns the decoded bytes until a setter is called.
+   *
+   * Rational parameters become decimal text. fromCore converts real parameters and simple fractions
+   * back to the same value in lowest terms, approximates a rational with a large numerator or
+   * denominator, and throws a RangeError when the approximation does not fit 64 bits.
    *
    * @returns The Core ProtocolParamUpdate object.
    */
@@ -556,12 +962,27 @@ export class ProtocolParamUpdate {
         this.#governanceActionValidityPeriod !== undefined
           ? EpochNo(this.#governanceActionValidityPeriod)
           : undefined,
+      leiosAnnouncementPeriodLength: this.#leiosAnnouncementPeriodLength,
+      leiosCommitteeSize: this.#leiosCommitteeSize,
+      leiosDiffusionPeriodLength: this.#leiosDiffusionPeriodLength,
+      leiosQuorumStakeThreshold: this.#leiosQuorumStakeThreshold
+        ?.toFloat()
+        .toString(),
+      leiosVotePeriodLength: this.#leiosVotePeriodLength,
       maxBlockBodySize: this.#maxBlockBodySize,
       maxBlockHeaderSize: this.#maxBlockHeaderSize,
       maxCollateralInputs: this.#maxCollateralInputs,
+      maxEndorserBlockExecutionUnits: this.#maxEndorserBlockExUnits?.toCore(),
+      maxEndorserBlockReferencesSize: this.#maxEndorserBlockReferencesSize,
+      maxEndorserBlockTxsSize: this.#maxEndorserBlockTxsSize,
       maxExecutionUnitsPerBlock: this.#maxBlockExUnits?.toCore(),
       maxExecutionUnitsPerTransaction: this.#maxTxExUnits?.toCore(),
+      maxPledgeLeverage:
+        this.#maxPledgeLeverage === null
+          ? null
+          : this.#maxPledgeLeverage?.toFloat().toString(),
       maxRefScriptSizePerBlock: this.#maxRefScriptSizePerBlock,
+      maxRefScriptSizePerEndorserBlock: this.#maxRefScriptSizePerEndorserBlock,
       maxRefScriptSizePerTx: this.#maxRefScriptSizePerTx,
       maxTxSize:
         this.#maxTxSize !== undefined ? Number(this.#maxTxSize) : undefined,
@@ -576,9 +997,18 @@ export class ProtocolParamUpdate {
         : undefined,
       minPoolCost:
         this.#minPoolCost !== undefined ? Number(this.#minPoolCost) : undefined,
+      minPoolMargin: this.#minPoolMargin?.toFloat().toString(),
       monetaryExpansion: this.#expansionRate
         ? this.#expansionRate.toFloat().toString()
         : undefined,
+      perasBootstrapRound: this.#perasBootstrapRound,
+      perasCertBoost: this.#perasCertBoost,
+      perasHealingFactor: this.#perasHealingFactor?.toFloat().toString(),
+      perasMinCandidateBlockAge: this.#perasMinCandidateBlockAge,
+      perasQuorumThresholdSafetyMargin: this.#perasQuorumThresholdSafetyMargin
+        ?.toFloat()
+        .toString(),
+      perasTargetCommitteeSize: this.#perasTargetCommitteeSize,
       poolDeposit:
         this.#poolDeposit !== undefined ? Number(this.#poolDeposit) : undefined,
       poolInfluence: this.#poolPledgeInfluence
@@ -590,6 +1020,14 @@ export class ProtocolParamUpdate {
       refScriptCostMultiplier: this.#refScriptCostMultiplier
         ? this.#refScriptCostMultiplier.toFloat().toString()
         : undefined,
+      refInputsCostPerDatumByte:
+        this.#refInputsCostPerDatumByte !== undefined
+          ? Number(this.#refInputsCostPerDatumByte)
+          : undefined,
+      refInputsCostPerMultiAssetPolicy:
+        this.#refInputsCostPerMultiAssetPolicy !== undefined
+          ? Number(this.#refInputsCostPerMultiAssetPolicy)
+          : undefined,
       refScriptCostStride: this.#refScriptCostStride,
       stakeKeyDeposit:
         this.#keyDeposit !== undefined ? Number(this.#keyDeposit) : undefined,
@@ -700,6 +1138,59 @@ export class ProtocolParamUpdate {
     params.#refScriptCostMultiplier = parametersUpdate.refScriptCostMultiplier
       ? UnitInterval.fromFloat(Number(parametersUpdate.refScriptCostMultiplier))
       : undefined;
+    params.#maxPledgeLeverage =
+      parametersUpdate.maxPledgeLeverage === null
+        ? null
+        : parametersUpdate.maxPledgeLeverage
+        ? UnitInterval.fromFloat(Number(parametersUpdate.maxPledgeLeverage))
+        : undefined;
+    params.#minPoolMargin = parametersUpdate.minPoolMargin
+      ? UnitInterval.fromFloat(Number(parametersUpdate.minPoolMargin))
+      : undefined;
+    params.#leiosAnnouncementPeriodLength =
+      parametersUpdate.leiosAnnouncementPeriodLength;
+    params.#leiosVotePeriodLength = parametersUpdate.leiosVotePeriodLength;
+    params.#leiosDiffusionPeriodLength =
+      parametersUpdate.leiosDiffusionPeriodLength;
+    params.#leiosCommitteeSize = parametersUpdate.leiosCommitteeSize;
+    params.#leiosQuorumStakeThreshold =
+      parametersUpdate.leiosQuorumStakeThreshold
+        ? UnitInterval.fromFloat(
+            Number(parametersUpdate.leiosQuorumStakeThreshold),
+          )
+        : undefined;
+    params.#maxEndorserBlockReferencesSize =
+      parametersUpdate.maxEndorserBlockReferencesSize;
+    params.#maxEndorserBlockTxsSize = parametersUpdate.maxEndorserBlockTxsSize;
+    params.#maxEndorserBlockExUnits =
+      parametersUpdate.maxEndorserBlockExecutionUnits
+        ? ExUnits.fromCore(parametersUpdate.maxEndorserBlockExecutionUnits)
+        : undefined;
+    params.#maxRefScriptSizePerEndorserBlock =
+      parametersUpdate.maxRefScriptSizePerEndorserBlock;
+    params.#perasMinCandidateBlockAge =
+      parametersUpdate.perasMinCandidateBlockAge;
+    params.#perasHealingFactor = parametersUpdate.perasHealingFactor
+      ? UnitInterval.fromFloat(Number(parametersUpdate.perasHealingFactor))
+      : undefined;
+    params.#perasCertBoost = parametersUpdate.perasCertBoost;
+    params.#perasTargetCommitteeSize =
+      parametersUpdate.perasTargetCommitteeSize;
+    params.#perasBootstrapRound = parametersUpdate.perasBootstrapRound;
+    params.#perasQuorumThresholdSafetyMargin =
+      parametersUpdate.perasQuorumThresholdSafetyMargin
+        ? UnitInterval.fromFloat(
+            Number(parametersUpdate.perasQuorumThresholdSafetyMargin),
+          )
+        : undefined;
+    params.#refInputsCostPerMultiAssetPolicy =
+      parametersUpdate.refInputsCostPerMultiAssetPolicy !== undefined
+        ? BigInt(parametersUpdate.refInputsCostPerMultiAssetPolicy)
+        : undefined;
+    params.#refInputsCostPerDatumByte =
+      parametersUpdate.refInputsCostPerDatumByte !== undefined
+        ? BigInt(parametersUpdate.refInputsCostPerDatumByte)
+        : undefined;
 
     const { protocolVersion, extraEntropy, decentralizationParameter } =
       parametersUpdate as unknown as Cardano.ProtocolParametersUpdate;
@@ -714,7 +1205,13 @@ export class ProtocolParamUpdate {
       params.#protocolVersion = protocolVersion
         ? ProtocolVersion.fromCore(protocolVersion)
         : undefined;
-      params.#extraEntropy = extraEntropy ? HexBlob(extraEntropy) : undefined;
+      if (extraEntropy === undefined) {
+        params.#extraEntropy = undefined;
+      } else if (extraEntropy === '' || extraEntropy === 'neutral') {
+        params.#extraEntropy = '' as HexBlob;
+      } else {
+        params.#extraEntropy = HexBlob(extraEntropy);
+      }
     }
 
     return params;
@@ -1498,6 +1995,401 @@ export class ProtocolParamUpdate {
   }
 
   /**
+   * Sets the maximum pledge leverage, which limits the stake a pool is rewarded for relative to its pledge.
+   *
+   * @param maxPledgeLeverage The maximum pledge leverage as a non negative interval, or null for no leverage cap.
+   */
+  setMaxPledgeLeverage(maxPledgeLeverage: UnitInterval | null): void {
+    this.#maxPledgeLeverage = maxPledgeLeverage;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the maximum pledge leverage.
+   *
+   * @returns The maximum pledge leverage, null for no leverage cap, or undefined if not set.
+   */
+  maxPledgeLeverage(): UnitInterval | null | undefined {
+    return this.#maxPledgeLeverage;
+  }
+
+  /**
+   * Sets the minimum margin a stake pool can declare.
+   *
+   * @param minPoolMargin The minimum pool margin.
+   */
+  setMinPoolMargin(minPoolMargin: UnitInterval): void {
+    this.#minPoolMargin = minPoolMargin;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the minimum margin a stake pool can declare.
+   *
+   * @returns The minimum pool margin, or undefined if not set.
+   */
+  minPoolMargin(): UnitInterval | undefined {
+    return this.#minPoolMargin;
+  }
+
+  /**
+   * Sets the time announcement headers have to propagate through the network before Leios voting starts.
+   *
+   * @param leiosAnnouncementPeriodLength The period length in milliseconds, an unsigned 32 bit integer.
+   */
+  setLeiosAnnouncementPeriodLength(
+    leiosAnnouncementPeriodLength: number,
+  ): void {
+    assertUint32(
+      'leiosAnnouncementPeriodLength',
+      leiosAnnouncementPeriodLength,
+    );
+    this.#leiosAnnouncementPeriodLength = leiosAnnouncementPeriodLength;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Leios announcement period length.
+   *
+   * @returns The period length in milliseconds, or undefined if not set.
+   */
+  leiosAnnouncementPeriodLength(): number | undefined {
+    return this.#leiosAnnouncementPeriodLength;
+  }
+
+  /**
+   * Sets the time committee members have to vote on a Leios endorser block.
+   *
+   * @param leiosVotePeriodLength The period length in milliseconds, an unsigned 32 bit integer.
+   */
+  setLeiosVotePeriodLength(leiosVotePeriodLength: number): void {
+    assertUint32('leiosVotePeriodLength', leiosVotePeriodLength);
+    this.#leiosVotePeriodLength = leiosVotePeriodLength;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Leios vote period length.
+   *
+   * @returns The period length in milliseconds, or undefined if not set.
+   */
+  leiosVotePeriodLength(): number | undefined {
+    return this.#leiosVotePeriodLength;
+  }
+
+  /**
+   * Sets the time a certified Leios endorser block has to reach the whole network after voting.
+   *
+   * @param leiosDiffusionPeriodLength The period length in milliseconds, an unsigned 32 bit integer.
+   */
+  setLeiosDiffusionPeriodLength(leiosDiffusionPeriodLength: number): void {
+    assertUint32('leiosDiffusionPeriodLength', leiosDiffusionPeriodLength);
+    this.#leiosDiffusionPeriodLength = leiosDiffusionPeriodLength;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Leios diffusion period length.
+   *
+   * @returns The period length in milliseconds, or undefined if not set.
+   */
+  leiosDiffusionPeriodLength(): number | undefined {
+    return this.#leiosDiffusionPeriodLength;
+  }
+
+  /**
+   * Sets the number of top stake pools seated on the Leios voting committee of an epoch.
+   *
+   * @param leiosCommitteeSize The committee size, an unsigned 16 bit integer.
+   */
+  setLeiosCommitteeSize(leiosCommitteeSize: number): void {
+    assertUint16('leiosCommitteeSize', leiosCommitteeSize);
+    this.#leiosCommitteeSize = leiosCommitteeSize;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Leios committee size.
+   *
+   * @returns The committee size, or undefined if not set.
+   */
+  leiosCommitteeSize(): number | undefined {
+    return this.#leiosCommitteeSize;
+  }
+
+  /**
+   * Sets the minimum fraction of active stake the votes of a Leios certificate must represent.
+   *
+   * @param leiosQuorumStakeThreshold The quorum stake threshold.
+   */
+  setLeiosQuorumStakeThreshold(leiosQuorumStakeThreshold: UnitInterval): void {
+    this.#leiosQuorumStakeThreshold = leiosQuorumStakeThreshold;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Leios quorum stake threshold.
+   *
+   * @returns The quorum stake threshold, or undefined if not set.
+   */
+  leiosQuorumStakeThreshold(): UnitInterval | undefined {
+    return this.#leiosQuorumStakeThreshold;
+  }
+
+  /**
+   * Sets the maximum size (in bytes) of the transaction references of a Leios endorser block.
+   *
+   * @param maxEndorserBlockReferencesSize The maximum size in bytes, an unsigned 32 bit integer.
+   */
+  setMaxEndorserBlockReferencesSize(
+    maxEndorserBlockReferencesSize: number,
+  ): void {
+    assertUint32(
+      'maxEndorserBlockReferencesSize',
+      maxEndorserBlockReferencesSize,
+    );
+    this.#maxEndorserBlockReferencesSize = maxEndorserBlockReferencesSize;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the maximum size of the transaction references of a Leios endorser block.
+   *
+   * @returns The maximum size in bytes, or undefined if not set.
+   */
+  maxEndorserBlockReferencesSize(): number | undefined {
+    return this.#maxEndorserBlockReferencesSize;
+  }
+
+  /**
+   * Sets the maximum total size (in bytes) of the transactions endorsed by a Leios endorser block.
+   *
+   * @param maxEndorserBlockTxsSize The maximum size in bytes, an unsigned 32 bit integer.
+   */
+  setMaxEndorserBlockTxsSize(maxEndorserBlockTxsSize: number): void {
+    assertUint32('maxEndorserBlockTxsSize', maxEndorserBlockTxsSize);
+    this.#maxEndorserBlockTxsSize = maxEndorserBlockTxsSize;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the maximum total size of the transactions endorsed by a Leios endorser block.
+   *
+   * @returns The maximum size in bytes, or undefined if not set.
+   */
+  maxEndorserBlockTxsSize(): number | undefined {
+    return this.#maxEndorserBlockTxsSize;
+  }
+
+  /**
+   * Sets the maximum ExUnits the scripts of a Leios endorser block can consume.
+   *
+   * @param maxEndorserBlockExUnits The maximum ExUnits.
+   */
+  setMaxEndorserBlockExUnits(maxEndorserBlockExUnits: ExUnits): void {
+    this.#maxEndorserBlockExUnits = maxEndorserBlockExUnits;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the maximum ExUnits the scripts of a Leios endorser block can consume.
+   *
+   * @returns The maximum ExUnits, or undefined if not set.
+   */
+  maxEndorserBlockExUnits(): ExUnits | undefined {
+    return this.#maxEndorserBlockExUnits;
+  }
+
+  /**
+   * Sets the maximum total size (in bytes) of reference scripts a Leios endorser block can use.
+   *
+   * @param maxRefScriptSizePerEndorserBlock The maximum size in bytes, an unsigned 32 bit integer.
+   */
+  setMaxRefScriptSizePerEndorserBlock(
+    maxRefScriptSizePerEndorserBlock: number,
+  ): void {
+    assertUint32(
+      'maxRefScriptSizePerEndorserBlock',
+      maxRefScriptSizePerEndorserBlock,
+    );
+    this.#maxRefScriptSizePerEndorserBlock = maxRefScriptSizePerEndorserBlock;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the maximum total size of reference scripts a Leios endorser block can use.
+   *
+   * @returns The maximum size in bytes, or undefined if not set.
+   */
+  maxRefScriptSizePerEndorserBlock(): number | undefined {
+    return this.#maxRefScriptSizePerEndorserBlock;
+  }
+
+  /**
+   * Sets the minimum age of a block to be eligible for voting in a Peras round.
+   *
+   * @param perasMinCandidateBlockAge The minimum age in slots, an unsigned 32 bit integer.
+   */
+  setPerasMinCandidateBlockAge(perasMinCandidateBlockAge: number): void {
+    assertUint32('perasMinCandidateBlockAge', perasMinCandidateBlockAge);
+    this.#perasMinCandidateBlockAge = perasMinCandidateBlockAge;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the minimum age of a block to be eligible for voting in a Peras round.
+   *
+   * @returns The minimum age in slots, or undefined if not set.
+   */
+  perasMinCandidateBlockAge(): number | undefined {
+    return this.#perasMinCandidateBlockAge;
+  }
+
+  /**
+   * Sets the coefficient used to derive the length of a Peras cooldown period.
+   *
+   * @param perasHealingFactor The healing factor as a positive interval (numerator and denominator >= 1).
+   */
+  setPerasHealingFactor(perasHealingFactor: UnitInterval): void {
+    assertPositiveInterval('perasHealingFactor', perasHealingFactor);
+    this.#perasHealingFactor = perasHealingFactor;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Peras healing factor.
+   *
+   * @returns The healing factor, or undefined if not set.
+   */
+  perasHealingFactor(): UnitInterval | undefined {
+    return this.#perasHealingFactor;
+  }
+
+  /**
+   * Sets the extra chain weight a Peras certificate gives to the block it boosts.
+   *
+   * @param perasCertBoost The certificate boost, an unsigned 16 bit integer.
+   */
+  setPerasCertBoost(perasCertBoost: number): void {
+    assertUint16('perasCertBoost', perasCertBoost);
+    this.#perasCertBoost = perasCertBoost;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Peras certificate boost.
+   *
+   * @returns The certificate boost, or undefined if not set.
+   */
+  perasCertBoost(): number | undefined {
+    return this.#perasCertBoost;
+  }
+
+  /**
+   * Sets the target size of the Peras voting committee.
+   *
+   * @param perasTargetCommitteeSize The target committee size, an unsigned 16 bit integer.
+   */
+  setPerasTargetCommitteeSize(perasTargetCommitteeSize: number): void {
+    assertUint16('perasTargetCommitteeSize', perasTargetCommitteeSize);
+    this.#perasTargetCommitteeSize = perasTargetCommitteeSize;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the target size of the Peras voting committee.
+   *
+   * @returns The target committee size, or undefined if not set.
+   */
+  perasTargetCommitteeSize(): number | undefined {
+    return this.#perasTargetCommitteeSize;
+  }
+
+  /**
+   * Sets the Peras round used to bootstrap voting.
+   *
+   * @param perasBootstrapRound The bootstrap round, an unsigned 32 bit integer, or null for no bootstrap round.
+   */
+  setPerasBootstrapRound(perasBootstrapRound: number | null): void {
+    if (perasBootstrapRound !== null)
+      assertUint32('perasBootstrapRound', perasBootstrapRound);
+    this.#perasBootstrapRound = perasBootstrapRound;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the Peras round used to bootstrap voting.
+   *
+   * @returns The bootstrap round, null for no bootstrap round, or undefined if not set.
+   */
+  perasBootstrapRound(): number | null | undefined {
+    return this.#perasBootstrapRound;
+  }
+
+  /**
+   * Sets the safety margin added on top of the 75% Peras quorum threshold.
+   *
+   * @param perasQuorumThresholdSafetyMargin The safety margin, between 0 and 0.25.
+   */
+  setPerasQuorumThresholdSafetyMargin(
+    perasQuorumThresholdSafetyMargin: UnitInterval,
+  ): void {
+    this.#perasQuorumThresholdSafetyMargin = perasQuorumThresholdSafetyMargin;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the safety margin added on top of the Peras quorum threshold.
+   *
+   * @returns The safety margin, or undefined if not set.
+   */
+  perasQuorumThresholdSafetyMargin(): UnitInterval | undefined {
+    return this.#perasQuorumThresholdSafetyMargin;
+  }
+
+  /**
+   * Sets the fee charged for every multi-asset policy in the values of the reference inputs of a transaction.
+   *
+   * @param refInputsCostPerMultiAssetPolicy The fee per policy in lovelace.
+   */
+  setRefInputsCostPerMultiAssetPolicy(
+    refInputsCostPerMultiAssetPolicy: Cardano.Lovelace,
+  ): void {
+    this.#refInputsCostPerMultiAssetPolicy = refInputsCostPerMultiAssetPolicy;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the fee charged for every multi-asset policy in the reference inputs of a transaction.
+   *
+   * @returns The fee per policy in lovelace, or undefined if not set.
+   */
+  refInputsCostPerMultiAssetPolicy(): Cardano.Lovelace | undefined {
+    return this.#refInputsCostPerMultiAssetPolicy;
+  }
+
+  /**
+   * Sets the fee charged per datum byte in the reference inputs of a transaction.
+   *
+   * @param refInputsCostPerDatumByte The fee per byte in lovelace.
+   */
+  setRefInputsCostPerDatumByte(
+    refInputsCostPerDatumByte: Cardano.Lovelace,
+  ): void {
+    this.#refInputsCostPerDatumByte = refInputsCostPerDatumByte;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the fee charged per datum byte in the reference inputs of a transaction.
+   *
+   * @returns The fee per byte in lovelace, or undefined if not set.
+   */
+  refInputsCostPerDatumByte(): Cardano.Lovelace | undefined {
+    return this.#refInputsCostPerDatumByte;
+  }
+
+  /**
    * Gets the size of the serialized map.
    *
    * @private
@@ -1542,6 +2434,25 @@ export class ProtocolParamUpdate {
     if (this.#maxRefScriptSizePerTx !== undefined) ++mapSize;
     if (this.#refScriptCostStride !== undefined) ++mapSize;
     if (this.#refScriptCostMultiplier !== undefined) ++mapSize;
+    if (this.#maxPledgeLeverage !== undefined) ++mapSize;
+    if (this.#minPoolMargin !== undefined) ++mapSize;
+    if (this.#leiosAnnouncementPeriodLength !== undefined) ++mapSize;
+    if (this.#leiosVotePeriodLength !== undefined) ++mapSize;
+    if (this.#leiosDiffusionPeriodLength !== undefined) ++mapSize;
+    if (this.#leiosCommitteeSize !== undefined) ++mapSize;
+    if (this.#leiosQuorumStakeThreshold !== undefined) ++mapSize;
+    if (this.#maxEndorserBlockReferencesSize !== undefined) ++mapSize;
+    if (this.#maxEndorserBlockTxsSize !== undefined) ++mapSize;
+    if (this.#maxEndorserBlockExUnits !== undefined) ++mapSize;
+    if (this.#maxRefScriptSizePerEndorserBlock !== undefined) ++mapSize;
+    if (this.#perasMinCandidateBlockAge !== undefined) ++mapSize;
+    if (this.#perasHealingFactor !== undefined) ++mapSize;
+    if (this.#perasCertBoost !== undefined) ++mapSize;
+    if (this.#perasTargetCommitteeSize !== undefined) ++mapSize;
+    if (this.#perasBootstrapRound !== undefined) ++mapSize;
+    if (this.#perasQuorumThresholdSafetyMargin !== undefined) ++mapSize;
+    if (this.#refInputsCostPerMultiAssetPolicy !== undefined) ++mapSize;
+    if (this.#refInputsCostPerDatumByte !== undefined) ++mapSize;
 
     return mapSize;
   }

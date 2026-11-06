@@ -15,6 +15,7 @@ import {
   ownSignatureKeyPaths,
   validateMnemonic,
 } from './util';
+import { signingScripts } from './util/signingScripts';
 
 import type { Cip8SignDataContext } from './cip8';
 import type {
@@ -26,9 +27,11 @@ import type {
   PassphraseEncryption,
   SerializableInMemoryKeyAgentData,
   SignBlobResult,
+  SignSubTransactionOptions,
   SignTransactionContext,
   SignTransactionOptions,
 } from './types';
+import type { SignableTxBody } from './util';
 import type { Cardano, Serialization } from '@lace-lib/cardano-core';
 import type { Cip30DataSignature } from '@lace-lib/cardano-dapp-connector';
 import type { HexBlob } from '@lace-lib/cardano-util';
@@ -169,12 +172,70 @@ export class InMemoryKeyAgent extends KeyAgentBase implements KeyAgent {
 
   async signTransaction(
     txBody: Serialization.TransactionBody,
-    { txInKeyPathMap, knownAddresses, scripts }: SignTransactionContext,
+    context: SignTransactionContext,
     { additionalKeyPaths = [] }: SignTransactionOptions = {},
   ): Promise<Cardano.Signatures> {
     // Possible optimization is casting strings to OpaqueString types directly and skipping validation
     const blob = txBody.hash() as unknown as HexBlob;
-    const body = txBody.toCore();
+    return this.#signWithOwnKeys(
+      blob,
+      txBody.toCore(),
+      context,
+      context.scripts,
+      additionalKeyPaths,
+    );
+  }
+
+  /**
+   * Signs the id of a sub transaction, the hash of its body, with the own
+   * keys its body needs and the keys required by the native scripts in its
+   * witness set or the context. Native scripts read from reference inputs
+   * are not seen; callers pass them through `context.scripts`. Its bytes
+   * stay as they were.
+   *
+   * @param subTransaction The sub transaction to sign.
+   * @param context The signing context.
+   * @param options Additional key paths to sign with.
+   * @returns The signatures by public key.
+   */
+  async signSubTransaction(
+    subTransaction: Serialization.SubTransaction,
+    context: SignTransactionContext,
+    { additionalKeyPaths = [] }: SignSubTransactionOptions = {},
+  ): Promise<Cardano.Signatures> {
+    const blob = subTransaction.getId() as unknown as HexBlob;
+    const { body, witness } = subTransaction.toCore();
+    return this.#signWithOwnKeys(
+      blob,
+      body,
+      context,
+      signingScripts(context.scripts, witness.scripts),
+      additionalKeyPaths,
+    );
+  }
+
+  /**
+   * Signs a blob with every own key a transaction or sub transaction body
+   * needs and with the additional key paths.
+   *
+   * @param blob The id to sign.
+   * @param body The body whose own signers are looked up.
+   * @param context The signing context.
+   * @param scripts The native scripts whose required keys are looked up.
+   * @param additionalKeyPaths Key paths to sign with besides the body's.
+   * @returns The signatures by public key.
+   */
+  async #signWithOwnKeys(
+    blob: HexBlob,
+    body: SignableTxBody,
+    {
+      txInKeyPathMap,
+      knownAddresses,
+      spentOutputAddresses,
+    }: SignTransactionContext,
+    scripts: Cardano.Script[] | undefined,
+    additionalKeyPaths: AccountKeyDerivationPath[],
+  ): Promise<Cardano.Signatures> {
     const dRepKeyHash = (
       await Crypto.Ed25519PublicKey.fromHex(
         await this.derivePublicKey(DREP_KEY_DERIVATION_PATH),
@@ -186,6 +247,7 @@ export class InMemoryKeyAgent extends KeyAgentBase implements KeyAgent {
       txInKeyPathMap,
       dRepKeyHash,
       scripts,
+      spentOutputAddresses,
     );
     const keyPaths = uniqBy(
       [...derivationPaths, ...additionalKeyPaths],

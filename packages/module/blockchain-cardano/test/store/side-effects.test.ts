@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
 import { CardanoNetworkId } from '@lace-contract/cardano-context';
 import { networkActions } from '@lace-contract/network';
+import { Cardano } from '@lace-lib/cardano-core';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { describe, expect, it } from 'vitest';
 

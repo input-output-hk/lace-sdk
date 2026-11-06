@@ -1,10 +1,10 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import {
   CardanoAccountId,
   CardanoCustodyWalletId,
   verifyVkeyWitnesses,
 } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CARDANO_CUSTODY_LOGIC_HASH } from '../../src/custody/cardano-custody-contract';

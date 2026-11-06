@@ -1,10 +1,10 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   Bip32PublicKeyHex,
   Ed25519KeyHashHex,
   Hash28ByteBase16,
-} from '@cardano-sdk/crypto';
-import { AccountId } from '@lace-contract/wallet-repo';
+} from '@lace-lib/cardano-crypto';
 import { ACCOUNT_VALIDATOR_HASH } from '@lace-lib/cardano-custody';
 import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';

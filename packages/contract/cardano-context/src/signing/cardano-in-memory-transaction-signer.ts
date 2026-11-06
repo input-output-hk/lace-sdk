@@ -1,5 +1,5 @@
-import { Serialization } from '@cardano-sdk/core';
 import { AuthenticationCancelledError } from '@lace-contract/signer';
+import { Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { from, switchMap, throwError } from 'rxjs';
 
@@ -11,9 +11,9 @@ import type {
   CardanoSignResult,
   CardanoTransactionSigner,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type { SignerAuth } from '@lace-contract/signer';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { Observable } from 'rxjs';
 
 /**

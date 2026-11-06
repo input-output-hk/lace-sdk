@@ -63,7 +63,7 @@ module.exports = {
     // (@noble/* untranspiled ESM). Components only use its react-i18next
     // re-exports; delegate to the (mocked) react-i18next instead.
     '^@lace-contract/i18n$': '<rootDir>/perf/mocks/laceContractI18n.js',
-    // @lace-lib/vendor is the crypto/HD seam (@cardano-sdk, bitcoinjs-lib,
+    // @lace-lib/vendor is the crypto/HD seam (the Cardano SDK, bitcoinjs-lib,
     // @scure/bip32, @midnightntwrk/wallet-sdk-hd, air-gapped codecs) reached
     // transitively through the legacy contract barrels (e.g.
     // AccountSecurityAlertChip → @lace-contract/cardano-context → … → core

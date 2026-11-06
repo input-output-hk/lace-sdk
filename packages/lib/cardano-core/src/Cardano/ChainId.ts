@@ -22,6 +22,7 @@ export enum NetworkMagics {
   Preprod = 1,
   Preview = 2,
   Sanchonet = 4,
+  Musashi = 164,
 }
 
 /** Tuple of values designed to uniquely identify a network in the Cardano blockchain. */
@@ -47,5 +48,9 @@ export const ChainIds = {
   Sanchonet: {
     networkId: NetworkId.Testnet,
     networkMagic: NetworkMagics.Sanchonet,
+  },
+  Musashi: {
+    networkId: NetworkId.Testnet,
+    networkMagic: NetworkMagics.Musashi,
   },
 };

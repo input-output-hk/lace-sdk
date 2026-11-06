@@ -1,7 +1,7 @@
-import { Asset, Cardano } from '@cardano-sdk/core';
-import { logger } from '@cardano-sdk/util-dev';
 import { CARDANO_TOKEN_METADATA_SCHEMA_VERSION } from '@lace-contract/cardano-context';
+import { Asset, Cardano } from '@lace-lib/cardano-core';
 import { toContractTokenMetadata } from '@lace-lib/cardano-provider-core';
+import { logger } from '@lace-lib/cardano-util-dev';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { BlockfrostAssetProvider } from '../../../src/blockfrost';

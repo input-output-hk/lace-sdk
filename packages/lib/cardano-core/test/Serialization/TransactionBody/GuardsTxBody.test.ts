@@ -215,6 +215,35 @@ describe('TransactionBody guards (key 14)', () => {
     });
   });
 
+  describe('repeated key hashes', () => {
+    const repeatedKeyHashBodyCbor = HexBlob(
+      `${bodyPrefix}0e82581c${keyHash}581c${keyHash}`,
+    );
+
+    it('keeps a repeated key hash and re-encodes byte-exact by default', () => {
+      const body = TransactionBody.fromCbor(repeatedKeyHashBodyCbor);
+
+      expect(body.requiredSigners()?.toCore()).toEqual([keyHash, keyHash]);
+      expect(body.toCbor()).toEqual(repeatedKeyHashBodyCbor);
+    });
+
+    it('rejects a repeated key hash when strict', () => {
+      expect(() =>
+        TransactionBody.fromCbor(repeatedKeyHashBodyCbor, { strict: true }),
+      ).toThrow(
+        'guards (transaction body key 14) must not contain duplicate key hashes',
+      );
+    });
+
+    it('accepts distinct key hashes when strict', () => {
+      expect(
+        TransactionBody.fromCbor(keyHashFormBodyCbor, {
+          strict: true,
+        }).toCbor(),
+      ).toEqual(keyHashFormBodyCbor);
+    });
+  });
+
   describe('pre-Conway empty required_signers', () => {
     it('decodes an empty key 14 set, re-encodes byte-exact and yields empty requiredExtraSignatures', () => {
       const emptyBodyCbor = HexBlob(`${bodyPrefix}0e80`);

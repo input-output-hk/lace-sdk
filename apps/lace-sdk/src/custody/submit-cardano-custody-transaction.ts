@@ -1,5 +1,5 @@
-import { Serialization } from '@cardano-sdk/core';
 import { derivePendingActivityFromCbor } from '@lace-contract/cardano-context';
+import { Serialization } from '@lace-lib/cardano-core';
 import { Err, Ok } from '@lace-lib/util';
 import { TimeoutError } from 'rxjs';
 
@@ -12,13 +12,13 @@ import {
 } from './cardano-custody-stale-answers';
 
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
-import type { Cardano } from '@cardano-sdk/core';
 import type {
   CardanoCustodyActivityMetadata,
   CardanoCustodyOperationKind,
   CardanoPaymentAddress,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { HexBytes, Result } from '@lace-lib/util';
 
 /** A custody transaction the provider accepted. */

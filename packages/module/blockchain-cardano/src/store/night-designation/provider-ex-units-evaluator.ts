@@ -1,14 +1,14 @@
-import { Serialization } from '@cardano-sdk/core';
+import { serializeTransaction } from '@lace-lib/cardano-tx-builder';
 import { firstValueFrom } from 'rxjs';
 
 import { boundedExUnitsEvaluator } from './bounded-ex-units-evaluator';
 
-import type { Cardano } from '@cardano-sdk/core';
-import type { TxEvaluator } from '@cardano-sdk/tx-construction';
 import type {
   CardanoProvider,
   RedeemerExecutionUnits,
 } from '@lace-contract/cardano-context';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
+import type { TxEvaluator } from '@lace-lib/cardano-tx-builder';
 import type { Logger } from 'ts-log';
 
 // =====================================================================
@@ -52,7 +52,9 @@ export type ProviderExUnitsEvaluatorDependencies = {
 /**
  * A {@link TxEvaluator} that prices redeemers through the Cardano provider,
  * leaving any redeemer the provider did not price on the fixed budget
- * `boundedExUnitsEvaluator` assigns it.
+ * `boundedExUnitsEvaluator` assigns it. The provider is sent the transaction
+ * the builder serialized, when given, so a batch keeps its sub transactions
+ * byte for byte.
  */
 export const createProviderExUnitsEvaluator = ({
   cardanoProvider,
@@ -61,11 +63,12 @@ export const createProviderExUnitsEvaluator = ({
 }: ProviderExUnitsEvaluatorDependencies): TxEvaluator => {
   const evaluate = async (
     tx: Cardano.Tx,
+    serializedTx?: Serialization.Transaction,
   ): Promise<RedeemerExecutionUnits[] | undefined> => {
     try {
       const result = await firstValueFrom(
         cardanoProvider.evaluateTx(
-          { tx: Serialization.Transaction.fromCore(tx).toCbor() },
+          { tx: (serializedTx ?? serializeTransaction(tx)).toCbor() },
           { chainId },
         ),
       );
@@ -84,7 +87,7 @@ export const createProviderExUnitsEvaluator = ({
   };
 
   return {
-    evaluate: async (tx, resolvedInputs) => {
+    evaluate: async (tx, resolvedInputs, serializedTx) => {
       // The bounded evaluator supplies the shape — one entry per redeemer, the
       // builder rejects a missing one — and the floor each entry keeps.
       const bounded = await boundedExUnitsEvaluator.evaluate(
@@ -93,7 +96,7 @@ export const createProviderExUnitsEvaluator = ({
       );
       if (bounded.length === 0) return bounded;
 
-      const evaluated = await evaluate(tx);
+      const evaluated = await evaluate(tx, serializedTx);
 
       return bounded.map(entry => {
         const match = evaluated?.find(

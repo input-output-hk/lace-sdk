@@ -5,6 +5,7 @@ import {
 
 import { CborReader, CborWriter } from '../CBOR';
 
+import type { DeserializationOptions } from './DeserializationOptions';
 import type * as Cardano from '../../Cardano';
 import type { HexBlob } from '@lace-lib/cardano-util';
 
@@ -68,9 +69,14 @@ export class ProtocolVersion {
    * Deserializes the ProtocolVersion from a CBOR byte array.
    *
    * @param cbor The CBOR encoded ProtocolVersion object.
+   * @param options Deserialization options. When `strict` is true, throws on a minor version
+   * that does not fit in 32 bits.
    * @returns The new ProtocolVersion instance.
    */
-  static fromCbor(cbor: HexBlob): ProtocolVersion {
+  static fromCbor(
+    cbor: HexBlob,
+    options?: DeserializationOptions,
+  ): ProtocolVersion {
     const reader = new CborReader(cbor);
 
     const length = reader.readStartArray();
@@ -82,11 +88,17 @@ export class ProtocolVersion {
       );
 
     const major = Number(reader.readInt());
-    const minor = Number(reader.readInt());
+    const minor = reader.readInt();
+
+    if (options?.strict && minor > MAX_MINOR_PROTOCOL_VERSION)
+      throw new InvalidArgumentError(
+        'cbor',
+        `Minor protocol version must be a uint of size 4 (0 to ${MAX_MINOR_PROTOCOL_VERSION}), but got ${minor}`,
+      );
 
     reader.readEndArray();
 
-    const version = new ProtocolVersion(major, minor);
+    const version = new ProtocolVersion(major, Number(minor));
     version.#originalBytes = cbor;
 
     return version;

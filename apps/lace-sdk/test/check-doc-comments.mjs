@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { docCommentProblems, readExportDocs } from '../scripts/doc-comments.ts';
+import { isLaceioCardanoFile } from '../scripts/laceio-cardano.mjs';
 import {
   channelEntries,
   compilerOptions,
@@ -22,6 +23,7 @@ const exports = readExportDocs({
   entries: [...new Set([...entries, ...stableEntries])],
   options: compilerOptions(CHANNEL),
   workspaceRoot,
+  isPublishedElsewhere: isLaceioCardanoFile,
 });
 const isEntry = files => doc =>
   files.some(file => path.relative(workspaceRoot, file) === doc.entry);

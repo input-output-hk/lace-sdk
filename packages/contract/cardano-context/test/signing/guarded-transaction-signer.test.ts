@@ -1,4 +1,4 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { HexBytes } from '@lace-lib/util';
 import { firstValueFrom, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,7 @@ import type {
   CardanoTransactionSigner,
   CardanoTransactionSignerContext,
 } from '../../src/signing/types';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 const cred = (hash: string): Cardano.Credential => ({
   type: Cardano.CredentialType.KeyHash,

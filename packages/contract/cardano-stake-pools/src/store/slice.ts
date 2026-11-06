@@ -12,8 +12,8 @@ import type {
   LaceStakePool,
   StakePoolsNetworkData,
 } from '../types';
-import type { Cardano } from '@cardano-sdk/core';
 import type { CardanoNetworkId } from '@lace-contract/cardano-context';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 export type NetworkRecord<T> = Partial<Record<CardanoNetworkId, T>>;
 

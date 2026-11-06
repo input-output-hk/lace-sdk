@@ -417,3 +417,104 @@ describe('ProtocolParamUpdate', () => {
     expect(protocolParamUpdate.toCore()).toEqual(numericFieldsSetToZeroCore);
   });
 });
+
+describe('ProtocolParamUpdate repeated and unknown map keys', () => {
+  it.each([
+    ['the minimum fee coefficient', 'a200000000', 0],
+    ['the pool pledge influence', 'a209d81e82010509d81e820105', 9],
+  ])('rejects %s when it appears twice', (_, hex, key) => {
+    expect(() => ProtocolParamUpdate.fromCbor(HexBlob(hex))).toThrow(
+      `Duplicate protocol parameter update map key: ${key}`,
+    );
+  });
+
+  it('skips an unknown key by default', () => {
+    const cbor = HexBlob('a2000a183900');
+    const params = ProtocolParamUpdate.fromCbor(cbor);
+
+    expect(params.minFeeA()).toEqual(10n);
+    expect(params.toCbor()).toEqual(cbor);
+  });
+
+  it('throws on an unknown key when strict', () => {
+    expect(() =>
+      ProtocolParamUpdate.fromCbor(HexBlob('a1183900'), { strict: true }),
+    ).toThrow('Unknown protocol parameter update map key: 57');
+  });
+});
+
+describe('ProtocolParamUpdate extra entropy', () => {
+  const neutralCbor = HexBlob('a10d8100');
+  const seedHash = '11'.repeat(32);
+  const seedCbor = HexBlob(`a10d82015820${seedHash}`);
+
+  it('keeps the neutral nonce as an empty string in the core form', () => {
+    const params = ProtocolParamUpdate.fromCbor(neutralCbor);
+
+    expect(params.extraEntropy()).toEqual('');
+    expect(params.toCbor()).toEqual(neutralCbor);
+    expect(params.toCore()).toEqual({ extraEntropy: '' });
+  });
+
+  it('keeps a seed as the hex of its hash in the core form', () => {
+    const params = ProtocolParamUpdate.fromCbor(seedCbor);
+
+    expect(params.extraEntropy()).toEqual(seedHash);
+    expect(params.toCbor()).toEqual(seedCbor);
+    expect(params.toCore()).toEqual({ extraEntropy: seedHash });
+  });
+
+  it('rebuilds the neutral nonce from its core form', () => {
+    const rebuilt = ProtocolParamUpdate.fromCore(
+      ProtocolParamUpdate.fromCbor(neutralCbor).toCore(),
+    );
+
+    expect(rebuilt.extraEntropy()).toEqual('');
+    expect(rebuilt.toCbor()).toEqual(neutralCbor);
+  });
+
+  it('rebuilds a seed from its core form', () => {
+    const rebuilt = ProtocolParamUpdate.fromCore(
+      ProtocolParamUpdate.fromCbor(seedCbor).toCore(),
+    );
+
+    expect(rebuilt.toCbor()).toEqual(seedCbor);
+  });
+
+  it('treats neutral as the neutral nonce when rebuilding from the core form', () => {
+    const core: Cardano.ProtocolParametersUpdate = { extraEntropy: 'neutral' };
+
+    expect(ProtocolParamUpdate.fromCore(core).toCbor()).toEqual(neutralCbor);
+  });
+});
+
+describe('ProtocolParamUpdate rational parameters in the core form', () => {
+  it('writes a rational as decimal text and converts it back to the exact fraction', () => {
+    const cbor = HexBlob('a10ad81e820103');
+    const core = ProtocolParamUpdate.fromCbor(cbor).toCore();
+
+    expect(core.monetaryExpansion).toEqual('0.3333333333333333');
+    expect(ProtocolParamUpdate.fromCore(core).toCbor()).toEqual(cbor);
+  });
+
+  it('converts a fraction back in lowest terms', () => {
+    const core = ProtocolParamUpdate.fromCbor(
+      HexBlob('a109d81e820f0a'),
+    ).toCore();
+
+    expect(core.poolInfluence).toEqual('1.5');
+    expect(ProtocolParamUpdate.fromCore(core).toCbor()).toEqual(
+      'a109d81e820302',
+    );
+  });
+
+  it('approximates a rational with a large numerator', () => {
+    const cbor = HexBlob('a10ad81e821b0d73913c3f2bb7951b0de0b6b3a7640000');
+    const params = ProtocolParamUpdate.fromCbor(cbor);
+
+    expect(params.toCbor()).toEqual(cbor);
+    expect(ProtocolParamUpdate.fromCore(params.toCore()).toCbor()).not.toEqual(
+      cbor,
+    );
+  });
+});

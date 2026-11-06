@@ -55,4 +55,21 @@ describe('createTxInKeyPathMap', () => {
       [TxInId(txIn(3))]: { index: 3, role: KeyRole.Internal },
     });
   });
+
+  it('maps the own inputs of a sub transaction body', async () => {
+    const body: Cardano.SubTransactionBody = {
+      inputs: [txIn(0), txIn(1)],
+      outputs: [],
+    };
+
+    const map = await util.createTxInKeyPathMap(
+      body,
+      knownAddresses,
+      inputResolver,
+    );
+
+    expect(map).toEqual({
+      [TxInId(txIn(0))]: { index: 3, role: KeyRole.Internal },
+    });
+  });
 });

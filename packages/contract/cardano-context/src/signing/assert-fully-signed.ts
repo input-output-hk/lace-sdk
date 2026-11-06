@@ -1,8 +1,7 @@
+import { getUniqueSignerKeyHashes } from '@lace-lib/cardano-tx-builder';
 import { hashEd25519PublicKey } from '@lace-lib/core';
 
-import { getUniqueSignerKeyHashes } from './getUniqueSigners';
-
-import type { Cardano, Serialization } from '@cardano-sdk/core';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
 
 /**
  * Thrown pre-submit when a signed transaction lacks a vkey witness for a key

@@ -1,4 +1,4 @@
-import { toEmpty } from '@cardano-sdk/util-rxjs';
+import { toEmpty } from '@lace-lib/cardano-util-rxjs';
 import { filter, map, merge, of, race, switchMap, take, tap } from 'rxjs';
 
 import {

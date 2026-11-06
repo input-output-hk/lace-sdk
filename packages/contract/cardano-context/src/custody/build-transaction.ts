@@ -1,11 +1,10 @@
 import type { CardanoCustodyStoredIdentity } from './identity';
-import type {
-  ExceededTransactionLimit,
-  TransactionLimitsUsage,
-} from '../tx-builder/transaction-limits';
-import type { Cardano, Serialization } from '@cardano-sdk/core';
-import type { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano, Serialization } from '@lace-lib/cardano-core';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519KeyHashHex,
+} from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountRecord,
   CustodyGrantLiveness,
@@ -15,6 +14,10 @@ import type {
   CustodySponsorRuleViolation,
   CustodyStateTransitionError,
 } from '@lace-lib/cardano-custody';
+import type {
+  ExceededTransactionLimit,
+  TransactionLimitsUsage,
+} from '@lace-lib/cardano-tx-builder';
 
 /**
  * The most lovelace a grant spend's fee may take when the operation names

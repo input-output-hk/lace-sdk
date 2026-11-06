@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Blockfrost surfaces the two special vote-delegation targets as these sentinel

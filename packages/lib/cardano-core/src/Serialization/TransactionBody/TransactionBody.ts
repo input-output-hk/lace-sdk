@@ -7,25 +7,34 @@ import { SerializationError, SerializationFailure } from '../../errors';
 import { hexToBytes } from '../../util/misc';
 import { CborReader, CborReaderState, CborTag, CborWriter } from '../CBOR';
 import { Certificate } from '../Certificates';
-import { CborSet, Credential, Hash } from '../Common';
+import { CborSet, Hash } from '../Common';
 import { SubTransaction } from '../SubTransaction';
 import { Update } from '../Update';
 
-import { AccountBalanceInterval } from './AccountBalanceInterval';
 import { Guards, GuardsKind } from './Guards';
 import { ProposalProcedure } from './ProposalProcedure';
 import { TransactionInput } from './TransactionInput';
 import { TransactionOutput } from './TransactionOutput';
 import {
+  accountBalanceIntervalsFromCore,
+  accountBalanceIntervalsToCore,
   multiAssetsToTokenMap,
+  readAccountBalanceIntervals,
+  readRequiredTopLevelGuards,
+  requiredTopLevelGuardsFromCore,
+  requiredTopLevelGuardsToCore,
   sortCanonically,
   tokenMapToMultiAsset,
+  writeAccountBalanceIntervals,
+  writeRequiredTopLevelGuards,
 } from './Utils';
 import { VotingProcedures } from './VotingProcedures';
 
+import type { AccountBalanceInterval } from './AccountBalanceInterval';
 import type * as Cardano from '../../Cardano';
 import type { TransactionId } from '../../Cardano/types/Transaction';
-import type { DeserializationOptions } from '../Common';
+import type { Credential, DeserializationOptions } from '../Common';
+import type { PlutusData } from '../PlutusData';
 
 type TransactionInputSet = CborSet<
   ReturnType<TransactionInput['toCore']>,
@@ -63,8 +72,14 @@ export class TransactionBody {
     | undefined;
   #currentTreasuryValue: Cardano.Lovelace | undefined;
   #donation: Cardano.Lovelace | undefined;
+  #requiredTopLevelGuards: Map<Credential, PlutusData | null> | undefined;
   #directDeposits: Map<Cardano.RewardAccount, Cardano.Lovelace> | undefined;
-  #accountBalanceIntervals: Map<Credential, AccountBalanceInterval> | undefined;
+  #accountBalanceIntervals:
+    | Map<Cardano.RewardAccount, AccountBalanceInterval>
+    | undefined;
+  #startingAccountBalanceIntervals:
+    | Map<Cardano.RewardAccount, AccountBalanceInterval>
+    | undefined;
   #subTransactions:
     | CborSet<ReturnType<SubTransaction['toCore']>, SubTransaction>
     | undefined;
@@ -123,15 +138,15 @@ export class TransactionBody {
     //   , ? 21 : coin                            ; New; current treasury value
     //   , ? 22 : positive_coin                   ; New; donation
     //   , ? 23 : sub_transactions                ; New; sub transactions
+    //   , ? 24 : required_top_level_guards       ; New; required top level guards
     //   , ? 25 : direct_deposits                 ; New; direct deposits
     //   , ? 26 : account_balance_intervals       ; New; account balance intervals
+    //   , ? 27 : starting_account_balance_intervals ; New; starting account balance intervals
     //   }
     writer.writeStartMap(this.#getMapSize());
 
-    if (this.#inputs !== undefined && this.#inputs.size() > 0) {
-      writer.writeInt(0n);
-      writer.writeEncodedValue(hexToBytes(this.#inputs.toCbor()));
-    }
+    writer.writeInt(0n);
+    writer.writeEncodedValue(hexToBytes(this.#inputs.toCbor()));
 
     if (this.#outputs !== undefined) {
       writer.writeInt(1n);
@@ -294,7 +309,7 @@ export class TransactionBody {
       writer.writeInt(this.#currentTreasuryValue);
     }
 
-    if (this.#donation !== undefined) {
+    if (this.#donation !== undefined && this.#donation > 0n) {
       writer.writeInt(22n);
       writer.writeInt(this.#donation);
     }
@@ -305,6 +320,14 @@ export class TransactionBody {
     ) {
       writer.writeInt(23n);
       writer.writeEncodedValue(hexToBytes(this.#subTransactions.toCbor()));
+    }
+
+    if (
+      this.#requiredTopLevelGuards !== undefined &&
+      this.#requiredTopLevelGuards.size > 0
+    ) {
+      writer.writeInt(24n);
+      writeRequiredTopLevelGuards(writer, this.#requiredTopLevelGuards);
     }
 
     if (this.#directDeposits !== undefined && this.#directDeposits.size > 0) {
@@ -344,25 +367,18 @@ export class TransactionBody {
       this.#accountBalanceIntervals.size > 0
     ) {
       writer.writeInt(26n);
+      writeAccountBalanceIntervals(writer, this.#accountBalanceIntervals);
+    }
 
-      const intervalsWithCredentialBytes = new Map<
-        HexBlob,
-        AccountBalanceInterval
-      >();
-      for (const [credential, interval] of this.#accountBalanceIntervals) {
-        intervalsWithCredentialBytes.set(credential.toCbor(), interval);
-      }
-
-      const sortedCanonically = [...intervalsWithCredentialBytes].sort((a, b) =>
-        a[0] > b[0] ? 1 : -1,
+    if (
+      this.#startingAccountBalanceIntervals !== undefined &&
+      this.#startingAccountBalanceIntervals.size > 0
+    ) {
+      writer.writeInt(27n);
+      writeAccountBalanceIntervals(
+        writer,
+        this.#startingAccountBalanceIntervals,
       );
-
-      writer.writeStartMap(sortedCanonically.length);
-
-      for (const [credentialBytes, interval] of sortedCanonically) {
-        writer.writeEncodedValue(hexToBytes(credentialBytes));
-        writer.writeEncodedValue(hexToBytes(interval.toCbor()));
-      }
     }
 
     return writer.encodeAsHex();
@@ -371,9 +387,14 @@ export class TransactionBody {
   /**
    * Deserializes the TransactionBody from a CBOR byte array.
    *
+   * Every ledger era requires the inputs (key 0), outputs (key 1) and fee (key 2), so a body
+   * missing any of them is rejected. A key may appear only once. The voting procedures and
+   * proposal procedures must not be empty and the donation must be greater than zero, as every
+   * era that knows these keys requires.
+   *
    * @param cbor The CBOR encoded TransactionBody object.
    * @param options Deserialization options. When `strict` is true, throws on unknown map keys
-   * instead of skipping them.
+   * and on guards that repeat a key hash, and forwards the options to nested decoders.
    * @returns The new TransactionBody instance.
    */
   static fromCbor(
@@ -387,10 +408,23 @@ export class TransactionBody {
     const fee: Cardano.Lovelace = 0n;
     const body = new TransactionBody(inputs, outputs, fee);
 
+    let hasInputs = false;
+    let hasOutputs = false;
+    let hasFee = false;
+    const seenKeys = new Set<bigint>();
+
     reader.readStartMap();
 
     while (reader.peekState() !== CborReaderState.EndMap) {
       const key = reader.readInt();
+
+      if (seenKeys.has(key))
+        throw new SerializationError(
+          SerializationFailure.InvalidType,
+          `Duplicate transaction body map key: ${key}`,
+        );
+
+      seenKeys.add(key);
 
       switch (key) {
         case 0n: {
@@ -401,6 +435,7 @@ export class TransactionBody {
               TransactionInput.fromCbor,
             ),
           );
+          hasInputs = true;
           break;
         }
         case 1n: {
@@ -418,11 +453,13 @@ export class TransactionBody {
           }
 
           reader.readEndArray();
+          hasOutputs = true;
 
           break;
         }
         case 2n:
           body.setFee(reader.readInt());
+          hasFee = true;
           break;
         case 3n:
           body.setTtl(Slot(Number(reader.readInt())));
@@ -457,7 +494,10 @@ export class TransactionBody {
         }
         case 6n:
           body.setUpdate(
-            Update.fromCbor(HexBlob.fromBytes(reader.readEncodedValue())),
+            Update.fromCbor(
+              HexBlob.fromBytes(reader.readEncodedValue()),
+              options,
+            ),
           );
           break;
         case 7n:
@@ -516,11 +556,21 @@ export class TransactionBody {
             ),
           );
           break;
-        case 14n:
-          body.setGuards(
-            Guards.fromCbor(HexBlob.fromBytes(reader.readEncodedValue())),
+        case 14n: {
+          const guards = Guards.fromCbor(
+            HexBlob.fromBytes(reader.readEncodedValue()),
           );
+          const keyHashes = guards.keyHashes() ?? [];
+
+          if (options?.strict && new Set(keyHashes).size !== keyHashes.length)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'guards (transaction body key 14) must not contain duplicate key hashes',
+            );
+
+          body.setGuards(guards);
           break;
+        }
         case 15n:
           body.setNetworkId(Number(reader.readInt()) as Cardano.NetworkId);
           break;
@@ -543,27 +593,52 @@ export class TransactionBody {
             ),
           );
           break;
-        case 19n:
-          body.setVotingProcedures(
-            VotingProcedures.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-            ),
+        case 19n: {
+          const votingProcedures = VotingProcedures.fromCbor(
+            HexBlob.fromBytes(reader.readEncodedValue()),
           );
+
+          if (votingProcedures.getVoters().length === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'voting_procedures (transaction body key 19) must be a non-empty map',
+            );
+
+          body.setVotingProcedures(votingProcedures);
           break;
-        case 20n:
-          body.setProposalProcedures(
-            CborSet.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-              ProposalProcedure.fromCbor,
-            ),
+        }
+        case 20n: {
+          const proposalProcedures = CborSet.fromCbor<
+            ReturnType<ProposalProcedure['toCore']>,
+            ProposalProcedure
+          >(HexBlob.fromBytes(reader.readEncodedValue()), proposalCbor =>
+            ProposalProcedure.fromCbor(proposalCbor, options),
           );
+
+          if (proposalProcedures.size() === 0)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'proposal_procedures (transaction body key 20) must be a non-empty set',
+            );
+
+          body.setProposalProcedures(proposalProcedures);
           break;
+        }
         case 21n:
           body.setCurrentTreasuryValue(reader.readInt());
           break;
-        case 22n:
-          body.setDonation(reader.readInt());
+        case 22n: {
+          const donation = reader.readInt();
+
+          if (donation <= 0n)
+            throw new SerializationError(
+              SerializationFailure.InvalidType,
+              'donation (transaction body key 22) must be greater than zero',
+            );
+
+          body.setDonation(donation);
           break;
+        }
         case 23n: {
           const subTransactions = CborSet.fromCbor<
             ReturnType<SubTransaction['toCore']>,
@@ -590,6 +665,15 @@ export class TransactionBody {
             );
 
           body.setSubTransactions(subTransactions);
+          break;
+        }
+        case 24n: {
+          body.setRequiredTopLevelGuards(
+            readRequiredTopLevelGuards(
+              reader,
+              'required_top_level_guards (transaction body key 24)',
+            ),
+          );
           break;
         }
         case 25n: {
@@ -620,33 +704,21 @@ export class TransactionBody {
           break;
         }
         case 26n: {
-          reader.readStartMap();
-
-          const accountBalanceIntervals = new Map<
-            Credential,
-            AccountBalanceInterval
-          >();
-
-          while (reader.peekState() !== CborReaderState.EndMap) {
-            const credential = Credential.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-            );
-            const interval = AccountBalanceInterval.fromCbor(
-              HexBlob.fromBytes(reader.readEncodedValue()),
-            );
-
-            accountBalanceIntervals.set(credential, interval);
-          }
-
-          reader.readEndMap();
-
-          if (accountBalanceIntervals.size === 0)
-            throw new SerializationError(
-              SerializationFailure.InvalidType,
-              'account_balance_intervals (transaction body key 26) must be a non-empty map',
-            );
-
-          body.setAccountBalanceIntervals(accountBalanceIntervals);
+          body.setAccountBalanceIntervals(
+            readAccountBalanceIntervals(
+              reader,
+              'account_balance_intervals (transaction body key 26)',
+            ),
+          );
+          break;
+        }
+        case 27n: {
+          body.setStartingAccountBalanceIntervals(
+            readAccountBalanceIntervals(
+              reader,
+              'starting_account_balance_intervals (transaction body key 27)',
+            ),
+          );
           break;
         }
         default:
@@ -661,6 +733,22 @@ export class TransactionBody {
     }
 
     reader.readEndMap();
+
+    if (!hasInputs)
+      throw new SerializationError(
+        SerializationFailure.InvalidType,
+        'Transaction body missing required key: 0',
+      );
+    if (!hasOutputs)
+      throw new SerializationError(
+        SerializationFailure.InvalidType,
+        'Transaction body missing required key: 1',
+      );
+    if (!hasFee)
+      throw new SerializationError(
+        SerializationFailure.InvalidType,
+        'Transaction body missing required key: 2',
+      );
 
     body.#originalBytes = cbor;
 
@@ -680,11 +768,8 @@ export class TransactionBody {
 
     return {
       ...(this.#accountBalanceIntervals && {
-        accountBalanceIntervals: [...this.#accountBalanceIntervals].map(
-          ([credential, interval]) => ({
-            credential: credential.toCore(),
-            interval: interval.toCore(),
-          }),
+        accountBalanceIntervals: accountBalanceIntervalsToCore(
+          this.#accountBalanceIntervals,
         ),
       }),
       auxiliaryDataHash: this.#auxiliaryDataHash,
@@ -716,7 +801,17 @@ export class TransactionBody {
         (guardKeyHashes && guardKeyHashes.length > 0
           ? guardKeyHashes
           : undefined),
+      ...(this.#requiredTopLevelGuards && {
+        requiredTopLevelGuards: requiredTopLevelGuardsToCore(
+          this.#requiredTopLevelGuards,
+        ),
+      }),
       scriptIntegrityHash: this.#scriptDataHash,
+      ...(this.#startingAccountBalanceIntervals && {
+        startingAccountBalanceIntervals: accountBalanceIntervalsToCore(
+          this.#startingAccountBalanceIntervals,
+        ),
+      }),
       ...(this.#subTransactions?.values() && {
         subTransactions: this.#subTransactions.toCore(),
       }),
@@ -844,21 +939,26 @@ export class TransactionBody {
       }
     }
 
-    if (coreTransactionBody.accountBalanceIntervals) {
-      const accountBalanceIntervals = new Map<
-        Credential,
-        AccountBalanceInterval
-      >();
+    if (coreTransactionBody.requiredTopLevelGuards)
+      body.setRequiredTopLevelGuards(
+        requiredTopLevelGuardsFromCore(
+          coreTransactionBody.requiredTopLevelGuards,
+        ),
+      );
 
-      for (const entry of coreTransactionBody.accountBalanceIntervals) {
-        accountBalanceIntervals.set(
-          Credential.fromCore(entry.credential),
-          AccountBalanceInterval.fromCore(entry.interval),
-        );
-      }
+    if (coreTransactionBody.accountBalanceIntervals)
+      body.setAccountBalanceIntervals(
+        accountBalanceIntervalsFromCore(
+          coreTransactionBody.accountBalanceIntervals,
+        ),
+      );
 
-      body.setAccountBalanceIntervals(accountBalanceIntervals);
-    }
+    if (coreTransactionBody.startingAccountBalanceIntervals)
+      body.setStartingAccountBalanceIntervals(
+        accountBalanceIntervalsFromCore(
+          coreTransactionBody.startingAccountBalanceIntervals,
+        ),
+      );
 
     if (coreTransactionBody.donation !== undefined)
       body.setDonation(coreTransactionBody.donation);
@@ -1348,6 +1448,8 @@ export class TransactionBody {
   /**
    * Sets the current treasury donation of this transaction.
    *
+   * A zero donation is left out of the encoding, as the ledger does.
+   *
    * @param donation The treasury donation.
    */
   setDonation(donation: Cardano.Lovelace): void {
@@ -1362,6 +1464,31 @@ export class TransactionBody {
    */
   donation(): Cardano.Lovelace | undefined {
     return this.#donation;
+  }
+
+  /**
+   * Sets the required top level guards (body key 24). Each entry names a guard the transaction
+   * must carry, mapped to the plutus datum it must be supplied with, or null when the guard
+   * carries no datum (CBOR nil on the wire, used for key hash and native script guards).
+   *
+   * @param requiredTopLevelGuards The map of guard credentials to their optional datum.
+   */
+  setRequiredTopLevelGuards(
+    requiredTopLevelGuards: Map<Credential, PlutusData | null>,
+  ): void {
+    this.#requiredTopLevelGuards = requiredTopLevelGuards;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the required top level guards (body key 24). Each entry names a guard the transaction
+   * must carry, mapped to the plutus datum it must be supplied with, or null when the guard
+   * carries no datum.
+   *
+   * @returns The map of guard credentials to their optional datum.
+   */
+  requiredTopLevelGuards(): Map<Credential, PlutusData | null> | undefined {
+    return this.#requiredTopLevelGuards;
   }
 
   /**
@@ -1389,12 +1516,12 @@ export class TransactionBody {
 
   /**
    * Sets the account balance intervals (body key 26). Each entry asserts that the balance of the
-   * account with the given credential lies in a half-open range at validation time.
+   * reward account lies in a half-open range, or equals an exact balance, at validation time.
    *
-   * @param accountBalanceIntervals The map of credentials to balance intervals.
+   * @param accountBalanceIntervals The map of reward accounts to balance intervals.
    */
   setAccountBalanceIntervals(
-    accountBalanceIntervals: Map<Credential, AccountBalanceInterval>,
+    accountBalanceIntervals: Map<Cardano.RewardAccount, AccountBalanceInterval>,
   ): void {
     this.#accountBalanceIntervals = accountBalanceIntervals;
     this.#originalBytes = undefined;
@@ -1402,14 +1529,44 @@ export class TransactionBody {
 
   /**
    * Gets the account balance intervals (body key 26). Each entry asserts that the balance of the
-   * account with the given credential lies in a half-open range at validation time.
+   * reward account lies in a half-open range, or equals an exact balance, at validation time.
    *
-   * @returns The map of credentials to balance intervals.
+   * @returns The map of reward accounts to balance intervals.
    */
   accountBalanceIntervals():
-    | Map<Credential, AccountBalanceInterval>
+    | Map<Cardano.RewardAccount, AccountBalanceInterval>
     | undefined {
     return this.#accountBalanceIntervals;
+  }
+
+  /**
+   * Sets the starting account balance intervals (body key 27). Each entry asserts that the
+   * balance of the reward account lies in a half-open range, or equals an exact balance, before
+   * the transaction and its sub transactions are applied.
+   *
+   * @param startingAccountBalanceIntervals The map of reward accounts to balance intervals.
+   */
+  setStartingAccountBalanceIntervals(
+    startingAccountBalanceIntervals: Map<
+      Cardano.RewardAccount,
+      AccountBalanceInterval
+    >,
+  ): void {
+    this.#startingAccountBalanceIntervals = startingAccountBalanceIntervals;
+    this.#originalBytes = undefined;
+  }
+
+  /**
+   * Gets the starting account balance intervals (body key 27). Each entry asserts that the
+   * balance of the reward account lies in a half-open range, or equals an exact balance, before
+   * the transaction and its sub transactions are applied.
+   *
+   * @returns The map of reward accounts to balance intervals.
+   */
+  startingAccountBalanceIntervals():
+    | Map<Cardano.RewardAccount, AccountBalanceInterval>
+    | undefined {
+    return this.#startingAccountBalanceIntervals;
   }
 
   /**
@@ -1480,9 +1637,8 @@ export class TransactionBody {
    * @private
    */
   #getMapSize(): number {
-    let mapSize = 0;
+    let mapSize = 1;
 
-    if (this.#inputs !== undefined && this.#inputs.size() > 0) ++mapSize;
     if (this.#outputs !== undefined) ++mapSize;
     if (this.#fee !== undefined) ++mapSize;
     if (this.#ttl !== undefined) ++mapSize;
@@ -1514,14 +1670,24 @@ export class TransactionBody {
     )
       ++mapSize;
     if (this.#currentTreasuryValue !== undefined) ++mapSize;
-    if (this.#donation !== undefined) ++mapSize;
+    if (this.#donation !== undefined && this.#donation > 0n) ++mapSize;
     if (this.#subTransactions !== undefined && this.#subTransactions.size() > 0)
+      ++mapSize;
+    if (
+      this.#requiredTopLevelGuards !== undefined &&
+      this.#requiredTopLevelGuards.size > 0
+    )
       ++mapSize;
     if (this.#directDeposits !== undefined && this.#directDeposits.size > 0)
       ++mapSize;
     if (
       this.#accountBalanceIntervals !== undefined &&
       this.#accountBalanceIntervals.size > 0
+    )
+      ++mapSize;
+    if (
+      this.#startingAccountBalanceIntervals !== undefined &&
+      this.#startingAccountBalanceIntervals.size > 0
     )
       ++mapSize;
 

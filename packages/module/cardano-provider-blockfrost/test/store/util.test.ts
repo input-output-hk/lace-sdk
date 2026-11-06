@@ -1,11 +1,11 @@
-import { Asset, Cardano } from '@cardano-sdk/core';
-import { AddressType, KeyRole } from '@cardano-sdk/key-management';
 import {
   CARDANO_TOKEN_METADATA_SCHEMA_VERSION,
   CardanoRewardAccount,
   CardanoPaymentAddress,
   toContractAddress,
 } from '@lace-contract/cardano-context';
+import { Asset, Cardano } from '@lace-lib/cardano-core';
+import { AddressType, KeyRole } from '@lace-lib/cardano-key-management';
 import { toContractTokenMetadata } from '@lace-lib/cardano-provider-core';
 import { describe, expect, it } from 'vitest';
 

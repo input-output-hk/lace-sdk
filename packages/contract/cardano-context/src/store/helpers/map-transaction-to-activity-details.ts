@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Err, Ok, type Result } from '@lace-lib/util';
 import isEmpty from 'lodash/isEmpty';
 import { catchError, from, map, of, switchMap } from 'rxjs';
@@ -31,13 +31,13 @@ import type {
   TxSummary,
   TxMetadata,
 } from '../../types';
-import type { TokenTransferValue as SdkTokenTransferValue } from '@cardano-sdk/core';
+import type { Activity, ActivityDetail } from '@lace-contract/activities';
+import type { TokenId, TokenMetadata } from '@lace-contract/tokens';
+import type { TokenTransferValue as SdkTokenTransferValue } from '@lace-lib/cardano-core';
 import type {
   MetadataInspection,
   TransactionSummaryInspection,
-} from '@cardano-sdk/core';
-import type { Activity, ActivityDetail } from '@lace-contract/activities';
-import type { TokenId, TokenMetadata } from '@lace-contract/tokens';
+} from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 import type { Logger } from 'ts-log';
 

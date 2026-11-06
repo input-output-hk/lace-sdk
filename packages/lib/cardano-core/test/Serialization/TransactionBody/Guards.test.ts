@@ -100,6 +100,40 @@ describe('Guards', () => {
     it('rejects a first element that is neither a byte string nor an array', () => {
       expect(() => Guards.fromCbor(HexBlob('8101'))).toThrow();
     });
+
+    it('rejects a key hash that is not 28 bytes long', () => {
+      expect(() =>
+        Guards.fromCbor(HexBlob(`81581b${keyHash.slice(0, 54)}`)),
+      ).toThrow('Expected a key hash of 28 bytes, but got 27 bytes');
+    });
+
+    it('rejects a credential hash that is not 28 bytes long', () => {
+      expect(() =>
+        Guards.fromCbor(HexBlob(`818200581b${keyHash.slice(0, 54)}`)),
+      ).toThrow('Expected a credential hash of 28 bytes, but got 27 bytes');
+    });
+
+    it('rejects a repeated credential in the credential form', () => {
+      expect(() =>
+        Guards.fromCbor(HexBlob(`828200581c${keyHash}8200581c${keyHash}`)),
+      ).toThrow(
+        'Credential form guards must not contain duplicate credentials',
+      );
+    });
+
+    it('keeps a credential repeated with a different credential type', () => {
+      const cbor = HexBlob(`828200581c${keyHash}8201581c${keyHash}`);
+
+      expect(Guards.fromCbor(cbor).toCbor()).toEqual(cbor);
+    });
+
+    it('keeps a repeated key hash in the key hash form and re-encodes byte-exact', () => {
+      const cbor = HexBlob(`82581c${keyHash}581c${keyHash}`);
+      const guards = Guards.fromCbor(cbor);
+
+      expect(guards.keyHashes()).toEqual([keyHash, keyHash]);
+      expect(guards.toCbor()).toEqual(cbor);
+    });
   });
 
   describe('toCbor', () => {

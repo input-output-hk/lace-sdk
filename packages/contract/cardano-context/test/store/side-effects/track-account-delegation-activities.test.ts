@@ -1,13 +1,13 @@
+import { ActivityType } from '@lace-contract/activities';
+import { failuresActions } from '@lace-contract/failures';
+import { TokenId } from '@lace-contract/tokens';
 import {
   Cardano,
   ProviderError,
   ProviderFailure,
   createTxInspector,
   transactionSummaryInspector,
-} from '@cardano-sdk/core';
-import { ActivityType } from '@lace-contract/activities';
-import { failuresActions } from '@lace-contract/failures';
-import { TokenId } from '@lace-contract/tokens';
+} from '@lace-lib/cardano-core';
 import { BigNumber, Err, Ok, Timestamp } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { of } from 'rxjs';
@@ -15,7 +15,7 @@ import { dummyLogger } from 'ts-log';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Make expect available globally for TestScheduler
-// @ts-expect-error - Making expect available globally for @cardano-sdk/util-dev's createTestScheduler
+// @ts-expect-error - Making expect available globally for @lace-lib/cardano-util-dev's createTestScheduler
 globalThis.expect = expect;
 
 import { cardanoContextActions, CardanoRewardAccount } from '../../../src';
@@ -32,13 +32,13 @@ import type {
   RequiredProtocolParameters,
   WithdrawalInfo,
 } from '../../../src';
-import type * as Core from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type { Failure, FailureId } from '@lace-contract/failures';
 import type { TranslationKey } from '@lace-contract/i18n';
+import type * as Core from '@lace-lib/cardano-core';
 
 // Mock the Cardano SDK transaction inspector functions
-vi.mock('@cardano-sdk/core', async importActual => {
+vi.mock('@lace-lib/cardano-core', async importActual => {
   const module = await importActual<typeof Core>();
   const mockTxSummaryInspector = vi.fn();
   const mockCreateTxInspector = vi.fn(() => mockTxSummaryInspector);

@@ -86,7 +86,7 @@ const SDK_SHIPPING_PATHS: readonly string[] = [
   'apps/lace-sdk/scripts/entries.mjs',
   'apps/lace-sdk/scripts/pack.mjs',
   'apps/lace-sdk/scripts/reach.mjs',
-  // Which @cardano-sdk imports the bundle and declarations import from
+  // Which @lace-lib/cardano-* imports the bundle and declarations import from
   // @laceio/cardano instead: the subpaths its manifest exports.
   'apps/lace-sdk/scripts/laceio-cardano.mjs',
   'apps/lace-cardano/package.json',

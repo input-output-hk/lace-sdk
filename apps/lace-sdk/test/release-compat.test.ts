@@ -14,6 +14,7 @@ import {
   parseVersion,
   readExports,
   republishProblems,
+  requiresDeprecation,
   stableReleaseProblems,
 } from '../scripts/release-compat';
 
@@ -290,13 +291,8 @@ describe('stableReleaseProblems', () => {
     ).toEqual([]);
   });
 
-  it('refuses changing an export that was not deprecated', () => {
-    const next = declarations(
-      PREVIOUS.replace(
-        'createWallet(name: string)',
-        'createWallet(name: string, network: string)',
-      ),
-    );
+  it('accepts removing an export that was not deprecated in a minor release before 1.0', () => {
+    const next = declarations(PREVIOUS.replace('createWallet, ', ''));
     expect(
       stableReleaseProblems({
         previousVersion: '0.1.0',
@@ -305,9 +301,94 @@ describe('stableReleaseProblems', () => {
         next,
         overrides: [],
       }),
+    ).toEqual([]);
+  });
+
+  it('refuses removing an export that was not deprecated in a patch release before 1.0', () => {
+    const next = declarations(PREVIOUS.replace('createWallet, ', ''));
+    expect(
+      stableReleaseProblems({
+        previousVersion: '0.1.0',
+        nextVersion: '0.1.1',
+        previous,
+        next,
+        overrides: [],
+      }),
     ).toEqual([
-      'index:createWallet changes or is removed without being @deprecated in 0.1.0',
+      '0.1.1 changes or removes index:createWallet after 0.1.0; a minor release is required, or a release-overrides.json entry for a change that is compatible',
     ]);
+  });
+
+  it('accepts changing an export that was not deprecated in a minor release before 1.0, and refuses it in a patch', () => {
+    const next = declarations(
+      PREVIOUS.replace(
+        'createWallet(name: string)',
+        'createWallet(name: string, network: string)',
+      ),
+    );
+    const release = (nextVersion: string) =>
+      stableReleaseProblems({
+        previousVersion: '0.1.0',
+        nextVersion,
+        previous,
+        next,
+        overrides: [],
+      });
+    expect(release('0.2.0')).toEqual([]);
+    expect(release('0.1.1')).toEqual([
+      '0.1.1 changes or removes index:createWallet after 0.1.0; a minor release is required, or a release-overrides.json entry for a change that is compatible',
+    ]);
+  });
+
+  it('from 1.0, refuses removing or changing an export that was not deprecated, even in a major release', () => {
+    const removed = declarations(PREVIOUS.replace('createWallet, ', ''));
+    const changed = declarations(
+      PREVIOUS.replace(
+        'createWallet(name: string)',
+        'createWallet(name: string, network: string)',
+      ),
+    );
+    for (const next of [removed, changed]) {
+      expect(
+        stableReleaseProblems({
+          previousVersion: '1.2.0',
+          nextVersion: '2.0.0',
+          previous,
+          next,
+          overrides: [],
+        }),
+      ).toEqual([
+        'index:createWallet changes or is removed without being @deprecated in 1.2.0',
+      ]);
+    }
+  });
+
+  it('holds the release that promotes to 1.0 to the deprecation rule', () => {
+    const next = declarations(PREVIOUS.replace('createWallet, ', ''));
+    expect(
+      stableReleaseProblems({
+        previousVersion: '0.4.2',
+        nextVersion: '1.0.0',
+        previous,
+        next,
+        overrides: [],
+      }),
+    ).toEqual([
+      'index:createWallet changes or is removed without being @deprecated in 0.4.2',
+    ]);
+  });
+
+  it('accepts removing a deprecated export in a major release from 1.0', () => {
+    const next = declarations(PREVIOUS.replace('openWallet, ', ''));
+    expect(
+      stableReleaseProblems({
+        previousVersion: '1.2.0',
+        nextVersion: '2.0.0',
+        previous,
+        next,
+        overrides: [],
+      }),
+    ).toEqual([]);
   });
 
   it('accepts a change the release declares compatible', () => {
@@ -332,6 +413,49 @@ describe('stableReleaseProblems', () => {
         ],
       }),
     ).toEqual([]);
+  });
+
+  it('from 1.0, accepts a change declared compatible in a patch, and never excuses a removal', () => {
+    const changed = declarations(
+      PREVIOUS.replace(
+        'interface Account { id: string }',
+        'interface Account { readonly id: string }',
+      ),
+    );
+    expect(
+      stableReleaseProblems({
+        previousVersion: '1.2.0',
+        nextVersion: '1.2.1',
+        previous,
+        next: changed,
+        overrides: [
+          {
+            version: '1.2.1',
+            export: 'index:Account',
+            reason: 'readonly field',
+          },
+        ],
+      }),
+    ).toEqual([]);
+
+    const removed = declarations(PREVIOUS.replace('createWallet, ', ''));
+    expect(
+      stableReleaseProblems({
+        previousVersion: '1.2.0',
+        nextVersion: '2.0.0',
+        previous,
+        next: removed,
+        overrides: [
+          {
+            version: '2.0.0',
+            export: 'index:createWallet',
+            reason: 'replaced',
+          },
+        ],
+      }),
+    ).toEqual([
+      'index:createWallet changes or is removed without being @deprecated in 1.2.0',
+    ]);
   });
 
   it('requires a major release for a breaking change from 1.0', () => {
@@ -458,6 +582,13 @@ describe('versions', () => {
     for (let index = 1; index < order.length; index += 1) {
       expect(compareVersions(order[index - 1], order[index])).toBeLessThan(0);
     }
+  });
+
+  it('requires a prior deprecation from 1.0 only', () => {
+    expect(requiresDeprecation(parseVersion('0.2.0'))).toBe(false);
+    expect(requiresDeprecation(parseVersion('0.99.0'))).toBe(false);
+    expect(requiresDeprecation(parseVersion('1.0.0'))).toBe(true);
+    expect(requiresDeprecation(parseVersion('2.0.0'))).toBe(true);
   });
 
   it('allows a breaking change in a minor release only before 1.0', () => {

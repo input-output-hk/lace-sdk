@@ -1,10 +1,10 @@
-import { Serialization } from '@cardano-sdk/core';
-import { Hash32ByteBase16, blake2b } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
+import { Serialization } from '@lace-lib/cardano-core';
+import { Hash32ByteBase16, blake2b } from '@lace-lib/cardano-crypto';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { MAX_DATUM_DEPTH, isCborWithinLimits } from './cbor-limits';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Decodes an inline datum reported by Blockfrost.

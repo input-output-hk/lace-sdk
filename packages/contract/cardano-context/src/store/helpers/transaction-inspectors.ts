@@ -1,11 +1,11 @@
+import { TokenId } from '@lace-contract/tokens';
 import {
   createTxInspector,
   metadataInspector,
   tokenTransferInspector,
   transactionSummaryInspector,
-} from '@cardano-sdk/core';
-import { Cardano } from '@cardano-sdk/core';
-import { TokenId } from '@lace-contract/tokens';
+} from '@lace-lib/cardano-core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { filter, map, of, take, from, mergeMap, toArray } from 'rxjs';
 
 import { assetProvider } from './get-fallback-asset';
@@ -15,11 +15,11 @@ import type {
   CardanoTokenMetadata,
   RequiredProtocolParameters,
 } from '../../types';
+import type { TokenMetadata } from '@lace-contract/tokens';
 import type {
   Milliseconds,
   TransactionSummaryInspection,
-} from '@cardano-sdk/core';
-import type { TokenMetadata } from '@lace-contract/tokens';
+} from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 import type { Logger } from 'ts-log';

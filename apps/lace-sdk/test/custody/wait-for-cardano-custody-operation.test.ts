@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Milliseconds, Timestamp } from '@lace-lib/util';
 import { TimeoutError } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';

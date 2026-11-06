@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -11,8 +11,8 @@ import {
 import { CardanoPaymentAddress, CardanoRewardAccount } from '../src/types';
 
 import type { CardanoAddressData } from '../src/types';
-import type * as Crypto from '@cardano-sdk/crypto';
 import type { Address, AnyAddress } from '@lace-contract/addresses';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 
 // Test addresses with known payment credentials
 const LEGITIMATE_ADDRESS_1 = CardanoPaymentAddress(

@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { describe, expect, it } from 'vitest';
 
 import { computeNetFlows } from '../src/compute-net-flows';
@@ -6,7 +6,7 @@ import { computeNetFlows } from '../src/compute-net-flows';
 import type {
   AssetInfoWithAmount,
   TokenTransferValue as SdkTokenTransferValue,
-} from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
 
 const OWN_ADDR_1 = Cardano.PaymentAddress(
   'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',

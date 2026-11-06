@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { custodyRecipientFromAddress, recipientKey } from '../codecs/recipient';
 import { isHash28Hex, isLowerCaseHex } from '../hex';
@@ -8,7 +8,7 @@ import { CUSTODY_MAX_RECIPIENTS } from '../state/rules';
 import type { CustodyAsset, CustodyGrant } from '../codecs/account-state';
 import type { CustodyRecipient } from '../codecs/recipient';
 import type { CustodyResult } from '../result';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * The grant an app asks a device to issue, declared beside the transaction.

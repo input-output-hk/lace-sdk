@@ -1,8 +1,8 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Hash32ByteBase16 } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import { TokenId, tokensActions } from '@lace-contract/tokens';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 import { classifyCustodyAccountUtxos } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { BigNumber } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { describe, it } from 'vitest';

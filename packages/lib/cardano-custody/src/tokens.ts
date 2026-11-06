@@ -4,11 +4,11 @@
 // names are parsed into a typed result instead of sliced, and only lower-case
 // hex of the two contract name lengths is recognised.
 
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { HASH_28_BYTE_LENGTH, isLowerCaseHex } from './hex';
 
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /** Bytes of the big-endian slot a grant token name appends to the stake script hash. */
 const SLOT_BYTES = 4;

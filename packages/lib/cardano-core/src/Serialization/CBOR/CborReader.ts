@@ -699,7 +699,7 @@ export class CborReader {
    * @returns An array with the remaining bytes in the buffer.
    */
   #getRemainingBytes(): Uint8Array {
-    return this.#data.slice(this.#offset);
+    return this.#data.subarray(this.#offset);
   }
 
   /** Advances the data item counters. */

@@ -1,10 +1,10 @@
-import { ProviderError, ProviderFailure } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import {
   BITCOIN_TOKEN_ID,
   BitcoinNetwork,
 } from '@lace-contract/bitcoin-context';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { ProviderError, ProviderFailure } from '@lace-lib/cardano-core';
 import { BigNumber, Err, HexBytes, Ok, Timestamp } from '@lace-lib/util';
 import {
   address as bitcoinAddress,

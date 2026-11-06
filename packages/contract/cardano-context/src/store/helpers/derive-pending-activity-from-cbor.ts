@@ -10,12 +10,12 @@ import { inspectCardanoTxEffects } from '../../inspect-cardano-tx-effects';
 import type { CardanoActivityBlockchainSpecific } from '../../augmentations';
 import type { PendingActivityExtensionProps } from '../../extensions';
 import type { CardanoPaymentAddress } from '../../types';
-import type { Cardano } from '@cardano-sdk/core';
 import type {
   Activity,
   BlockchainSpecificActivityMetadata,
 } from '@lace-contract/activities';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { HexBytes } from '@lace-lib/util';
 
 type DerivePendingActivityFromCborParams = PendingActivityExtensionProps & {

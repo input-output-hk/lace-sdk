@@ -1,4 +1,4 @@
-import { Percent } from '@cardano-sdk/util';
+import { Percent } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
 import {

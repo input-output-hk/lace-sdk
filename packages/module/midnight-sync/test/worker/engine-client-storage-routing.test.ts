@@ -1,4 +1,3 @@
-import { Percent } from '@cardano-sdk/util';
 import { activitiesActions } from '@lace-contract/activities';
 import { addressesActions } from '@lace-contract/addresses';
 import { failuresActions } from '@lace-contract/failures';
@@ -11,6 +10,7 @@ import {
 import { syncActions } from '@lace-contract/sync';
 import { tokensActions } from '@lace-contract/tokens';
 import { walletsActions } from '@lace-contract/wallet-repo';
+import { Percent } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import {

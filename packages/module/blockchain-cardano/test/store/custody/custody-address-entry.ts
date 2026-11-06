@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import {
   CURRENT_CUSTODY_CONTRACT_VERSION,
   deriveCustodyAccountIdentity,

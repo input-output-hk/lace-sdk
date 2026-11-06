@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
-import type { EraSummary } from '@cardano-sdk/core';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 /**
  * First absolute slot of the given epoch, derived from the era summaries.

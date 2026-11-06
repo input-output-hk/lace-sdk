@@ -35,6 +35,7 @@ import type { FeatureFlag } from '@lace-contract/feature';
 import type { AppConfig } from '@lace-contract/module';
 import type { AccountId, AnyWallet } from '@lace-contract/wallet-repo';
 import type * as BitcoinProviderCore from '@lace-lib/bitcoin-provider-core';
+import type * as CardanoCore from '@lace-lib/cardano-core';
 import type * as Util from '@lace-lib/util';
 
 const chain = vi.hoisted(() => ({
@@ -50,7 +51,9 @@ vi.mock('@lace-lib/bitcoin-provider-core', async importActual => {
   const actual = await importActual<typeof BitcoinProviderCore>();
   const { NEVER, of } = await import('rxjs');
   const { Err, Ok } = await vi.importActual<typeof Util>('@lace-lib/util');
-  const { ProviderError, ProviderFailure } = await import('@cardano-sdk/core');
+  const { ProviderError, ProviderFailure } = await vi.importActual<
+    typeof CardanoCore
+  >('@lace-lib/cardano-core');
   const { Transaction } = await import('bitcoinjs-lib');
   const { BitcoinTransactionStatus } = await vi.importActual<
     typeof BitcoinContext

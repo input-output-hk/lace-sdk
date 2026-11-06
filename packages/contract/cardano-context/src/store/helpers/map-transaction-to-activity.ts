@@ -1,10 +1,10 @@
+import { ActivityType } from '@lace-contract/activities';
+import { TokenId } from '@lace-contract/tokens';
+import { Cardano } from '@lace-lib/cardano-core';
 import {
   createTxInspector,
   transactionSummaryInspector,
-} from '@cardano-sdk/core';
-import { Cardano } from '@cardano-sdk/core';
-import { ActivityType } from '@lace-contract/activities';
-import { TokenId } from '@lace-contract/tokens';
+} from '@lace-lib/cardano-core';
 import { BigNumber, Err, Ok, type Result, Timestamp } from '@lace-lib/util';
 import { catchError, from, mergeMap, of } from 'rxjs';
 
@@ -25,9 +25,9 @@ import type {
   ExtendedTxDetails,
   RequiredProtocolParameters,
 } from '../../types';
-import type { Milliseconds } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Milliseconds } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 import type { Logger } from 'ts-log';
 

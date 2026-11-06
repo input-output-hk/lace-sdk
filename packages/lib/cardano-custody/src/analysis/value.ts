@@ -6,7 +6,7 @@
 import { isCustodyLovelaceAsset } from '../state/rules';
 
 import type { CustodyAsset } from '../codecs/account-state';
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * A signed quantity per asset class, such as the net value leaving an

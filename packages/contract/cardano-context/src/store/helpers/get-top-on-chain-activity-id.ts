@@ -1,9 +1,9 @@
 import { ActivityType } from '@lace-contract/activities';
 
 import type { CardanoActivityUtxoMetadata } from '../../augmentations';
-import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 export type TopOnChainActivity = {
   activityId: string;

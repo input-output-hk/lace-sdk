@@ -1,9 +1,9 @@
-import { Cardano } from '@cardano-sdk/core';
 import {
   LOVELACE_TOKEN_ID,
-  TransactionBuilder,
   filterSpendableUtxos,
 } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
+import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
 import { BigNumber } from '@lace-lib/util';
 import { defer, firstValueFrom, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ChannelName } from './value-objects/channel-name.vo';
-import type { ErrorClass } from '@cardano-sdk/util';
+import type { ErrorClass } from '@lace-lib/cardano-util';
 import type { Shutdown } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
 import type { Logger } from 'ts-log';

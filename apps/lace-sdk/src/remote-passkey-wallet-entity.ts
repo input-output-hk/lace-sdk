@@ -4,9 +4,9 @@ import { createLazyAccountsFromAccountPublicKey } from '@lace-module/blockchain-
 import { PasskeyWalletMismatchError } from './passkey-wallet-mismatch-error';
 
 import type { RemotePasskeySigner } from './remote-passkey-signer';
-import type { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
 import type { CardanoBip32AccountProps } from '@lace-contract/cardano-context';
 import type { LazyInMemoryWallet } from '@lace-contract/wallet-repo';
+import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 
 /** The options of `createRemotePasskeyWalletEntity`. */
 export type CreateRemotePasskeyWalletEntityProps = {

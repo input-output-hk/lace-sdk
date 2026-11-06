@@ -1,0 +1,20 @@
+{
+  "name": "@lace-lib/cardano-tx-builder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The wallet's Cardano transaction builder, coin selectors and fee rules",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@lace-lib/cardano-core": "*",
+    "@lace-lib/cardano-crypto": "*",
+    "ts-log": "^2.2.7"
+  },
+  "devDependencies": {
+    "@lace-lib/cardano-key-management": "*",
+    "@lace-lib/cardano-util": "*",
+    "fast-check": "^3.23.1",
+    "vitest": "*"
+  }
+}

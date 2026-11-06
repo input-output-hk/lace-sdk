@@ -1,4 +1,4 @@
-import { isNotNil } from '@cardano-sdk/util';
+import { isNotNil } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 
 import { WalletType } from './types';

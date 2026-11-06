@@ -40,6 +40,12 @@ export interface ReadExportDocsProps {
   options: ts.CompilerOptions;
   /** Absolute path of the workspace root; declarations outside it are third-party. */
   workspaceRoot: string;
+  /**
+   * Whether a workspace file, by its real path, belongs to a package the SDK
+   * imports from another published package rather than bundling; its
+   * declarations are third-party, documented by that package.
+   */
+  isPublishedElsewhere?: (file: string) => boolean;
 }
 
 const isModuleNamespace = (symbol: ts.Symbol) =>
@@ -97,6 +103,7 @@ export const readExportDocs = ({
   entries,
   options,
   workspaceRoot,
+  isPublishedElsewhere = () => false,
 }: ReadExportDocsProps): ExportDoc[] => {
   const root = fs.realpathSync(workspaceRoot);
   const program = ts.createProgram(entries, options);
@@ -108,7 +115,8 @@ export const readExportDocs = ({
     const real = fs.realpathSync(fileName);
     return (
       real.startsWith(root + path.sep) &&
-      !real.split(path.sep).includes('node_modules')
+      !real.split(path.sep).includes('node_modules') &&
+      !isPublishedElsewhere(real)
     );
   };
   const isWorkspaceDeclaration = (declaration: ts.Declaration) =>

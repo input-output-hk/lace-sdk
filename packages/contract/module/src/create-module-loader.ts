@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { contextLogger, isNotNil } from '@cardano-sdk/util';
+import { contextLogger, isNotNil } from '@lace-lib/cardano-util';
 import uniq from 'lodash/uniq';
 
 import type {

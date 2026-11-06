@@ -9,6 +9,7 @@ import { GovernanceActionId } from '../../Common/GovernanceActionId';
 import { GovernanceActionKind } from './GovernanceActionKind';
 
 import type * as Cardano from '../../../Cardano';
+import type { DeserializationOptions } from '../../Common';
 
 const EMBEDDED_GROUP_SIZE = 3;
 
@@ -59,9 +60,13 @@ export class HardForkInitiationAction {
    * Deserializes the HardForkInitiationAction from a CBOR byte array.
    *
    * @param cbor The CBOR encoded HardForkInitiationAction object.
+   * @param options Deserialization options forwarded to the protocol version.
    * @returns The new HardForkInitiationAction instance.
    */
-  static fromCbor(cbor: HexBlob): HardForkInitiationAction {
+  static fromCbor(
+    cbor: HexBlob,
+    options?: DeserializationOptions,
+  ): HardForkInitiationAction {
     const reader = new CborReader(cbor);
 
     const length = reader.readStartArray();
@@ -91,6 +96,7 @@ export class HardForkInitiationAction {
 
     const protocolVersion = ProtocolVersion.fromCbor(
       HexBlob.fromBytes(reader.readEncodedValue()),
+      options,
     );
     const action = new HardForkInitiationAction(protocolVersion, govActionId);
     action.#originalBytes = cbor;

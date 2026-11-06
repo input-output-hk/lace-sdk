@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 import { isRetriableError } from '@lace-lib/util-provider';
 import { firstValueFrom } from 'rxjs';
 
@@ -7,16 +7,17 @@ import { unwrapProviderResult } from '../helpers/unwrap-provider-result';
 import { failCustodyBuild, messageOf } from './build-failure';
 
 import type {
-  EraSummary,
-  ProviderError,
-  Serialization,
-} from '@cardano-sdk/core';
-import type {
   CardanoProvider,
   RedeemerExecutionUnits,
 } from '@lace-contract/cardano-context';
+import type {
+  EraSummary,
+  ProviderError,
+  Serialization,
+} from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { Observable } from 'rxjs';
+import type { Logger } from 'ts-log';
 
 /** Converts between POSIX milliseconds and slots on one network. */
 interface SlotClock {
@@ -35,6 +36,8 @@ export interface CustodyChain {
   /** POSIX milliseconds the build treats as the present. */
   readonly now: number;
   readonly provider: CardanoProvider;
+  /** Receives the transaction builder's warnings. */
+  readonly logger?: Logger;
 }
 
 /**
@@ -90,11 +93,13 @@ export const loadCustodyChain = async ({
   eraSummaries,
   provider,
   now,
+  logger,
 }: {
   chainId: Cardano.ChainId | undefined;
   eraSummaries: EraSummary[] | undefined;
   provider: CardanoProvider;
   now: number;
+  logger?: Logger;
 }): Promise<CustodyChain> => {
   if (!chainId) {
     return failCustodyBuild({
@@ -120,6 +125,7 @@ export const loadCustodyChain = async ({
     clock: createSlotClock(eraSummaries),
     now,
     provider,
+    ...(logger && { logger }),
   };
 };
 

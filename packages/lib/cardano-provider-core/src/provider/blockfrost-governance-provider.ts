@@ -1,16 +1,16 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Hash28ByteBase16 } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import { Err, Ok } from '@lace-lib/util';
 import { EMPTY, catchError, expand, from, map, of, reduce } from 'rxjs';
 
 import { BlockfrostProvider } from '../blockfrost-provider';
 
-import type { ProviderError as CoreProviderError } from '@cardano-sdk/core';
 import type {
   DRepMetadata,
   DRepReference,
   DRepSummary,
 } from '@lace-contract/cardano-context';
+import type { ProviderError as CoreProviderError } from '@lace-lib/cardano-core';
 import type { Result } from '@lace-lib/util';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Observable } from 'rxjs';

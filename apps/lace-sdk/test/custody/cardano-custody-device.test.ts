@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import { RemoteSignerError } from '@lace-lib/passkey';
 import { describe, expect, it, vi } from 'vitest';
 

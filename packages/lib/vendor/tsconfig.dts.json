@@ -10,5 +10,16 @@
     "rootDir": "../../..",
     "skipLibCheck": true
   },
-  "include": ["src/trezor-cardano.ts", "../cardano-*/src/**/*"]
+  "include": [
+    "src/seam-cardano.ts",
+    "src/ledger-cardano-key-agent.ts",
+    "src/trezor-cardano.ts",
+    "../cardano-core/src/**/*",
+    "../cardano-crypto/src/**/*",
+    "../cardano-dapp-connector/src/**/*",
+    "../cardano-hardware-ledger/src/**/*",
+    "../cardano-hardware-trezor/src/**/*",
+    "../cardano-key-management/src/**/*",
+    "../cardano-util/src/**/*"
+  ]
 }

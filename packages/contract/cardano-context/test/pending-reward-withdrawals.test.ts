@@ -1,9 +1,9 @@
 // Pending withdrawals (LW-15725): a submitted transaction's rewards already
 // sit in its pending outputs, so the balance must not also count them as
 // withdrawable, and builders must know they are spoken for.
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber, Timestamp } from '@lace-lib/util';
 import { describe, expect, it } from 'vitest';
 

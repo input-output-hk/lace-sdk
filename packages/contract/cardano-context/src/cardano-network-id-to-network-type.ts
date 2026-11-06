@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import type { CardanoNetworkId } from './value-objects/cardano-network-id.vo';
 import type { NetworkType } from '@lace-contract/network';

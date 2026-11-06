@@ -1,12 +1,12 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import { KeyPurpose } from '@cardano-sdk/key-management';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
 import {
   CURRENT_CUSTODY_CONTRACT_VERSION,
   deriveCustodyAccountIdentity,
   verifyCustodyDataSignature,
 } from '@lace-lib/cardano-custody';
+import { KeyPurpose } from '@lace-lib/cardano-key-management';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCardanoKeyAgentFromMnemonic } from '../../src/signing/cardano-key-agent';
@@ -22,7 +22,7 @@ import { extendedAccountPublicKey, words } from './sign-with-words.fixtures';
 
 import type * as KeyAgentModule from '../../src/signing/cardano-key-agent';
 import type { CardanoVkeyWitness } from '../../src/signing/vkey-witnesses';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 
 // Shifts the index the key agent signs with, so a test can make the agent sign
 // with a key other than the one derived from the account public key.

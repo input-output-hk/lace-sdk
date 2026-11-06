@@ -1,6 +1,6 @@
-import { Percent } from '@cardano-sdk/util';
 import { NIGHT_TOKEN_ID } from '@lace-contract/midnight-context';
 import * as fixture from '@lace-contract/midnight-context/src/stub-data';
+import { Percent } from '@lace-lib/cardano-util';
 import { SubmissionError } from '@midnightntwrk/wallet-sdk/capabilities/submission';
 import { NodeClientError } from '@midnightntwrk/wallet-sdk/node-client/effect';
 import { Effect } from 'effect';

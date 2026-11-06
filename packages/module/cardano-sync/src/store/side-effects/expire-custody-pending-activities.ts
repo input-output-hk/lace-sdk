@@ -7,13 +7,13 @@ import { AccountId } from '@lace-contract/wallet-repo';
 import { combineLatest, from, map, mergeMap, scan } from 'rxjs';
 
 import type { SideEffect } from '../../module';
-import type { Cardano } from '@cardano-sdk/core';
 import type { Activity } from '@lace-contract/activities';
 import type {
   AccountUtxoMap,
   CardanoAccountTransactionsHistoryMap,
 } from '@lace-contract/cardano-context';
 import type { AccountSyncStatus } from '@lace-contract/sync';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Timestamp } from '@lace-lib/util';
 
 type Expired = { accountId: AccountId; activityIds: string[] };

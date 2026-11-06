@@ -1,5 +1,5 @@
-import { blockingWithLatestFrom } from '@cardano-sdk/util-rxjs';
 import { autoDismissFailureOnSuccess } from '@lace-contract/failures';
+import { blockingWithLatestFrom } from '@lace-lib/cardano-util-rxjs';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
 import { retryBackoff } from 'backoff-rxjs';
 import { catchError, filter, map, merge, mergeMap, of } from 'rxjs';

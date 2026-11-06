@@ -1,9 +1,9 @@
-import { Cardano } from '@cardano-sdk/core';
-import { BigIntMath } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import { BigIntMath } from '@lace-lib/cardano-util';
 
 import { outpointKey } from '../../util';
 
-import type { TransactionSummaryInspection } from '@cardano-sdk/core';
+import type { TransactionSummaryInspection } from '@lace-lib/cardano-core';
 
 type ComputeOwnNetCoinsParams = {
   accountAddresses: readonly Cardano.PaymentAddress[];

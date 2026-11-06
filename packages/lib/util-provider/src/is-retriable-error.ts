@@ -1,4 +1,4 @@
-import { ProviderFailure } from '@cardano-sdk/core';
+import { ProviderFailure } from '@lace-lib/cardano-core';
 
 import { errorHasReason } from './error';
 

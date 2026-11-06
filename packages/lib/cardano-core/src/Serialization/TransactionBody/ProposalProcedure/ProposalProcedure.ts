@@ -17,6 +17,7 @@ import { TreasuryWithdrawalsAction } from './TreasuryWithdrawalsAction';
 import { UpdateCommittee } from './UpdateCommittee';
 
 import type * as Cardano from '../../../Cardano';
+import type { DeserializationOptions } from '../../Common';
 
 const PROCEDURE_ARRAY_SIZE = 4;
 
@@ -105,9 +106,14 @@ export class ProposalProcedure {
    * Deserializes the ProposalProcedure from a CBOR byte array.
    *
    * @param cbor The CBOR encoded ProposalProcedure object.
+   * @param options Deserialization options forwarded to the parameter change and hard fork
+   * initiation actions.
    * @returns The new ProposalProcedure instance.
    */
-  static fromCbor(cbor: HexBlob): ProposalProcedure {
+  static fromCbor(
+    cbor: HexBlob,
+    options?: DeserializationOptions,
+  ): ProposalProcedure {
     let proposalProcedure: ProposalProcedure;
 
     const reader = new CborReader(cbor);
@@ -134,7 +140,7 @@ export class ProposalProcedure {
 
     switch (kind) {
       case GovernanceActionKind.ParameterChange:
-        action = ParameterChangeAction.fromCbor(actionCbor);
+        action = ParameterChangeAction.fromCbor(actionCbor, options);
         proposalProcedure = ProposalProcedure.newParameterChangeAction(
           deposit,
           rewardAccount,
@@ -143,7 +149,7 @@ export class ProposalProcedure {
         );
         break;
       case GovernanceActionKind.HardForkInitiation:
-        action = HardForkInitiationAction.fromCbor(actionCbor);
+        action = HardForkInitiationAction.fromCbor(actionCbor, options);
         proposalProcedure = ProposalProcedure.newHardForkInitiationAction(
           deposit,
           rewardAccount,

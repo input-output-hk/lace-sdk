@@ -1,6 +1,7 @@
 import { defineConfig } from 'eslint/config';
 
 import rootConfig, {
+  cardanoSdkImportBans,
   hugeiconsBarrelBans,
   moduleBoundaries,
   passportFlowBoundaryBans,
@@ -64,7 +65,7 @@ export default defineConfig(
         {
           /** Re-included: this entry replaces the workspace-wide one. */
           paths: hugeiconsBarrelBans,
-          patterns: passportFlowBoundaryBans,
+          patterns: [...cardanoSdkImportBans, ...passportFlowBoundaryBans],
         },
       ],
     },

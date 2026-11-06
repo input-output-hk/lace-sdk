@@ -1,7 +1,7 @@
-import { Percent } from '@cardano-sdk/util';
 import { ACTIVITIES_PER_PAGE } from '@lace-contract/activities';
 import { autoDismissFailureOnSuccess } from '@lace-contract/failures';
 import { TokenId } from '@lace-contract/tokens';
+import { Percent } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
 import { Serializable } from '@lace-lib/util-store';

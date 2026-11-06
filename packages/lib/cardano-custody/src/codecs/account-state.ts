@@ -22,8 +22,8 @@ import { decodeRecipient, encodeRecipient } from './recipient';
 import type { CustodyResult } from '../result';
 import type { CustodyDecodeError } from './plutus-data';
 import type { CustodyRecipient } from './recipient';
-import type { Cardano } from '@cardano-sdk/core';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** One asset class. Lovelace is the empty policy id with the empty name. */
 export interface CustodyAsset {

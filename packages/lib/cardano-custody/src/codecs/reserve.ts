@@ -2,9 +2,9 @@
 // revision b48545f4be850c1044de2dbeb51751718b4b8e70 (Apache-2.0). Modified for
 // Lace: the reserve datum is recognised, not written.
 
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /** The datum the upstream library writes on a reserve: constructor 0 with no fields. */
 const RESERVE_DATUM_CBOR = 'd87980';

@@ -1,10 +1,10 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { Ed25519PublicKey, Ed25519Signature } from '@cardano-sdk/crypto';
-import { AddressType } from '@cardano-sdk/key-management';
 import {
   CardanoInMemoryTransactionSigner,
   createCardanoKeyAgentFromEncryptedRoot,
 } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Ed25519PublicKey, Ed25519Signature } from '@lace-lib/cardano-crypto';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { ByteArray, HexBytes } from '@lace-lib/util';
 import { firstValueFrom, from, of, switchMap } from 'rxjs';
 import { dummyLogger } from 'ts-log';
@@ -12,8 +12,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { initializeDependencies } from '../../src/store/dependencies';
 
-import type { Ed25519KeyHashHex, Bip32PublicKeyHex } from '@cardano-sdk/crypto';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type {
   SignInMemoryTransactionProps,
   WithCardanoKeyAgent$,
@@ -22,6 +20,11 @@ import type {
   ModuleInitDependencies,
   ModuleInitProps,
 } from '@lace-contract/module';
+import type {
+  Ed25519KeyHashHex,
+  Bip32PublicKeyHex,
+} from '@lace-lib/cardano-crypto';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 // Same real preview-testnet fixture as
 // cardano-context/test/signing/cardano-in-memory-signing.regression.test.ts:

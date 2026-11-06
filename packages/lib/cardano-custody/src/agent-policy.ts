@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import {
   addressOfRepresentableRecipient,
@@ -21,7 +21,7 @@ import type { CustodyAccountIdentity } from './identity';
 import type { CustodyAccountRecord, CustodyAccountRecordError } from './record';
 import type { CustodyResult } from './result';
 import type { CustodyGrantViolation } from './state/rules';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 const CUSTODY_AGENT_POLICY_TYPE = 'cardano-custody-agent-policy';
 

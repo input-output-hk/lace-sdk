@@ -1,4 +1,5 @@
 import { CardanoTxId } from '@lace-contract/cardano-context';
+import { Serialization } from '@lace-lib/cardano-core';
 import { map, mergeMap, of, withLatestFrom } from 'rxjs';
 
 import type { SideEffect } from '../../module';
@@ -20,7 +21,10 @@ export const submitTxSideEffect: SideEffect = (
         );
       }
       return cardanoProvider
-        .submitTx({ signedTransaction: payload.serializedTx }, { chainId })
+        .submitTx(
+          { signedTransaction: Serialization.TxCBOR(payload.serializedTx) },
+          { chainId },
+        )
         .pipe(
           map(result =>
             result.isOk()

@@ -157,7 +157,7 @@ export class BootstrapWitness {
     // REMARK: there is a quirk with our BootstrapWitness core type related to Ogmios, some fields are mark as optional,
     // however all fields are required. See https://github.com/CardanoSolutions/ogmios/discussions/285#discussioncomment-4271726.
     // If chainCode is not present or is not the right size we will throw.
-    // If addressAttributes is not present we will serialize it as an empty byte string.
+    // If addressAttributes is not present we will serialize it as the CBOR of an empty map.
 
     if (!core.chainCode)
       throw new InvalidStateError('Chaincode must be present');
@@ -168,9 +168,9 @@ export class BootstrapWitness {
       core.key,
       core.signature,
       core.chainCode,
-      core.addressAttributes
-        ? HexBlob.fromBase64(core.addressAttributes)
-        : EMPTY_ATTRIBUTES_CBOR,
+      core.addressAttributes === undefined
+        ? EMPTY_ATTRIBUTES_CBOR
+        : HexBlob.fromBase64(core.addressAttributes),
     );
   }
 

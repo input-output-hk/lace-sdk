@@ -18,5 +18,6 @@ export const createAsyncKeyAgent = (
   },
   signBlob: keyAgent.signBlob.bind(keyAgent),
   signCip8Data: keyAgent.signCip8Data.bind(keyAgent),
+  signSubTransaction: keyAgent.signSubTransaction.bind(keyAgent),
   signTransaction: keyAgent.signTransaction.bind(keyAgent),
 });

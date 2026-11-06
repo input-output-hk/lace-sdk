@@ -1,4 +1,3 @@
-import { Percent } from '@cardano-sdk/util';
 import { FailureId } from '@lace-contract/failures';
 import {
   isRemoteMidnightEngine,
@@ -6,6 +5,7 @@ import {
   NIGHT_TOKEN_ID,
 } from '@lace-contract/midnight-context';
 import * as fixture from '@lace-contract/midnight-context/src/stub-data';
+import { Percent } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 import {
   BehaviorSubject,

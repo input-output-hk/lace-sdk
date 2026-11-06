@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber, Timestamp } from '@lace-lib/util';
 import { describe, expect, it, vi } from 'vitest';
 

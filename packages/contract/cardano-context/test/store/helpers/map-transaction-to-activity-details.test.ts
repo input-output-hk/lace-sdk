@@ -1,12 +1,12 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import { ActivityType } from '@lace-contract/activities';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
 import {
   ACCOUNT_VALIDATOR_HASH,
   custodyGrantAssetId,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 import { firstValueFrom, of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,13 +37,13 @@ import type {
   RequiredProtocolParameters,
   TxOutputInput,
 } from '../../../src/types';
+import type { Activity } from '@lace-contract/activities';
+import type { TokenMetadata } from '@lace-contract/tokens';
 import type {
   AssetInfoWithAmount,
   MetadataInspection,
   TransactionSummaryInspection,
-} from '@cardano-sdk/core';
-import type { Activity } from '@lace-contract/activities';
-import type { TokenMetadata } from '@lace-contract/tokens';
+} from '@lace-lib/cardano-core';
 
 vi.mock(import('../../../src/store/helpers/transaction-inspectors'));
 vi.mock(import('../../../src/store/helpers/input-output-transform'));

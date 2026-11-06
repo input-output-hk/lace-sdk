@@ -1,17 +1,19 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { mockProviders } from '@cardano-sdk/util-dev';
-import { describe, expect, it } from 'vitest';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
+import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
+import { mockProviders } from '@lace-lib/cardano-util-dev';
+import { dummyLogger } from 'ts-log';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildComposerTx } from '../../../src/store/composer/build-composer-tx';
 
 import type { BuildComposerTxParams } from '../../../src/store/composer/build-composer-tx';
-import type { EraSummary } from '@cardano-sdk/core';
 import type {
   CardanoPaymentAddress,
   ComposerRequest,
   RequiredProtocolParameters,
 } from '@lace-contract/cardano-context';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 const protocolParameters =
   mockProviders.protocolParameters as unknown as RequiredProtocolParameters;
@@ -90,6 +92,16 @@ const oneAdaOutput: ComposerRequest = {
 };
 
 describe('buildComposerTx', () => {
+  it('hands the logger to the transaction builder', async () => {
+    const logger = { ...dummyLogger };
+    const setLogger = vi.spyOn(TransactionBuilder.prototype, 'setLogger');
+
+    await build(oneAdaOutput, { logger });
+
+    expect(setLogger).toHaveBeenCalledWith(logger);
+    setLogger.mockRestore();
+  });
+
   it('builds a balanced unsigned tx and reports its id and exact fee', async () => {
     const result = await build(oneAdaOutput);
 

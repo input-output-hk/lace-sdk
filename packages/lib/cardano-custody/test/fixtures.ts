@@ -3,8 +3,8 @@
 // b48545f4be850c1044de2dbeb51751718b4b8e70 (Apache-2.0), modified for Lace:
 // recipients are Plutus address data rather than bech32 strings.
 
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { HexBlob } from '@lace-lib/cardano-util';
 
 import { LOGIC_V1_HASH } from '../src';
 

@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { decodeHydraCommitDatum } from './commit-datum';
 import { decodeHydraDepositDatum } from './deposit-datum';

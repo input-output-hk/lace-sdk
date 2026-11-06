@@ -11,8 +11,6 @@ import type {
   CardanoProvider,
   CardanoProviderContext,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
-import type { GroupedAddress } from '@cardano-sdk/key-management';
 import type {
   AnyAddress,
   AnyBlockchainAddress,
@@ -23,6 +21,8 @@ import type {
   InMemoryWalletAccount,
   LazyInMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 
 export const LOVELACE_VALUE = 1_000_000;
 export const DEFAULT_DECIMALS = 2;

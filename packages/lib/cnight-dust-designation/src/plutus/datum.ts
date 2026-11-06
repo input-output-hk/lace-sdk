@@ -1,8 +1,8 @@
-import { Serialization } from '@cardano-sdk/core';
+import { Serialization } from '@lace-lib/cardano-core';
 
 import type { CardanoStakeKeyHash } from '../value-objects/cardano-stake-key-hash.vo';
 import type { MidnightCoinPubkey } from '../value-objects/midnight-coin-pubkey.vo';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 // =====================================================================
 // DustMappingDatum CBOR encoder + decoder.

@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
 import { FeatureFlagKey } from '@lace-contract/feature';
 import { TokenId } from '@lace-contract/tokens';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Timestamp } from '@lace-lib/util';
 
 import { CardanoNetworkId } from './value-objects';

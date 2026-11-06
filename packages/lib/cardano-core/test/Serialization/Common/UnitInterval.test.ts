@@ -55,3 +55,22 @@ describe('UnitInterval', () => {
     expect(interval.toCbor()).toEqual('d81e820102');
   });
 });
+
+describe('UnitInterval above 2^53', () => {
+  const cbor = HexBlob('d81e821b0d73913c3f2bb7951b0de0b6b3a7640000');
+
+  it('keeps the exact fraction and re-encodes byte for byte', () => {
+    const interval = UnitInterval.fromCbor(cbor);
+
+    expect(interval.numerator()).toEqual(969_278_032_758_683_541n);
+    expect(interval.denominator()).toEqual(1_000_000_000_000_000_000n);
+    expect(interval.toCbor()).toEqual(cbor);
+  });
+
+  it('rounds the numerator in the core form', () => {
+    expect(UnitInterval.fromCbor(cbor).toCore()).toEqual({
+      denominator: 1_000_000_000_000_000_000,
+      numerator: 969_278_032_758_683_500,
+    });
+  });
+});

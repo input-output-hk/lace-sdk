@@ -32,8 +32,8 @@ import type {
   CustodyGrant,
   CustodyScope,
 } from '../codecs/account-state';
-import type { Cardano } from '@cardano-sdk/core';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 /**
  * POSIX milliseconds at which a slot starts on the account's network. The

@@ -1,18 +1,19 @@
-import { Cardano } from '@cardano-sdk/core';
-import * as Crypto from '@cardano-sdk/crypto';
-import { mockProviders } from '@cardano-sdk/util-dev';
+import { Cardano } from '@lace-lib/cardano-core';
+import * as Crypto from '@lace-lib/cardano-crypto';
+import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
+import { mockProviders } from '@lace-lib/cardano-util-dev';
 import { Subject, defer, firstValueFrom, of, throwError } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeComposerBuilding } from '../../../src/store/composer/build-side-effect';
 import { custodyAddressEntry } from '../custody/custody-address-entry';
 
-import type { EraSummary } from '@cardano-sdk/core';
 import type {
   CardanoPaymentAddress,
   ComposerRequest,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 // =====================================================================
 // The build side-effect orchestrates the gathering + dispatch; the
@@ -101,6 +102,7 @@ type Overrides = {
   accountUtxos?: Record<string, Cardano.Utxo[]>;
   unspendableUtxos?: Record<string, Cardano.Utxo[]>;
   addresses?: unknown[];
+  logger?: unknown;
 };
 
 const buildCompleted = vi.fn((payload: unknown) => ({
@@ -176,6 +178,7 @@ const run = async (
       cardanoAddresses$: of(overrides.addresses ?? [cardanoAddress]),
     },
     cardanoProvider: providerSpies,
+    logger: overrides.logger,
     actions: { composerFlow: { buildCompleted } },
   };
 
@@ -204,6 +207,16 @@ const settle = async (): Promise<void> => {
 };
 
 describe('makeComposerBuilding', () => {
+  it('hands the dependency logger to the transaction builder', async () => {
+    const logger = { warn: vi.fn() };
+    const setLogger = vi.spyOn(TransactionBuilder.prototype, 'setLogger');
+
+    await run(building(), { logger });
+
+    expect(setLogger).toHaveBeenCalledWith(logger);
+    setLogger.mockRestore();
+  });
+
   it('builds the composed tx and reports the CBOR, id and fee via buildCompleted', async () => {
     const action = await run(building());
 

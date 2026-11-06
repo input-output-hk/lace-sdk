@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { CardanoNetworkId } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Err, None, Ok, Some } from '@lace-lib/util';
 
 import type { BlockchainNetworkId } from '@lace-contract/network';

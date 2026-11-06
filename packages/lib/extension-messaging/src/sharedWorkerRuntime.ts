@@ -1,4 +1,4 @@
-import { contextLogger } from '@cardano-sdk/util';
+import { contextLogger } from '@lace-lib/cardano-util';
 import { BehaviorSubject } from 'rxjs';
 import { CustomError } from 'ts-custom-error';
 import { v4 as uuidv4 } from 'uuid';

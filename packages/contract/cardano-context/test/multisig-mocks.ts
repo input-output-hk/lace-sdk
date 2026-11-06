@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import { AccountId, WalletId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 
 import { threeAccountCardanoWalletAccounts } from './mocks';
 

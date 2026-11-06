@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
-import { AddressType } from '@cardano-sdk/key-management';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
+import { AddressType } from '@lace-lib/cardano-key-management';
 import { describe, expect, it } from 'vitest';
 
 import { groupCardanoAddressesByAccount } from '../../../src/store/helpers';

@@ -130,4 +130,14 @@ describe('passport flow-layer boundary', () => {
     const code = `import * as banned from '${specifier}';\nexport const probe = banned;\n`;
     await expect(lintAsFlow(code)).resolves.toEqual(['no-restricted-imports']);
   });
+
+  it.each(['@cardano-sdk/core', '@cardano-sdk/util'])(
+    'still rejects the npm Cardano SDK at %s, which the workspace-wide entry bans',
+    async specifier => {
+      const code = `import * as banned from '${specifier}';\nexport const probe = banned;\n`;
+      await expect(lintAsFlow(code)).resolves.toEqual([
+        'no-restricted-imports',
+      ]);
+    },
+  );
 });

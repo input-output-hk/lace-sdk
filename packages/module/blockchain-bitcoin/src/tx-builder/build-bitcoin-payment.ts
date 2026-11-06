@@ -8,7 +8,6 @@ import { BitcoinTxBuildError, BitcoinTxBuildErrorCode } from './errors';
 import { TransactionBuilder } from './TransactionBuilder';
 
 import type { BitcoinWallet } from '../wallet';
-import type { ProviderError } from '@cardano-sdk/core';
 import type {
   Activity,
   BlockchainSpecificActivityMetadata,
@@ -19,6 +18,7 @@ import type {
   BitcoinInFlightUtxoActivityMetadata,
   BitcoinUTxO,
 } from '@lace-contract/bitcoin-context';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { HexBytes, Result } from '@lace-lib/util';
 import type { Psbt } from 'bitcoinjs-lib';
 import type { Observable } from 'rxjs';

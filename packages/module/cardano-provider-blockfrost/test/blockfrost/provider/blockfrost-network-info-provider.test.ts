@@ -1,5 +1,5 @@
-import { Cardano, Milliseconds, Seconds } from '@cardano-sdk/core';
-import { logger } from '@cardano-sdk/util-dev';
+import { Cardano, Milliseconds, Seconds } from '@lace-lib/cardano-core';
+import { logger } from '@lace-lib/cardano-util-dev';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { BlockfrostNetworkInfoProvider } from '../../../src/blockfrost';
@@ -10,7 +10,7 @@ import type {
   EraSummary,
   StakeSummary,
   SupplySummary,
-} from '@cardano-sdk/core';
+} from '@lace-lib/cardano-core';
 import type { HttpClient } from '@lace-lib/util-provider';
 import type { Mock } from 'vitest';
 
@@ -374,6 +374,48 @@ describe('BlockfrostNetworkInfoProvider', () => {
     ).toBeUndefined();
   });
 
+  test('protocolParameters maps the Dijkstra reference-script fee tiers when the response carries them', async () => {
+    const base = {
+      a0: 0.3,
+      coins_per_utxo_word: '4310',
+      cost_models: {},
+      key_deposit: '2000000',
+      max_collateral_inputs: 3,
+      max_tx_size: '16384',
+      max_val_size: '5000',
+      min_fee_a: 44,
+      min_fee_b: 155_381,
+      min_fee_ref_script_cost_per_byte: 15,
+      min_pool_cost: '170000000',
+      pool_deposit: '500000000',
+      protocol_major_ver: 12,
+      protocol_minor_ver: 0,
+      rho: 0.003,
+      tau: 0.2,
+    };
+    mockResponses(request, [
+      [
+        'epochs/latest/parameters',
+        {
+          data: {
+            ...base,
+            ref_script_cost_stride: 30_000,
+            ref_script_cost_multiplier: '1.5',
+          },
+        },
+      ],
+    ]);
+    expect(await provider.protocolParameters()).toMatchObject({
+      refScriptCostStride: 30_000,
+      refScriptCostMultiplier: '1.5',
+    });
+
+    mockResponses(request, [['epochs/latest/parameters', { data: base }]]);
+    const withoutTiers = await provider.protocolParameters();
+    expect(withoutTiers.refScriptCostStride).toBeUndefined();
+    expect(withoutTiers.refScriptCostMultiplier).toBeUndefined();
+  });
+
   test('protocolParameters maps canonically-ordered cost_models_raw for Plutus V3', async () => {
     // Raw arrays are already in the ledger's canonical parameter order.
     const plutusV3Raw = [100_788, 420, 1, 1, 1000, 173, 0, 1];
@@ -411,6 +453,66 @@ describe('BlockfrostNetworkInfoProvider', () => {
     expect(response.costModels.get(Cardano.PlutusLanguageVersion.V3)).toEqual(
       plutusV3Raw,
     );
+  });
+
+  test('protocolParameters maps the Plutus V4 cost model in its raw and named forms', async () => {
+    const plutusV4Raw = [100_788, 420, 1, 1, 1000, 173, 0, 1];
+    const base = {
+      a0: 0.3,
+      coins_per_utxo_word: '4310',
+      key_deposit: '2000000',
+      max_collateral_inputs: 1,
+      max_tx_size: '16384',
+      max_val_size: '1000',
+      min_fee_a: 44,
+      min_fee_b: 155_381,
+      min_pool_cost: '340000000',
+      pool_deposit: '500000000',
+      protocol_major_ver: 12,
+      protocol_minor_ver: 0,
+      rho: 0.003,
+      tau: 0.2,
+    };
+
+    mockResponses(request, [
+      [
+        'epochs/latest/parameters',
+        {
+          data: {
+            ...base,
+            cost_models: {},
+            cost_models_raw: { PlutusV4: plutusV4Raw },
+          },
+        },
+      ],
+    ]);
+    expect(
+      (await provider.protocolParameters()).costModels.get(
+        Cardano.PlutusLanguageVersion.V4,
+      ),
+    ).toEqual(plutusV4Raw);
+
+    mockResponses(request, [
+      [
+        'epochs/latest/parameters',
+        {
+          data: {
+            ...base,
+            cost_models: {
+              PlutusV4: {
+                'addInteger-cpu-arguments-intercept': 100_788,
+                'addInteger-cpu-arguments-slope': 420,
+              },
+            },
+          },
+        },
+      ],
+    ]);
+    expect(
+      (await provider.protocolParameters()).costModels.get(
+        Cardano.PlutusLanguageVersion.V4,
+      ),
+    ).toEqual([100_788, 420]);
   });
 
   test('protocolParameters falls back to named cost_models when raw is absent', async () => {

@@ -1,21 +1,21 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
-import { minAdaRequired } from '@cardano-sdk/tx-construction';
+import { outpointKey } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
+import {
+  custodyGrantAssetId,
+  encodeCustodyAccountState,
+  encodeCustodyGrant,
+} from '@lace-lib/cardano-custody';
 import {
   EvaluatedFeeShortfallError,
   InputSelectionError,
   InsufficientCollateralError,
   LargeFirstCoinSelector,
   TransactionBuilder,
-  createInputResolver,
-  outpointKey,
   referenceScriptFee,
   referenceScriptSize,
-} from '@lace-contract/cardano-context';
-import {
-  custodyGrantAssetId,
-  encodeCustodyAccountState,
-  encodeCustodyGrant,
-} from '@lace-lib/cardano-custody';
+  minAdaRequired,
+  serializeTransaction,
+} from '@lace-lib/cardano-tx-builder';
 
 import { failCustodyBuild } from './build-failure';
 import {
@@ -26,18 +26,18 @@ import {
 
 import type { CustodyChain } from './custody-chain';
 import type { CustodyReseed } from './custody-execution-estimate';
-import type * as Crypto from '@cardano-sdk/crypto';
-import type { TxEvaluator } from '@cardano-sdk/tx-construction';
 import type {
   CardanoCustodyBuildError,
   RedeemerExecutionUnits,
-  RequiredProtocolParameters,
 } from '@lace-contract/cardano-context';
+import type { Serialization } from '@lace-lib/cardano-core';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 import type {
   CustodyAccountIdentity,
   CustodyAccountState,
   CustodyGrant,
 } from '@lace-lib/cardano-custody';
+import type { TxEvaluator } from '@lace-lib/cardano-tx-builder';
 
 /** An input of a custody transaction, with its spend redeemer when a script locks it. */
 interface CustodyInput {
@@ -480,7 +480,7 @@ const withBody = (
   fields: Partial<Cardano.TxBody>,
 ): Serialization.Transaction => {
   const core = transaction.toCore();
-  return Serialization.Transaction.fromCore({
+  return serializeTransaction({
     ...core,
     body: { ...core.body, ...fields },
   });
@@ -685,8 +685,7 @@ const buildPlan = async (
   const referenceInputs = plan.referenceInputs ?? [];
   const builder = new TransactionBuilder(
     chain.chainId.networkMagic as Cardano.NetworkMagics,
-    // Full protocol parameters are a structural superset of the pick.
-    parameters as RequiredProtocolParameters,
+    parameters,
   )
     .setChangeAddress(plan.changeAddress)
     .useCoinSelector(coinSelector)
@@ -695,10 +694,6 @@ const buildPlan = async (
     .setPlutusContext({
       costModels: parameters.costModels,
       txEvaluator: evaluator,
-      inputResolver: createInputResolver([
-        ...plan.inputs.map(({ utxo }) => utxo),
-        plan.collateral.utxo,
-      ]),
       executionUnitsEstimate: seed,
     })
     .setValidityInterval({
@@ -708,6 +703,7 @@ const buildPlan = async (
       invalidHereafter: plan.invalidHereafter,
     })
     .addRequiredSigner(plan.requiredSigner);
+  if (chain.logger) builder.setLogger(chain.logger);
   for (const { utxo, redeemer } of plan.inputs) {
     builder.addInput(utxo, redeemer ? { redeemer } : undefined);
   }

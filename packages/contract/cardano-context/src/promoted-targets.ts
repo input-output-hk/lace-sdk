@@ -1,4 +1,4 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * Shared building blocks for "Lace-promoted" delegation targets carried in

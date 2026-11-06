@@ -1,4 +1,4 @@
-import { isNotNil } from '@cardano-sdk/util';
+import { isNotNil } from '@lace-lib/cardano-util';
 import { createAction, createSelector, createSlice } from '@reduxjs/toolkit';
 import { current } from 'immer';
 import differenceBy from 'lodash/differenceBy';

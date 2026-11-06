@@ -5,8 +5,8 @@
 import { EMPTY } from 'rxjs';
 
 import type { CardanoSyncAction, SideEffect } from '../../module';
-import type { Cardano } from '@cardano-sdk/core';
 import type { AnyAccount } from '@lace-contract/wallet-repo';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 
 /** Whether the account is of a kind a feature adds: never. */

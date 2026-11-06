@@ -7,7 +7,7 @@
  * animated-QR frames the host shows the offline device; `jsqr` decodes the
  * frames the host's camera scans back. Both are pure JS. The split is
  * STRUCTURAL, not a tree-shaking hope: this entry must NEVER pull the
- * `@cardano-sdk` surface, the Ledger signing tree, or the Midnight engine
+ * Cardano domain layer, the Ledger signing tree, or the Midnight engine
  * (pinned by the build's `LIGHT_ENTRY_EXCLUSIONS`), so a render / scan document
  * loads without any heavy trusted tree.
  *

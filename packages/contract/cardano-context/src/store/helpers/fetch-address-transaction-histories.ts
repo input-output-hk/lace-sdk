@@ -29,9 +29,9 @@ import type {
   CardanoProvider,
   CardanoTransactionHistoryItem,
 } from '../../types';
-import type { Cardano } from '@cardano-sdk/core';
-import type { ProviderError } from '@cardano-sdk/core';
 import type { AnyAddress } from '@lace-contract/addresses';
+import type { Cardano } from '@lace-lib/cardano-core';
+import type { ProviderError } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
 
 const MAX_TRANSACTIONS_PER_REQUEST = 100;

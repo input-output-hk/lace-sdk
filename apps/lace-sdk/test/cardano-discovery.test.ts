@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
 import { FEATURE_FLAG_CARDANO } from '@lace-contract/cardano-context';
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Milliseconds } from '@lace-lib/util';
 import { firstValueFrom, filter, take, timeout } from 'rxjs';
 import { expect, it, vi } from 'vitest';

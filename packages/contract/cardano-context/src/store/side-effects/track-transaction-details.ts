@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { ActivityType } from '@lace-contract/activities';
+import { Cardano } from '@lace-lib/cardano-core';
 import { EMPTY, filter, map, of, switchMap, withLatestFrom } from 'rxjs';
 import { resultMergeMap } from 'ts-results-es/rxjs-operators';
 

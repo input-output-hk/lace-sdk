@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
-import type { Asset, AssetProvider } from '@cardano-sdk/core';
+import type { Asset, AssetProvider } from '@lace-lib/cardano-core';
 
 /**
  * Retrieves a fallback asset object based on the provided asset ID.

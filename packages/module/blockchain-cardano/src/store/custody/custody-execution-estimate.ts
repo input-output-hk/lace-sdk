@@ -1,4 +1,4 @@
-import type { Cardano } from '@cardano-sdk/core';
+import type { Cardano } from '@lace-lib/cardano-core';
 
 /**
  * How many times one custody transaction runs each proxy handler, once per

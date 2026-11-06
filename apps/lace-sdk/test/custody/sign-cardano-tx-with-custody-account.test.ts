@@ -1,8 +1,8 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import {
   CardanoAccountId,
   CardanoNetworkId,
 } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import { hashEd25519PublicKey } from '@lace-lib/core';
 import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it } from 'vitest';

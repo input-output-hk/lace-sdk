@@ -1,8 +1,8 @@
-import { Cardano } from '@cardano-sdk/core';
 import { cardanoContextActions } from '@lace-contract/cardano-context';
 import { threeAccountCardanoWalletAccounts } from '@lace-contract/cardano-context/test/mocks';
 import { syncActions } from '@lace-contract/sync';
 import { AccountId, WalletId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { describe, expect, it } from 'vitest';
 

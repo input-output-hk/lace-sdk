@@ -477,6 +477,18 @@ describe('TransactionOutput unknown map keys', () => {
   });
 });
 
+describe('TransactionOutput repeated map keys', () => {
+  const cborWithRepeatedKey = HexBlob(
+    'a300583900537ba48a023f0a3c65e54977ffc2d78c143fb418ef6db058e006d78a7c16240714ea0e12b41a914f2945784ac494bb19573f0ca61a08afa8010a0114',
+  );
+
+  it('rejects a key that appears twice', () => {
+    expect(() => TransactionOutput.fromCbor(cborWithRepeatedKey)).toThrow(
+      'Duplicate transaction output map key: 1',
+    );
+  });
+});
+
 describe('TransactionOutput unknown datum kind', () => {
   it('fromCbor throws', () => {
     // {0: address, 1: 10, 2: [2, h'00']} - datum_option kind 2 is unknown
@@ -486,6 +498,49 @@ describe('TransactionOutput unknown datum kind', () => {
 
     expect(() => TransactionOutput.fromCbor(cborWithUnknownDatumKind)).toThrow(
       'Unexpected datum kind 2',
+    );
+  });
+});
+
+describe('TransactionOutput inline datum of 0', () => {
+  const outputWithTimelockScriptRefCbor = HexBlob(
+    'a400583910e1aa09455c5e1f8084da98c2d4f46f044eca9b69e440546ab8c91bb90af8e74fe63a594094bfaf1de7f540ef173ba6b44172bc54f270d11201821b083c63e600c53ed5a2581c4a1c412d8e2b3015a7fb7d382808fb7cb721bf93a56e8bb6661cdebea241310354a0922852f5e796b32f5fcee0d11011098574ca9802581c60b55c3d28fe9c98bb6010d72bf626f729f50fe18455dd567d30e525a2470bbef5ca07cbe9014d7a8aa8d5fcf68b885dcb1e8a031b4560a942742c916b028201d818410003d81849820082041a00cf3bdf',
+  );
+  const outputWithSignatureScriptRefCbor = HexBlob(
+    'a400583910532c81dfc12af857c57369069d52d256f95d6a99a8b20b9dc8fde0803f5c5f261fd45ae034dd22d6ff628d310e1f061b021fb04bd4fdad0001821b294c4e1a78cc608aa1581c467f58932b54910584a0e8ea25a225e06a14530b2e96e938c53a3f22a1581fb8ccaa71eb952baba23871de9ca2817b0d603551e00cd73ce4fad7e62b61bb1b48c612cf5ab6552d028201d818410003d818582282008200581c5ca7c5cc7508064f450bee9ae88a8f5a264d0f0473930553cf0e7a34',
+  );
+
+  it.each([
+    [
+      'an output with a time lock reference script',
+      outputWithTimelockScriptRefCbor,
+    ],
+    [
+      'an output with a signature reference script',
+      outputWithSignatureScriptRefCbor,
+    ],
+  ])(
+    'keeps an inline datum of 0 when %s is rebuilt from its core form',
+    (_, cbor) => {
+      const core = TransactionOutput.fromCbor(cbor).toCore();
+      const rebuilt = TransactionOutput.fromCore(core);
+
+      expect(core.datum).toEqual(0n);
+      expect(rebuilt.toCore().datum).toEqual(0n);
+      expect(rebuilt.toCbor()).toEqual(cbor);
+    },
+  );
+
+  it('keeps an inline datum of 0 from a core output', () => {
+    const output = TransactionOutput.fromCore({
+      ...basicOutput,
+      datum: 0n,
+    } as Cardano.TxOut);
+
+    expect(output.datum()?.asInlineData()?.toCore()).toEqual(0n);
+    expect(output.toCore().datum).toEqual(0n);
+    expect(TransactionOutput.fromCbor(output.toCbor()).toCore().datum).toEqual(
+      0n,
     );
   });
 });

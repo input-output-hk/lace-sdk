@@ -1,4 +1,4 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   compareRequestedGrantScope,
   CUSTODY_MAX_GRANT_BATCH,
@@ -6,8 +6,7 @@ import {
   inspectCustodyTransaction,
   parseCustodyRequestedGrantScope,
 } from '@lace-lib/cardano-custody';
-
-import { SLOT_CONFIG_NETWORK } from '../common/time';
+import { SLOT_CONFIG_NETWORK } from '@lace-lib/cardano-tx-builder';
 
 import {
   CardanoCustodyRequestRefusedError,

@@ -1,6 +1,6 @@
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
-import type { EraSummary } from '@cardano-sdk/core';
+import type { EraSummary } from '@lace-lib/cardano-core';
 
 // =====================================================================
 // Duration (seconds) → absolute validity-interval slots.

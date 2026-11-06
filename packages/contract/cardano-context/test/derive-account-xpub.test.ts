@@ -1,10 +1,10 @@
-import { Cardano } from '@cardano-sdk/core';
-import { SodiumBip32Ed25519 } from '@cardano-sdk/crypto';
+import { Cardano } from '@lace-lib/cardano-core';
+import { SodiumBip32Ed25519 } from '@lace-lib/cardano-crypto';
 import {
   InMemoryKeyAgent,
   KeyPurpose,
   util,
-} from '@cardano-sdk/key-management';
+} from '@lace-lib/cardano-key-management';
 import { SecretBox } from '@lace-lib/core';
 import { HexBytes } from '@lace-lib/util';
 import { dummyLogger } from 'ts-log';
@@ -12,8 +12,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { deriveAccountExtendedPublicKey } from '../src/signing/derive-account-xpub';
 
-import type { SerializableInMemoryKeyAgentData } from '@cardano-sdk/key-management';
 import type { AuthSecret } from '@lace-contract/authentication-prompt';
+import type { SerializableInMemoryKeyAgentData } from '@lace-lib/cardano-key-management';
 
 const inMemoryData = (
   agent: InMemoryKeyAgent,

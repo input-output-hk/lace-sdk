@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';
 

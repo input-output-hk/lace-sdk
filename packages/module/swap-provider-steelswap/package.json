@@ -10,10 +10,10 @@
   },
   "main": "src/index.ts",
   "dependencies": {
-    "@cardano-sdk/core": "0.47.1",
     "@lace-contract/feature": "*",
     "@lace-contract/module": "*",
     "@lace-contract/swap-provider": "*",
+    "@lace-lib/cardano-core": "*",
     "@lace-lib/util": "*"
   },
   "devDependencies": {}

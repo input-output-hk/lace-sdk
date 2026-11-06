@@ -1,15 +1,18 @@
-import { createSlotTimeCalc, Serialization } from '@cardano-sdk/core';
-import { Ed25519PublicKeyHex, Ed25519SignatureHex } from '@cardano-sdk/crypto';
-import { HexBlob } from '@cardano-sdk/util';
 import {
   outpointKey,
   verifyVkeyWitnesses,
 } from '@lace-contract/cardano-context';
+import { createSlotTimeCalc, Serialization } from '@lace-lib/cardano-core';
+import {
+  Ed25519PublicKeyHex,
+  Ed25519SignatureHex,
+} from '@lace-lib/cardano-crypto';
 import {
   createCustodyAccountRecord,
   custodyReferenceScriptUtxos,
   inspectCustodyTransaction,
 } from '@lace-lib/cardano-custody';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { Err, Ok } from '@lace-lib/util';
 
 import {
@@ -61,13 +64,13 @@ import { submitCardanoCustodyTransaction } from './submit-cardano-custody-transa
 import type { CardanoCustodySponsor } from './cardano-custody-sponsor';
 import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
 import type { CardanoCustodySubmission } from './submit-cardano-custody-transaction';
-import type { Cardano, EraSummary } from '@cardano-sdk/core';
-import type { Ed25519KeyHashHex } from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyAccount,
   CardanoVkeyWitness,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
+import type { Cardano, EraSummary } from '@lace-lib/cardano-core';
+import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import type { Result } from '@lace-lib/util';
 
 /** The options of `buildCardanoCustodyGrantSpend`. */

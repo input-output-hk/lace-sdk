@@ -11,8 +11,8 @@ import type {
   MakeBuildVoteDelegationTx,
   MakeBuildEarnRewardsTx,
 } from './types';
-import type { Cardano } from '@cardano-sdk/core';
 import type { DynamicallyLoadedInit } from '@lace-contract/module';
+import type { Cardano } from '@lace-lib/cardano-core';
 import type {
   HydraDepositStatus,
   HydraTxClassification,

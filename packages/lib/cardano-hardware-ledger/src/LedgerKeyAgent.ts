@@ -46,6 +46,7 @@ import { getFirstLedgerDevice } from '@ledgerhq/hw-transport-webusb/lib/webusb';
 import { HID } from 'node-hid';
 
 import { toLedgerTx } from './transformers';
+import { getUnmappedBodyFields } from './unmappedBodyFields';
 
 import type { LedgerDevice, LedgerTransportType } from './types';
 import type {
@@ -70,14 +71,15 @@ import type {
 import type LedgerTransport from '@ledgerhq/hw-transport';
 
 // Node's ESM loader hands a CommonJS module's exports object to a default
-// import; bundlers hand its `default` export.
-const TransportNodeHid = (_TransportNodeHid as any).default
+// import; bundlers hand its `default` export. Browser bundles replace the
+// Node-only transport with an empty module, whose default import is null.
+const TransportNodeHid = (_TransportNodeHid as any)?.default
   ? ((_TransportNodeHid as any).default as typeof _TransportNodeHid)
   : _TransportNodeHid;
-const TransportWebUSB = (_TransportWebUSB as any).default
+const TransportWebUSB = (_TransportWebUSB as any)?.default
   ? ((_TransportWebUSB as any).default as typeof _TransportWebUSB)
   : _TransportWebUSB;
-const LedgerConnection = (_LedgerConnection as any).default
+const LedgerConnection = (_LedgerConnection as any)?.default
   ? ((_LedgerConnection as any).default as typeof _LedgerConnection)
   : _LedgerConnection;
 type LedgerConnection = _LedgerConnection;
@@ -923,13 +925,29 @@ export class LedgerKeyAgent extends KeyAgentBase {
   // hardware devices inspect the transaction to determine which keys to use for signing,
   // however, multi sig transaction do not reference the CIP-1854 directly, but rather the script hash
   // so we need to be able to instruct the HW to sign the transaction with arbitrary keys.
+  /**
+   * Signs a transaction body on the device.
+   *
+   * @param txBody The transaction body to sign.
+   * @param context The signing context.
+   * @returns The signatures by public key.
+   * @throws HwMappingError Before reaching the device, when the body holds a
+   *   field the Ledger request drops (see {@link getUnmappedBodyFields}).
+   */
   async signTransaction(
     txBody: Serialization.TransactionBody,
     { knownAddresses, txInKeyPathMap }: SignTransactionContext,
   ): Promise<Cardano.Signatures> {
+    const body = txBody.toCore();
+    const unmappedFields = getUnmappedBodyFields(body);
+    if (unmappedFields.length > 0) {
+      throw new errors.HwMappingError(
+        `Ledger cannot carry the transaction body fields ${unmappedFields.join(
+          ', ',
+        )}`,
+      );
+    }
     try {
-      const body = txBody.toCore();
-
       const hash = txBody.hash() as unknown as HexBlob;
       const dRepPublicKey = await this.derivePublicKey(
         util.DREP_KEY_DERIVATION_PATH,
@@ -1100,6 +1118,19 @@ export class LedgerKeyAgent extends KeyAgentBase {
 
   async signBlob(): Promise<SignBlobResult> {
     throw new NotImplementedError('Operation not supported!');
+  }
+
+  /**
+   * Sub transactions (CIP-0118 nested transactions) cannot be signed with a
+   * Ledger device: its Cardano app does not know the Dijkstra era, so it can
+   * neither show nor sign a sub transaction body.
+   *
+   * @throws NotImplementedError Always.
+   */
+  async signSubTransaction(): Promise<Cardano.Signatures> {
+    throw new NotImplementedError(
+      'Sub transaction signing is not supported by Ledger devices',
+    );
   }
 
   async exportRootPrivateKey(): Promise<Crypto.Bip32PrivateKeyHex> {

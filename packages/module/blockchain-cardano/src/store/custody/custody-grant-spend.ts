@@ -1,8 +1,8 @@
-import { Cardano, Serialization } from '@cardano-sdk/core';
 import {
   CARDANO_CUSTODY_DEFAULT_GRANT_FEE_BOUND,
   outpointKey,
 } from '@lace-contract/cardano-context';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   custodyGrantAfterSpend,
   custodyGrantLiveness,
@@ -37,12 +37,12 @@ import { finalizeCustodyBuild } from './custody-validation';
 import type { CustodyAccountContext } from './custody-account';
 import type { CustodyTransactionPlan, FundSelection } from './custody-assembly';
 import type { CustodyChain } from './custody-chain';
-import type * as Crypto from '@cardano-sdk/crypto';
 import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildResult,
   CardanoCustodyCollateralFunding,
 } from '@lace-contract/cardano-context';
+import type * as Crypto from '@lace-lib/cardano-crypto';
 import type {
   CustodyGrant,
   CustodyGrantUtxo,

@@ -13,6 +13,7 @@
   },
   "include": ["src/**/*"],
   "exclude": [
+    "src/ledger-cardano-key-agent.ts",
     "src/trezor-cardano.ts",
     "src/wasm-proof-server.ts",
     "src/wasm-proof-backend.ts",

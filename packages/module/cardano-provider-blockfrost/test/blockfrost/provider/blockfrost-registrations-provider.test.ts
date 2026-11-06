@@ -1,5 +1,5 @@
-import { Cardano } from '@cardano-sdk/core';
 import { CardanoRewardAccount } from '@lace-contract/cardano-context';
+import { Cardano } from '@lace-lib/cardano-core';
 import { firstValueFrom } from 'rxjs';
 import { dummyLogger } from 'ts-log';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

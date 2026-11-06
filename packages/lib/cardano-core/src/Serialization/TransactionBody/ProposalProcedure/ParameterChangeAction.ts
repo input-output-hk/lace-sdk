@@ -9,6 +9,7 @@ import { ProtocolParamUpdate } from '../../Update';
 import { GovernanceActionKind } from './GovernanceActionKind';
 
 import type * as Cardano from '../../../Cardano';
+import type { DeserializationOptions } from '../../Common';
 import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 
 const EMBEDDED_GROUP_SIZE = 4;
@@ -68,9 +69,13 @@ export class ParameterChangeAction {
    * Deserializes the ParameterChangeAction from a CBOR byte array.
    *
    * @param cbor The CBOR encoded ParameterChangeAction object.
+   * @param options Deserialization options forwarded to the parameter update.
    * @returns The new ParameterChangeAction instance.
    */
-  static fromCbor(cbor: HexBlob): ParameterChangeAction {
+  static fromCbor(
+    cbor: HexBlob,
+    options?: DeserializationOptions,
+  ): ParameterChangeAction {
     const reader = new CborReader(cbor);
 
     const length = reader.readStartArray();
@@ -100,6 +105,7 @@ export class ParameterChangeAction {
 
     const parameterUpdate = ProtocolParamUpdate.fromCbor(
       HexBlob.fromBytes(reader.readEncodedValue()),
+      options,
     );
 
     let policyHash: Hash28ByteBase16 | undefined;

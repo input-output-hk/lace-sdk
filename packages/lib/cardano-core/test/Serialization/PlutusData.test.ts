@@ -31,6 +31,35 @@ describe('PlutusData', () => {
     );
   });
 
+  describe('map with a repeated key', () => {
+    const cbor = HexBlob('a201020103');
+
+    it('keeps both entries and re-encodes byte for byte', () => {
+      const data = Serialization.PlutusData.fromCbor(cbor);
+      expect(data.asMap()!.getLength()).toBe(2);
+      expect(data.toCbor()).toEqual(cbor);
+    });
+
+    it('holds one entry with the first value in the core form', () => {
+      const core = Serialization.PlutusData.fromCbor(
+        cbor,
+      ).toCore() as Cardano.PlutusMap;
+      expect([...core.data.entries()]).toEqual([[1n, 2n]]);
+    });
+
+    it('gives every entry of a repeated byte string key the first value in the core form', () => {
+      const bytesKeyCbor = HexBlob('a2410102410103');
+      const core = Serialization.PlutusData.fromCbor(
+        bytesKeyCbor,
+      ).toCore() as Cardano.PlutusMap;
+      expect([...core.data.values()]).toEqual([2n, 2n]);
+      expect(core.cbor).toEqual(bytesKeyCbor);
+      expect(Serialization.PlutusData.fromCore(core).toCbor()).toEqual(
+        bytesKeyCbor,
+      );
+    });
+  });
+
   describe('Integer', () => {
     it('can encode a positive integer', () => {
       const data = Serialization.PlutusData.newInteger(5n);
@@ -77,6 +106,34 @@ describe('PlutusData', () => {
         HexBlob('3bffffffffffffffff'),
       );
       expect(data.asInteger()).toEqual(-18_446_744_073_709_551_616n);
+    });
+
+    it('decodes a negative bignum as minus one minus the unsigned value in its byte string', () => {
+      const data = Serialization.PlutusData.fromCbor(
+        HexBlob('c349000100000000000000'),
+      );
+      expect(data.asInteger()).toEqual(-72_057_594_037_927_937n);
+      expect(data.hash()).toEqual(
+        'b344ec8fc3fc6ef99680101ab2fda65a3f24fafa38f8c262450355fd7c038af1',
+      );
+    });
+
+    it('rebuilds a decoded negative bignum from its core form with the same value', () => {
+      const data = Serialization.PlutusData.fromCbor(
+        HexBlob('c349000100000000000000'),
+      );
+      expect(Serialization.PlutusData.fromCore(data.toCore()).toCbor()).toEqual(
+        '3b0100000000000000',
+      );
+    });
+
+    it('round trips a negative integer below the 64-bit range as a negative bignum', () => {
+      const value = -(2n ** 64n) - 5n;
+      const cbor = Serialization.PlutusData.newInteger(value).toCbor();
+      expect(cbor).toEqual('c349010000000000000004');
+      expect(Serialization.PlutusData.fromCbor(cbor).asInteger()).toEqual(
+        value,
+      );
     });
 
     it('can decode a positive tagged indefinite length unbounded int', () => {
@@ -240,6 +297,48 @@ describe('PlutusData', () => {
       outer.add(Serialization.PlutusData.newInteger(5n));
 
       expect(outer.toCbor()).toEqual('9f01029f0102030405ff9f0102030405ff05ff');
+    });
+
+    it.each(['820102', '9f0102ff', '80', '9fff'])(
+      're-encodes a decoded list %s with its original bytes',
+      cbor => {
+        const list = Serialization.PlutusList.fromCbor(HexBlob(cbor));
+
+        expect(list.toCbor()).toEqual(cbor);
+      },
+    );
+
+    it('re-encodes a decoded definite length list reached through plutus data with its original bytes', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('820102'));
+
+      expect(data.asList()!.toCbor()).toEqual('820102');
+    });
+
+    it('re-encodes the fields of a decoded constr with their original bytes', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('d8799f0102ff'));
+
+      expect(data.asConstrPlutusData()!.getData().toCbor()).toEqual('9f0102ff');
+
+      const definite = Serialization.PlutusData.fromCbor(HexBlob('d879820102'));
+
+      expect(definite.asConstrPlutusData()!.getData().toCbor()).toEqual(
+        '820102',
+      );
+    });
+
+    it('re-encodes a decoded list from its elements after adding to it', () => {
+      const list = Serialization.PlutusList.fromCbor(HexBlob('820102'));
+
+      list.add(Serialization.PlutusData.newInteger(3n));
+
+      expect(list.toCbor()).toEqual('9f010203ff');
+    });
+
+    it('compares decoded lists by their elements only', () => {
+      const definite = Serialization.PlutusList.fromCbor(HexBlob('820102'));
+      const indefinite = Serialization.PlutusList.fromCbor(HexBlob('9f0102ff'));
+
+      expect(definite.equals(indefinite)).toBe(true);
     });
   });
 
@@ -406,6 +505,201 @@ describe('PlutusData', () => {
       const data = new Serialization.ConstrPlutusData(0n, args);
 
       expect(data.toCbor()).toEqual('d8799f0102030405ff');
+    });
+
+    it('re-encodes a decoded general form Constr with its original bytes', () => {
+      const cbor = HexBlob('d86682009f0102030405ff');
+
+      expect(Serialization.ConstrPlutusData.fromCbor(cbor).toCbor()).toEqual(
+        cbor,
+      );
+    });
+
+    it('re-encodes a decoded general form Constr written as an indefinite length array with its original bytes', () => {
+      const cbor = HexBlob('d8669f009f0102030405ffff');
+
+      expect(Serialization.ConstrPlutusData.fromCbor(cbor).toCbor()).toEqual(
+        cbor,
+      );
+    });
+
+    it('writes the compact form when rebuilt from the parts of a decoded general form Constr', () => {
+      const decoded = Serialization.ConstrPlutusData.fromCbor(
+        HexBlob('d86682009f0102030405ff'),
+      );
+
+      const rebuilt = new Serialization.ConstrPlutusData(
+        decoded.getAlternative(),
+        decoded.getData(),
+      );
+
+      expect(rebuilt.toCbor()).toEqual('d8799f0102030405ff');
+    });
+  });
+
+  describe('edits after decoding', () => {
+    const integer = (value: bigint) =>
+      Serialization.PlutusData.newInteger(value);
+
+    it('re-encodes a decoded constr from its arguments after adding to them', () => {
+      const constr = Serialization.ConstrPlutusData.fromCbor(HexBlob('d87980'));
+
+      constr.getData().add(integer(1n));
+
+      expect(constr.toCbor()).toEqual('d8799f01ff');
+    });
+
+    it('re-encodes a decoded general form constr in the compact form after adding to its arguments', () => {
+      const constr = Serialization.ConstrPlutusData.fromCbor(
+        HexBlob('d8668200820102'),
+      );
+
+      constr.getData().add(integer(3n));
+
+      expect(constr.toCbor()).toEqual('d8799f010203ff');
+    });
+
+    it('re-encodes and re-hashes decoded plutus data after adding to its constr arguments', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('d87980'));
+      const decodedHash = data.hash();
+
+      data.asConstrPlutusData()!.getData().add(integer(1n));
+
+      expect(data.toCbor()).toEqual('d8799f01ff');
+      expect(data.hash()).not.toEqual(decodedHash);
+      expect(data.hash()).toEqual(
+        Serialization.PlutusData.fromCbor(HexBlob('d8799f01ff')).hash(),
+      );
+    });
+
+    it('re-encodes decoded plutus data after adding to its list', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('80'));
+
+      data.asList()!.add(integer(1n));
+
+      expect(data.toCbor()).toEqual('9f01ff');
+    });
+
+    it('re-encodes decoded plutus data after inserting into its map', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('a0'));
+
+      data.asMap()!.insert(integer(1n), integer(2n));
+
+      expect(data.toCbor()).toEqual('a10102');
+    });
+
+    it('re-encodes a decoded list after adding to the arguments of a constr in it', () => {
+      const list = Serialization.PlutusList.fromCbor(HexBlob('81d87980'));
+
+      list.get(0).asConstrPlutusData()!.getData().add(integer(1n));
+
+      expect(list.toCbor()).toEqual('9fd8799f01ffff');
+    });
+
+    it('re-encodes a decoded list after adding to a list in it', () => {
+      const list = Serialization.PlutusList.fromCbor(HexBlob('8180'));
+
+      list.get(0).asList()!.add(integer(1n));
+
+      expect(list.toCbor()).toEqual('9f9f01ffff');
+    });
+
+    it('re-encodes a decoded constr after adding to a list in its arguments', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('d8798180'));
+
+      data.asConstrPlutusData()!.getData().get(0).asList()!.add(integer(1n));
+
+      expect(data.toCbor()).toEqual('d8799f9f01ffff');
+    });
+
+    it('re-encodes a decoded map after adding to a list held as a value', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('a10180'));
+
+      data.asMap()!.get(integer(1n))!.asList()!.add(integer(2n));
+
+      expect(data.toCbor()).toEqual('a1019f02ff');
+    });
+
+    it('re-encodes a decoded map after adding to the arguments of a constr held as a value', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('a101d87980'));
+
+      data
+        .asMap()!
+        .get(integer(1n))!
+        .asConstrPlutusData()!
+        .getData()
+        .add(integer(2n));
+
+      expect(data.toCbor()).toEqual('a101d8799f02ff');
+    });
+
+    it('re-encodes a decoded list after inserting into a map in it', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('9fa0ff'));
+
+      data.asList()!.get(0).asMap()!.insert(integer(1n), integer(2n));
+
+      expect(data.toCbor()).toEqual('9fa10102ff');
+    });
+
+    it('keeps the decoded bytes of nested containers that were not changed', () => {
+      const cbor = HexBlob('d8799f9f01ffa20102010381d8668200820102ff');
+      const data = Serialization.PlutusData.fromCbor(cbor);
+
+      expect(data.toCbor()).toEqual(cbor);
+      expect(data.toCbor()).toEqual(cbor);
+    });
+
+    it('keeps the decoded bytes of untouched siblings when one element changes', () => {
+      const data = Serialization.PlutusData.fromCbor(
+        HexBlob('829f01ffd86682008180'),
+      );
+      const constr = data.asList()!.get(1).asConstrPlutusData()!;
+
+      constr.getData().get(0).asList()!.add(integer(2n));
+
+      expect(data.toCbor()).toEqual('9f9f01ffd8799f9f02ffffff');
+    });
+
+    it('re-encodes a decoded map after inserting into a map held as a value', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('a101a0'));
+
+      data.asMap()!.get(integer(1n))!.asMap()!.insert(integer(2n), integer(3n));
+
+      expect(data.toCbor()).toEqual('a101a10203');
+    });
+
+    it('keeps the decoded bytes of an untouched map when a sibling is added', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('9fa1180101ff'));
+
+      data.asList()!.add(integer(2n));
+
+      expect(data.toCbor()).toEqual('9fa118010102ff');
+    });
+
+    it('re-encodes an edit made after the decoded bytes were reused', () => {
+      const data = Serialization.PlutusData.fromCbor(HexBlob('8180'));
+
+      expect(data.toCbor()).toEqual('8180');
+
+      data.asList()!.get(0).asList()!.add(integer(1n));
+
+      expect(data.toCbor()).toEqual('9f9f01ffff');
+      expect(data.toCbor()).toEqual('9f9f01ffff');
+    });
+
+    it('decodes deeply nested maps without encoding them again', () => {
+      const cbor = HexBlob('a100'.repeat(1000) + '00');
+      const mapToCbor = vi.spyOn(Serialization.PlutusMap.prototype, 'toCbor');
+
+      try {
+        const data = Serialization.PlutusData.fromCbor(cbor);
+
+        expect(mapToCbor).not.toHaveBeenCalled();
+        expect(data.toCbor()).toEqual(cbor);
+        expect(mapToCbor).toHaveBeenCalledTimes(1);
+      } finally {
+        mapToCbor.mockRestore();
+      }
     });
   });
 

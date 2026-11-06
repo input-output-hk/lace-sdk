@@ -1,19 +1,25 @@
-import { Cardano } from '@cardano-sdk/core';
-import { Ed25519PublicKeyHex, Ed25519SignatureHex } from '@cardano-sdk/crypto';
-import { KeyPurpose, KeyRole } from '@cardano-sdk/key-management';
-import { HexBlob } from '@cardano-sdk/util';
+import { Cardano } from '@lace-lib/cardano-core';
+import {
+  Ed25519PublicKeyHex,
+  Ed25519SignatureHex,
+} from '@lace-lib/cardano-crypto';
 import {
   custodyDataSigStructure,
   custodyDeviceAccountIndex,
   deriveCustodyDeviceKey,
   encodeCustodyDataSignature,
 } from '@lace-lib/cardano-custody';
+import { KeyPurpose, KeyRole } from '@lace-lib/cardano-key-management';
+import { HexBlob } from '@lace-lib/cardano-util';
 import { hashEd25519PublicKey } from '@lace-lib/core';
 
 import { createCardanoKeyAgentFromMnemonic } from './cardano-key-agent';
 
 import type { CardanoVkeyWitness } from './vkey-witnesses';
-import type { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@cardano-sdk/crypto';
+import type {
+  Bip32PublicKeyHex,
+  Ed25519KeyHashHex,
+} from '@lace-lib/cardano-crypto';
 import type {
   CustodyContractVersion,
   CustodyDataSignature,

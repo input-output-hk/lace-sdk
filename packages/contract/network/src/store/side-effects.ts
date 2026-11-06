@@ -1,4 +1,4 @@
-import { deepEquals, isNotNil } from '@cardano-sdk/util';
+import { deepEquals, isNotNil } from '@lace-lib/cardano-util';
 import { distinctUntilChanged, filter, map, merge } from 'rxjs';
 
 import { FEATURE_FLAG_NETWORK_TYPE } from '../const';

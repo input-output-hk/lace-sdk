@@ -6,7 +6,7 @@
 // transaction and its caller-supplied resolutions to report the account's
 // effects, and Lace adds refusals for shapes it never builds.
 
-import { Cardano } from '@cardano-sdk/core';
+import { Cardano } from '@lace-lib/cardano-core';
 
 import { decodeCustodyGrant } from '../codecs/account-state';
 import {
@@ -77,8 +77,8 @@ import type { CustodyStateChange } from './state-change';
 import type { InputView, TransactionFacts } from './transaction-facts';
 import type { CustodyValueDelta } from './value';
 import type { CustodyStateViolation } from '../state/rules';
-import type { Hash28ByteBase16 } from '@cardano-sdk/crypto';
-import type { HexBlob } from '@cardano-sdk/util';
+import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import type { HexBlob } from '@lace-lib/cardano-util';
 
 export interface AccountCandidate extends CustodyAccountHashes {
   readonly contractVersion: CustodyContractVersion;
