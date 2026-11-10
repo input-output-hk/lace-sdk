@@ -6,9 +6,7 @@
  *
  * The entry carries the Cardano entry too, so an app creates the wallet these
  * features run on from this entry alone, as the Bitcoin entry does for its
- * own. Each entry's declarations are bundled on their own, and a wallet typed
- * by one entry's declarations does not accept the modules another entry's
- * declarations type: their symbols and module addon names differ.
+ * own.
  */
 export * from './cardano';
 export * as m from './experimental-modules';

@@ -47,6 +47,8 @@ export default defineConfig(
       'test/bitcoin-consumer-types*.mts',
       'test/midnight-consumer-types.mts',
       'test/experimental-consumer-types*.mts',
+      'test/cross-entry-consumer-types*.mts',
+      'test/declaration-consumer-types.mts',
     ],
   },
 );

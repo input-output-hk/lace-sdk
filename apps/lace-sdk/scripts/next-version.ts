@@ -87,9 +87,9 @@ import {
 /**
  * The packages one release carries, each with the entries whose declarations
  * are its API. `@laceio/sdk`'s exports keep their `<entry>:<name>` keys; each
- * Cardano package's are `<package>/<entry>:<name>`, and their declarations
- * import shared chunks, which are part of the API compared. An entry a
- * release removed stays listed until the previous stable release no longer
+ * Cardano package's are `<package>/<entry>:<name>`. A package's entries may
+ * import shared declaration files, which are part of the API compared.
+ * An entry a release removed stays listed until the previous stable release no longer
  * declares it: a build without its declarations is read without it, so the
  * exports of the release before count as removed.
  */
@@ -157,13 +157,9 @@ export const readFamilyExports = (root: string, only?: string): ExportMap =>
           .filter(([, file]) => fs.existsSync(file)),
       );
       if (Object.keys(files).length === 0) return [];
-      return prefixed(
-        member.prefix,
-        readExports(files, { followRelativeImports: true }),
-      ).map(([key, value]): [string, DeclaredExport] => [
-        key,
-        { ...value, key },
-      ]);
+      return prefixed(member.prefix, readExports(files)).map(
+        ([key, value]): [string, DeclaredExport] => [key, { ...value, key }],
+      );
     }),
   );
 

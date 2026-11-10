@@ -19,4 +19,5 @@ import type { Tagged } from 'type-fest';
  * ```
  */
 export type FailureId = Tagged<string, 'FailureId'>;
+/** Brands a string as a {@link FailureId}. */
 export const FailureId = (value: string): FailureId => value as FailureId;

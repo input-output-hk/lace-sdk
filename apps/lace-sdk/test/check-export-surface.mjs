@@ -1,9 +1,18 @@
 // Each entry's declarations and its ESM and CommonJS outputs export the same
 // names, and every name the declarations promise as a value exists at run
-// time. On canary, every type a Passport export names is exported from the
-// experimental entry. On stable, no output file names a canary feature or
-// Lace's own apps, nor any name only the canary build exports: a stable export
-// or doc comment that mentions one commits the stable API to it (ADR 66).
+// time. Each relative specifier in the declaration files an entry reaches
+// names a file of the package and names that file exports, and each
+// declaration file is an entry's or a shared one an entry reaches, at the top
+// of dist/: a consumer compiles the declarations with `skipLibCheck`, so a
+// file or name a specifier misses reads as `any`, and the scans of dist/ in
+// this and the other checks read its top level only. On canary, every type a
+// Passport export names is exported from the experimental entry. On stable, no
+// output file names a canary feature or Lace's own apps, nor any name only the
+// canary build exports: a stable export or doc comment that mentions one
+// commits the stable API to it (ADR 66), and the root entry exports every name
+// the other declaration files it reaches export, so that a library emitting
+// declarations names, through the root, every type the root's declarations
+// take from a shared file and sees no TS2742 naming one of them.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -15,14 +24,17 @@ import {
   CANARY_ONLY_ENTRIES,
   channelEntryNames,
   entryFiles,
+  SHARED_DECLARATIONS,
 } from '../scripts/entries.mjs';
 import {
   canaryOnlyIdentifiers,
   exportSurfaceProblems,
   findMarkers,
   identifierPattern,
+  readDeclarationClosure,
   readDeclaredExports,
   readUnexportedTypeReferences,
+  readUnnameableExports,
 } from '../scripts/export-surface.ts';
 import {
   channelEntries,
@@ -75,10 +87,10 @@ const ALLOWED_CANARY_NAMES = new Set([
 ]);
 
 const problems = [];
+const reachedDeclarations = new Set();
 for (const entry of channelEntryNames(CHANNEL)) {
-  const declared = readDeclaredExports(
-    path.join(distribution, `${entry}.d.ts`),
-  );
+  const declarationFile = path.join(distribution, `${entry}.d.ts`);
+  const declared = readDeclaredExports(declarationFile);
   const esm = await import(
     pathToFileURL(path.join(distribution, `${entry}.js`)).href
   );
@@ -92,6 +104,28 @@ for (const entry of channelEntryNames(CHANNEL)) {
       },
     }),
   );
+  const closure = readDeclarationClosure(declarationFile);
+  problems.push(...closure.problems.map(problem => `${entry}: ${problem}`));
+  for (const file of closure.files) reachedDeclarations.add(path.resolve(file));
+}
+
+// `.dts-work` is the declaration build's working directory, not output.
+for (const file of fs.readdirSync(distribution, { recursive: true }).sort()) {
+  if (!/\.d\.[cm]?ts$/.test(file) || file.startsWith(`.dts-work${path.sep}`)) {
+    continue;
+  }
+  if (path.dirname(file) !== '.') {
+    problems.push(`${file}: a declaration file below the top of dist/`);
+  } else if (
+    !channelEntryNames(CHANNEL).some(entry => file === `${entry}.d.ts`) &&
+    !SHARED_DECLARATIONS.test(file)
+  ) {
+    problems.push(
+      `${file}: neither an entry's declarations nor a shared declaration file`,
+    );
+  } else if (!reachedDeclarations.has(path.join(distribution, file))) {
+    problems.push(`${file}: no entry's declarations reach this file`);
+  }
 }
 
 if (CHANNEL === 'canary') {
@@ -150,6 +184,15 @@ if (CHANNEL === 'stable') {
       ].map(marker => `${file}:${marker}`),
     );
   }
+  // Both stable entries carry the same compatibility promise. Cardano loads
+  // the root's declarations through a type-only import, so either entry's
+  // consumers can name every shared type through the root.
+  problems.push(
+    ...readUnnameableExports(path.join(distribution, 'index.d.ts')).map(
+      ({ name, file }) =>
+        `a library that emits declarations cannot name ${name} (${file}) through @laceio/sdk; export it from the root entry`,
+    ),
+  );
 }
 
 assert.equal(
@@ -159,9 +202,9 @@ assert.equal(
 );
 // eslint-disable-next-line no-console -- concise build proof
 console.log(
-  `Export surface (${CHANNEL}): declarations and both outputs agree${
+  `Export surface (${CHANNEL}): declarations and both outputs agree, and the declaration files the entries reach resolve${
     CHANNEL === 'stable'
-      ? ', and no output names a canary feature, an app or a canary-only export'
+      ? '; no output names a canary feature, an app or a canary-only export, and the root entry exports every name its declaration files share'
       : ''
   }`,
 );

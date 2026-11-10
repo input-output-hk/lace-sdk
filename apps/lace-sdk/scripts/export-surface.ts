@@ -1,10 +1,14 @@
 /**
  * What a built entry promises and what it delivers: the names its bundled
- * declarations export as values and as types, and the names its runtime
- * module exports. A name declared as a value that the runtime lacks passes
- * type-checking and fails when the module links; a runtime name the
- * declarations lack ships undocumented and untyped.
+ * declarations export as values and as types, the names its runtime module
+ * exports, and the declaration files its declarations reach. A name declared
+ * as a value that the runtime lacks passes type-checking and fails when the
+ * module links; a runtime name the declarations lack ships undocumented and
+ * untyped; a declaration file or name that a relative import misses reads as
+ * `any` wherever a consumer skips checking libraries.
  */
+import path from 'node:path';
+
 import ts from 'typescript';
 
 /** The export names of a module, by whether a name is usable as a value. */
@@ -215,12 +219,15 @@ const renamedSymbol = (
 };
 
 /**
- * The types the declarations of `owners` name that `declarationFile` declares
- * without exporting them: an app cannot write such a type, and the docs
- * cannot link it. A name counts as exported when the entry exports it under
- * any name, a namespace's members included, in the meaning the reference
- * uses: exporting a value does not export a type of the same name. Only the
- * owners' own declarations are read, not those of the types they name.
+ * The types the declarations of `owners` name that the package's declaration
+ * files declare and `declarationFile` does not export: an app cannot write
+ * such a type, and the docs cannot link it. The package's declaration files
+ * are those in the directory of `declarationFile`: the entry's own and any it
+ * shares with other entries. A name counts as exported when the entry exports
+ * it under any name, a namespace's members included, in the meaning the
+ * reference uses: exporting a value does not export a type of the same name.
+ * Only the owners' own declarations are read, not those of the types they
+ * name.
  *
  * @param owners - Export names, a namespace member as `<namespace>.<member>`.
  */
@@ -230,16 +237,16 @@ export const readUnexportedTypeReferences = (
 ): UnexportedTypeReference[] => {
   const { checker, source, moduleSymbol } =
     compileDeclarations(declarationFile);
+  const directory = path.dirname(source.fileName);
+  const inPackage = (declaration: ts.Declaration) =>
+    path.dirname(declaration.getSourceFile().fileName) === directory;
   const isLocal = (symbol: ts.Symbol) =>
-    symbol.declarations?.some(
-      declaration => declaration.getSourceFile() === source,
-    ) ?? false;
-  /** The local declarations of `symbol` that give it one of `meaning`. */
+    symbol.declarations?.some(inPackage) ?? false;
+  /** The package's declarations of `symbol` that give it one of `meaning`. */
   const declarationsOf = (symbol: ts.Symbol, meaning: ts.SymbolFlags) =>
     (symbol.declarations ?? []).filter(
       declaration =>
-        declaration.getSourceFile() === source &&
-        declarationMeaning(declaration) & meaning,
+        inPackage(declaration) && declarationMeaning(declaration) & meaning,
     );
 
   /** The meanings of each symbol the entry exports, through renames. */
@@ -319,6 +326,312 @@ export const readUnexportedTypeReferences = (
     references.push(...[...named].sort().map(type => ({ owner, type })));
   }
   return references;
+};
+
+/** The declaration files an entry reaches, and what they import. */
+export interface DeclarationClosure {
+  /** The package's declaration files the entry reaches, itself included. */
+  files: string[];
+  /** The packages the files import, augment or reference, by name, sorted. */
+  packages: string[];
+  /**
+   * Each relative specifier that reaches no file, a file outside the
+   * package's declarations or a file that does not export a name it imports,
+   * and each augmentation of a package file that names an interface the file
+   * does not export.
+   */
+  problems: string[];
+}
+
+/** The package a bare specifier names: its scope and name, or its name. */
+export const packageName = (specifier: string) =>
+  specifier
+    .split('/')
+    .slice(0, specifier.startsWith('@') ? 2 : 1)
+    .join('/');
+
+/** Whether a declaration sits in a `declare module '…'` block. */
+const inModuleBlock = (declaration: ts.Node) =>
+  ts.findAncestor(
+    declaration.parent,
+    node => ts.isModuleDeclaration(node) && ts.isStringLiteral(node.name),
+  ) !== undefined;
+
+/**
+ * Compiles `entryFile` and the declaration files it reaches through relative
+ * specifiers, with no package resolved. A specifier resolves as Node.js
+ * resolves it, so in an ES module package a relative specifier names its
+ * file's extension. `files` are those in the entry's directory, the package's
+ * own.
+ */
+const compilePackageDeclarations = (entryFile: string) => {
+  const options: ts.CompilerOptions = {
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    target: ts.ScriptTarget.ES2022,
+    noEmit: true,
+    noLib: true,
+    skipLibCheck: true,
+    types: [],
+  };
+  const host = ts.createCompilerHost(options);
+  const resolutions = new Map<
+    ts.StringLiteralLike,
+    ts.ResolvedModuleFull | undefined
+  >();
+  // Only a relative specifier resolves: a declaration file of the same
+  // package.
+  const resolve = (literal: ts.StringLiteralLike, file: ts.SourceFile) => {
+    if (!resolutions.has(literal)) {
+      resolutions.set(
+        literal,
+        literal.text.startsWith('.')
+          ? ts.resolveModuleName(
+              literal.text,
+              file.fileName,
+              options,
+              host,
+              undefined,
+              undefined,
+              ts.getModeForUsageLocation(file, literal, options),
+            ).resolvedModule
+          : undefined,
+      );
+    }
+    return resolutions.get(literal);
+  };
+  /* eslint-disable max-params -- the compiler host's signature */
+  host.resolveModuleNameLiterals = (
+    literals,
+    _containingFile,
+    _redirectedReference,
+    _options,
+    containingSourceFile,
+  ) =>
+    literals.map(literal => ({
+      resolvedModule: resolve(literal, containingSourceFile),
+    }));
+  /* eslint-enable max-params */
+  host.resolveTypeReferenceDirectiveReferences = references =>
+    references.map(() => ({ resolvedTypeReferenceDirective: undefined }));
+  const program = ts.createProgram([entryFile], options, host);
+  const directory = path.dirname(path.resolve(entryFile));
+  const files = program
+    .getSourceFiles()
+    .filter(
+      file =>
+        !program.isSourceFileDefaultLibrary(file) &&
+        path.dirname(file.fileName) === directory,
+    );
+  return {
+    program,
+    checker: program.getTypeChecker(),
+    resolve,
+    directory,
+    files,
+  };
+};
+
+/**
+ * Reads the declaration files `entryFile` reaches through relative
+ * specifiers: the package's own files, with no package resolved. A consumer
+ * compiles them with `skipLibCheck`, so a file a specifier misses, or a name
+ * the file does not export, reads as `any` and reports nothing, and an
+ * augmentation of an interface the file does not export merges into nothing.
+ * A specifier that leaves the entry's directory names a file the published
+ * package does not hold.
+ */
+export const readDeclarationClosure = (
+  entryFile: string,
+): DeclarationClosure => {
+  const { program, checker, resolve, directory, files } =
+    compilePackageDeclarations(entryFile);
+
+  const exportsByFile = new Map<ts.SourceFile, Map<string, ts.Symbol>>();
+  const exportsOf = (file: ts.SourceFile) => {
+    let exports = exportsByFile.get(file);
+    if (!exports) {
+      const moduleSymbol = checker.getSymbolAtLocation(file);
+      exports = new Map(
+        (moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : []).map(
+          symbol => [symbol.name, symbol],
+        ),
+      );
+      exportsByFile.set(file, exports);
+    }
+    return exports;
+  };
+  /**
+   * Whether `file` itself exports `name`: an augmentation merges its own
+   * declarations into the file's exports, so an export only augmentations
+   * declare is not one.
+   */
+  const declaresExport = (file: ts.SourceFile, name: string) => {
+    const exported = exportsOf(file).get(name);
+    return (
+      exported !== undefined &&
+      (resolveAlias(checker, exported).declarations ?? []).some(
+        declaration => !inModuleBlock(declaration),
+      )
+    );
+  };
+
+  const packages = new Set<string>();
+  const problems = new Set<string>();
+  for (const file of files) {
+    const where = path.relative(directory, file.fileName);
+    for (const { fileName } of file.typeReferenceDirectives) {
+      packages.add(fileName === 'node' ? '@types/node' : packageName(fileName));
+    }
+    /** The package file `literal` reaches; a package is recorded instead. */
+    const reach = (literal: ts.StringLiteralLike) => {
+      if (!literal.text.startsWith('.')) {
+        packages.add(packageName(literal.text));
+        return undefined;
+      }
+      const resolved = resolve(literal, file);
+      if (resolved && path.dirname(resolved.resolvedFileName) !== directory) {
+        problems.add(
+          `${where}: '${literal.text}' reaches ${path.relative(
+            directory,
+            resolved.resolvedFileName,
+          )}, outside the package's declarations`,
+        );
+        return undefined;
+      }
+      const reached =
+        resolved && program.getSourceFile(resolved.resolvedFileName);
+      if (!reached) {
+        problems.add(`${where}: '${literal.text}' reaches no declaration file`);
+      }
+      return reached;
+    };
+    const importNames = (literal: ts.StringLiteralLike, names: string[]) => {
+      const reached = reach(literal);
+      if (!reached) return;
+      for (const name of names.filter(name => !exportsOf(reached).has(name))) {
+        problems.add(`${where}: '${literal.text}' does not export '${name}'`);
+      }
+    };
+    const augmentNames = (literal: ts.StringLiteralLike, names: string[]) => {
+      const reached = reach(literal);
+      if (!reached) return;
+      for (const name of names.filter(name => !declaresExport(reached, name))) {
+        problems.add(
+          `${where}: the augmentation of '${literal.text}' names '${name}', which that file does not export`,
+        );
+      }
+    };
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        const clause = node.importClause;
+        importNames(node.moduleSpecifier, [
+          ...(clause?.name ? ['default'] : []),
+          ...(clause?.namedBindings && ts.isNamedImports(clause.namedBindings)
+            ? clause.namedBindings.elements.map(
+                element => (element.propertyName ?? element.name).text,
+              )
+            : []),
+        ]);
+      } else if (
+        ts.isExportDeclaration(node) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        importNames(
+          node.moduleSpecifier,
+          node.exportClause && ts.isNamedExports(node.exportClause)
+            ? node.exportClause.elements.map(
+                element => (element.propertyName ?? element.name).text,
+              )
+            : [],
+        );
+      } else if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteral(node.argument.literal)
+      ) {
+        let qualifier: ts.EntityName | undefined = node.qualifier;
+        while (qualifier && ts.isQualifiedName(qualifier)) {
+          qualifier = qualifier.left;
+        }
+        importNames(node.argument.literal, qualifier ? [qualifier.text] : []);
+      } else if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference) &&
+        ts.isStringLiteral(node.moduleReference.expression)
+      ) {
+        reach(node.moduleReference.expression);
+      } else if (
+        ts.isModuleDeclaration(node) &&
+        ts.isStringLiteral(node.name)
+      ) {
+        augmentNames(
+          node.name,
+          node.body && ts.isModuleBlock(node.body)
+            ? node.body.statements
+                .filter(ts.isInterfaceDeclaration)
+                .map(({ name }) => name.text)
+            : [],
+        );
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+  }
+  return {
+    files: files.map(({ fileName }) => fileName),
+    packages: [...packages].sort(),
+    problems: [...problems],
+  };
+};
+
+/** A name that a declaration file an entry reaches exports and the entry does not. */
+export interface UnnameableExport {
+  /** The name the file exports. */
+  name: string;
+  /** The file, relative to the entry's directory. */
+  file: string;
+}
+
+/**
+ * The names that the other declaration files `entryFile` reaches export and
+ * the entry does not export under any name. A declaration file shared between
+ * entries exports every name another file imports from it, so TypeScript
+ * names such a type in the declarations a consumer library emits through an
+ * entry that exports it, and reports TS2742 when no entry the library's
+ * program loads does.
+ */
+export const readUnnameableExports = (
+  entryFile: string,
+): UnnameableExport[] => {
+  const { program, checker, directory, files } =
+    compilePackageDeclarations(entryFile);
+  const exportsOf = (file: ts.SourceFile) => {
+    const moduleSymbol = checker.getSymbolAtLocation(file);
+    return moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+  };
+  const entry = program.getSourceFile(path.resolve(entryFile));
+  // An entry's export of the symbol under another name names it too, as the
+  // root's `m` names the namespace a shared file exports under its own name.
+  const exported = new Set(
+    (entry ? exportsOf(entry) : []).map(symbol =>
+      resolveAlias(checker, symbol),
+    ),
+  );
+  return files
+    .filter(file => file !== entry)
+    .flatMap(file =>
+      exportsOf(file)
+        .filter(symbol => !exported.has(resolveAlias(checker, symbol)))
+        .map(({ name }) => ({
+          name,
+          file: path.relative(directory, file.fileName),
+        })),
+    );
 };
 
 export interface ExportSurfaceProblemsProps {

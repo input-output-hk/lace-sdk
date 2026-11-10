@@ -96,6 +96,13 @@ export const entrySource = (entry, channel) =>
   CANARY_ONLY_ENTRIES.find(({ name }) => name === entry)?.source ??
   `src/${entry}${channel === 'canary' ? '.canary' : ''}.ts`;
 
+/**
+ * The declaration files the entries of a channel share, beside their own
+ * `<entry>.d.ts`: `shared-` and eight hexadecimal digits of a hash, as
+ * DECLARATION_OUTPUT in scripts/declaration-chunks.mjs names them and says why.
+ */
+export const SHARED_DECLARATIONS = /^shared-[0-9a-f]{8}\.d\.ts$/;
+
 /** The files the build writes for an entry: ESM, CommonJS and declarations. */
 export const entryFiles = entry => [
   `${entry}.js`,

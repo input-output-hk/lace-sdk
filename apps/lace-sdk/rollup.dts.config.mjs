@@ -5,6 +5,14 @@ import { fileURLToPath } from 'node:url';
 import dts from 'rollup-plugin-dts';
 import ts from 'typescript';
 
+import {
+  assertDeclarationLayout,
+  DECLARATION_OUTPUT,
+  declarationFiles,
+  namespaceMembersFromOtherChunks,
+  placeModuleAugmentations,
+  redirectSdkBarrelReferences,
+} from './scripts/declaration-chunks.mjs';
 import { channelEntryNames, entrySource } from './scripts/entries.mjs';
 import {
   cardanoSubpathOf,
@@ -120,15 +128,7 @@ const toRelative = (fromFile, targetPath) => {
  * treats them as local project files → they get inlined.
  */
 const rewriteInternalImportsOnDisk = () => {
-  const allDtsFiles = [];
-  const collectDts = directory => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const full = path.join(directory, entry.name);
-      if (entry.isDirectory()) collectDts(full);
-      else if (entry.name.endsWith('.d.ts')) allDtsFiles.push(full);
-    }
-  };
-  collectDts(dtsWork);
+  const allDtsFiles = declarationFiles(dtsWork);
 
   // --- Pattern 1: @lace-* specifiers in `from '...'` and `import('...')` ---
   const laceFromPattern =
@@ -226,14 +226,14 @@ const rewriteInternalImportsOnDisk = () => {
 };
 
 /**
- * The contract packages whose augmentations the declarations flatten: every
+ * The contract packages whose augmentations the declarations keep: every
  * one on canary; on stable, those whose contract the runtime bundles
  * (tsdown.config.ts, record-bundled-contracts), so the stable types describe
  * the state, dependencies, config and addons of the contracts the SDK loads.
  * A contract the stable SDK names a type from but never loads, such as the
  * authentication prompt's or the onboarding flow's, adds nothing to them.
  */
-const flattensAugmentationsOf = (() => {
+const keepsAugmentationsOf = (() => {
   if (CHANNEL !== 'stable') return () => true;
   const recorded = path.join(dtsWork, 'bundled-contracts.json');
   if (!fs.existsSync(recorded)) {
@@ -255,27 +255,25 @@ const dropUnloadedAugmentations = {
   name: 'drop-unloaded-augmentations',
   load: id => {
     const match = AUGMENTATIONS_FILE.exec(id);
-    return match && !flattensAugmentationsOf(match[1].replaceAll('\\', '/'))
+    return match && !keepsAugmentationsOf(match[1].replaceAll('\\', '/'))
       ? 'export {};'
       : null;
   },
 };
 
-const ENTRIES = channelEntryNames(CHANNEL);
-const entries = process.env.ENTRY ? [process.env.ENTRY] : ENTRIES;
-if (entries.some(entry => !ENTRIES.includes(entry)))
-  throw new Error(`Unknown ${CHANNEL} entry: ${process.env.ENTRY}`);
+const entries = channelEntryNames(CHANNEL);
+const entryFileOf = entry =>
+  path.join(
+    dtsWork,
+    `apps/lace-sdk/${entrySource(entry, CHANNEL).replace(/\.ts$/, '.d.ts')}`,
+  );
 
 /** Inferred state needs explicit imports of the augmentations this entry reaches. */
 const injectAugmentationImports = entry => {
-  const source = `apps/lace-sdk/${entrySource(entry, CHANNEL).replace(
-    /\.ts$/,
-    '',
-  )}`;
-  const entryFile = path.join(dtsWork, `${source}.d.ts`);
+  const entryFile = entryFileOf(entry);
   const realRepoRoot = fs.realpathSync(repoRoot);
   const reached = reachedWorkspaceFiles(
-    [path.join(repoRoot, `${source}.ts`)],
+    [path.join(__dirname, entrySource(entry, CHANNEL))],
     compilerOptions(CHANNEL),
   )
     .filter(file => /[/\\]augmentations(?:\.stable)?\.ts$/.test(file))
@@ -293,7 +291,7 @@ const injectAugmentationImports = entry => {
       .split(path.sep)
       .slice(0, 3)
       .join('/');
-    if (!flattensAugmentationsOf(packageDirectory) || !fs.existsSync(augFile))
+    if (!keepsAugmentationsOf(packageDirectory) || !fs.existsSync(augFile))
       continue;
     const content = fs.readFileSync(augFile, 'utf8');
     if (!content.includes('declare module')) continue;
@@ -314,9 +312,17 @@ const injectAugmentationImports = entry => {
   }
 };
 
-// Run the rewriting before rollup processes files
+// Rewrite the specifiers before rollup processes files, and point the types
+// named through the SDK's own modules at their declarations. Then inject
+// augmentation imports so rollup-plugin-dts includes them: after the redirect
+// no file but an entry imports an entry.
 rewriteInternalImportsOnDisk();
-// Then inject augmentation imports so rollup-plugin-dts includes them
+redirectSdkBarrelReferences({
+  dtsWork,
+  resolveDtsFile,
+  toRelative,
+  moduleSuffixes: MODULE_SUFFIXES,
+});
 for (const entry of entries) injectAugmentationImports(entry);
 
 // The declarations carry the types they take from these packages, so the SDK
@@ -357,150 +363,6 @@ const resolveJsonImports = {
       return path.resolve(repoRoot, relativeFromDtsWork, source);
     }
     return null;
-  },
-};
-
-/**
- * Post-process the bundled .d.ts to fix module augmentations.
- *
- * rollup-plugin-dts preserves `declare module '@lace-contract/module' { ... }`
- * blocks from augmentations.ts files. Since the consumer doesn't have
- * @lace-contract/module installed, these augmentations target non-existent
- * modules and are silently ignored — leaving interfaces like State and
- * AppConfig empty.
- *
- * Fix: unwrap the augmentation blocks into top-level interface declarations.
- * TypeScript merges same-name interfaces within a single .d.ts file, so the
- * unwrapped declarations merge with the originals:
- *
- *   // Original (from inlined contract):
- *   interface State {}
- *   // Unwrapped augmentation (was in declare module '@lace-contract/module'):
- *   interface State extends StateFromReducersMapObject<typeof failuresReducers> {}
- *   // Merged result: State has all properties from failuresReducers
- *
- * Augmentations targeting real external packages (e.g. 'i18next') are kept as-is.
- */
-const flattenModuleAugmentations = {
-  name: 'flatten-module-augmentations',
-  renderChunk: code => {
-    const laceBlockPattern =
-      /^declare module\s+['"](@lace-(?:contract|lib|sdk|module)\/[^'"]+)['"]\s*\{/;
-
-    /**
-     * One pass: strip all `declare module '@lace-*'` blocks, returning
-     * their inner content (de-indented) and the remaining lines.
-     *
-     * Uses brace counting to track block depth, skipping comments and
-     * string literals: the declarations keep their doc comments, whose prose
-     * and code spans may hold unbalanced braces, and a string such as a URL
-     * holds `//` that must not end the line's count.
-     */
-    const extractOnce = inputLines => {
-      const kept = [];
-      const inner = [];
-      let lineIndex = 0;
-      let inComment = false;
-      const braceDelta = line => {
-        let delta = 0;
-        for (let index = 0; index < line.length; index++) {
-          const pair = line.slice(index, index + 2);
-          if (inComment) {
-            if (pair === '*/') {
-              inComment = false;
-              index++;
-            }
-          } else if (pair === '/*') {
-            inComment = true;
-            index++;
-          } else if (pair === '//') {
-            break;
-          } else if (`'"\``.includes(line[index])) {
-            const quote = line[index];
-            index++;
-            while (index < line.length && line[index] !== quote) {
-              if (line[index] === '\\') index++;
-              index++;
-            }
-          } else if (line[index] === '{') {
-            delta++;
-          } else if (line[index] === '}') {
-            delta--;
-          }
-        }
-        return delta;
-      };
-
-      while (lineIndex < inputLines.length) {
-        if (!laceBlockPattern.test(inputLines[lineIndex])) {
-          kept.push(inputLines[lineIndex]);
-          lineIndex++;
-          continue;
-        }
-
-        // Extract contents of declare module block
-        let braceDepth = 1;
-        lineIndex++; // skip the `declare module` line
-
-        while (lineIndex < inputLines.length && braceDepth > 0) {
-          const line = inputLines[lineIndex];
-          braceDepth += braceDelta(line);
-          if (braceDepth > 0) {
-            inner.push(line.replace(/^    /, ''));
-          }
-          lineIndex++;
-        }
-      }
-
-      return { kept, inner };
-    };
-
-    // rollup-plugin-dts can nest declare module blocks (e.g. module A's
-    // augmentation is emitted inside module B's augmentation block), so
-    // a single pass only unwraps one level.  We extract from the original
-    // code once, then recursively extract from the inner content until
-    // no more @lace-* blocks remain.
-    const { kept: keptLines, inner: firstInner } = extractOnce(
-      code.split('\n'),
-    );
-
-    const allExtracted = [];
-    let pending = firstInner;
-    while (pending.length > 0) {
-      const { kept, inner } = extractOnce(pending);
-      allExtracted.push(...kept); // lines that are NOT blocks
-      pending = inner; // continue extracting nested blocks
-    }
-
-    const lines = keptLines;
-
-    if (allExtracted.length > 0) {
-      const exportIndex = lines.findLastIndex(line =>
-        line.startsWith('export '),
-      );
-      if (exportIndex >= 0) {
-        lines.splice(
-          exportIndex,
-          0,
-          '',
-          '// --- Flattened module augmentations ---',
-          ...allExtracted,
-          '',
-        );
-      } else {
-        lines.push(
-          '',
-          '// --- Flattened module augmentations ---',
-          ...allExtracted,
-        );
-      }
-      // eslint-disable-next-line no-console
-      console.log(
-        `[flatten-augmentations] Extracted ${allExtracted.length} lines from declare module blocks`,
-      );
-    }
-
-    return { code: lines.join('\n'), map: null };
   },
 };
 
@@ -563,57 +425,89 @@ const typeOnlyExports = entryFile => {
 };
 
 /**
- * Keeps the type-only exports of the entry type-only in the bundle.
+ * Keeps the type-only exports of each entry type-only in the bundle.
  * rollup-plugin-dts lists a re-exported declaration that also declares a
  * value, such as a class or a value object, among the value exports even when
  * the entry exported it with `export type`. The declarations would then
  * promise a value the runtime build does not export, which type-checks and
- * fails when the module links.
+ * fails when the module links. Shared chunks need none: the package exports
+ * the entries alone.
  */
-const keepTypeOnlyExports = typeOnly => ({
+const keepTypeOnlyExports = typeOnlyByEntry => ({
   name: 'keep-type-only-exports',
-  renderChunk: code => ({
-    code: code.replace(
-      /^export \{ ([^}]*) \}( from '[^']+')?;$/gm,
-      (statement, specifiers, from = '') => {
-        const all = specifiers.split(', ');
-        const types = all.filter(specifier =>
-          typeOnly.has(specifier.split(' as ').at(-1)),
-        );
-        if (types.length === 0) return statement;
-        const values = all.filter(specifier => !types.includes(specifier));
-        return [
-          ...(values.length > 0
-            ? [`export { ${values.join(', ')} }${from};`]
-            : []),
-          `export type { ${types.join(', ')} }${from};`,
-        ].join('\n');
-      },
-    ),
-    map: null,
-  }),
+  renderChunk: (code, chunk) => {
+    if (!chunk.isEntry) return null;
+    const typeOnly = typeOnlyByEntry[chunk.name];
+    return {
+      code: code.replace(
+        /^export \{ ([^}]*) \}( from '[^']+')?;$/gm,
+        (statement, specifiers, from = '') => {
+          const all = specifiers.split(', ');
+          const types = all.filter(specifier =>
+            typeOnly.has(specifier.split(' as ').at(-1)),
+          );
+          if (types.length === 0) return statement;
+          const values = all.filter(specifier => !types.includes(specifier));
+          return [
+            ...(values.length > 0
+              ? [`export { ${values.join(', ')} }${from};`]
+              : []),
+            `export type { ${types.join(', ')} }${from};`,
+          ].join('\n');
+        },
+      ),
+      map: null,
+    };
+  },
 });
 
-export default entries.map(entry => {
-  const input = `dist/.dts-work/apps/lace-sdk/${entrySource(
-    entry,
-    CHANNEL,
-  ).replace(/\.ts$/, '.d.ts')}`;
-  return {
-    input,
-    output: { file: `dist/${entry}.d.ts`, format: 'es' },
-    plugins: [
-      useLaceioCardano,
-      dropUnloadedAugmentations,
-      resolveJsonImports,
-      dts({
-        tsconfig: './tsconfig.dts-bundle.json',
-        compilerOptions: { moduleSuffixes: MODULE_SUFFIXES },
-        includeExternal: INLINED_TYPE_PACKAGES,
-      }),
-      flattenModuleAugmentations,
-      keepTypeOnlyExports(typeOnlyExports(path.resolve(__dirname, input))),
-    ],
-    external,
-  };
-});
+/**
+ * One rollup of all the entries of the channel, so that each declaration is in
+ * one file (see scripts/declaration-chunks.mjs).
+ */
+export default {
+  input: Object.fromEntries(
+    entries.map(entry => [entry, path.relative(__dirname, entryFileOf(entry))]),
+  ),
+  output: { dir: 'dist', ...DECLARATION_OUTPUT },
+  // Declarations have no execution order, so a re-export through a barrel in
+  // another chunk is harmless.
+  onwarn: (warning, warn) => {
+    if (warning.code !== 'CYCLIC_CROSS_CHUNK_REEXPORT') warn(warning);
+  },
+  plugins: [
+    useLaceioCardano,
+    dropUnloadedAugmentations,
+    resolveJsonImports,
+    dts({
+      tsconfig: './tsconfig.dts-bundle.json',
+      compilerOptions: { moduleSuffixes: MODULE_SUFFIXES },
+      includeExternal: INLINED_TYPE_PACKAGES,
+    }),
+    namespaceMembersFromOtherChunks,
+    keepTypeOnlyExports(
+      // The probes share a file, so the entries are probed one after another.
+      Object.fromEntries(
+        entries.map(entry => [entry, typeOnlyExports(entryFileOf(entry))]),
+      ),
+    ),
+    placeModuleAugmentations({ resolveInternalSpecifier }),
+    {
+      name: 'stable-cardano-public-type-paths',
+      generateBundle: (_options, bundle) => {
+        if (CHANNEL !== 'stable') return;
+        // Loading the root declarations lets TypeScript name shared types via
+        // @laceio/sdk when a library imports only /cardano and emits declarations.
+        const cardano = bundle['cardano.d.ts'];
+        cardano.code = `import type {} from './index.js';\n${cardano.code}`;
+        cardano.imports.push('index.d.ts');
+      },
+    },
+    assertDeclarationLayout({
+      entries,
+      // Canary must not load the root's Bitcoin types or its optional peers.
+      allowedEntryImports: CHANNEL === 'stable' ? { cardano: ['index'] } : {},
+    }),
+  ],
+  external,
+};

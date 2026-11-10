@@ -7,6 +7,7 @@ export type NetworkType = 'mainnet' | 'testnet';
 export const isNetworkType = (value: unknown): value is NetworkType =>
   value === 'mainnet' || value === 'testnet';
 
+/** The networks a blockchain uses: one for mainnet and one for testnet. */
 export type BlockchainNetworkConfig = {
   mainnet: BlockchainNetworkId;
   testnet: BlockchainNetworkId;

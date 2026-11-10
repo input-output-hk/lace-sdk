@@ -40,6 +40,7 @@ interface StakeCenterMainProps {
   refreshControl?: React.ReactElement<RefreshControlProps>;
   /** Back affordance in the header — set when shown as a stack sub-page. */
   onBack?: () => void;
+  extraContrast?: boolean;
   /** Override the header title (defaults to the staking-center title). */
   title?: string;
 }
@@ -55,6 +56,7 @@ export const StakeCenterMain = ({
   stakeCards,
   refreshControl,
   onBack,
+  extraContrast = false,
   title,
 }: StakeCenterMainProps) => {
   const { t } = useTranslation();
@@ -107,6 +109,7 @@ export const StakeCenterMain = ({
   const headerSection = useMemo(
     () => (
       <PageHeaderSection
+        extraContrast={extraContrast}
         title={title ?? t('v2.generic.staking.card.title')}
         reserveSubtitleSpace
         testID="stake-center-header-section"
@@ -134,6 +137,7 @@ export const StakeCenterMain = ({
       t,
       collapseScrollY,
       onBack,
+      extraContrast,
       title,
     ],
   );

@@ -1,3 +1,4 @@
+/** The name of a blockchain, the key of the records Lace keeps per blockchain. */
 export type BlockchainName = 'Bitcoin' | 'Cardano' | 'Midnight';
 export type ByBlockchainName<T> = Partial<Record<BlockchainName, T>>;
 

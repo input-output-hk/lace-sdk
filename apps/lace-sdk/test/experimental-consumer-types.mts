@@ -1,6 +1,7 @@
 // An app uses the experimental features from the experimental entry alone:
-// it carries the Cardano entry, so the wallet the features run on is typed by
-// the same declarations as the features themselves.
+// it carries the Cardano entry, so it also creates the wallet the features
+// run on. test/cross-entry-consumer-types.canary.mts passes this entry's
+// modules and wallets to the other entries' functions, and the reverse.
 import {
   buildCardanoCustodyGrantSpend,
   Cardano,

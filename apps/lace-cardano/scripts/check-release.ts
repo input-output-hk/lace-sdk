@@ -358,15 +358,10 @@ for (const { directory, entries } of released) {
     : stableReleaseProblems({
         previousVersion: latest,
         nextVersion: version,
-        // The domain layer's entries import their declarations from shared
-        // chunks, which are part of the API compared.
         previous: readExports(
           declarationsIn(unpackPublished(name, latest), entries),
-          { followRelativeImports: true },
         ),
-        next: readExports(declarationsIn(packageDirectory, entries), {
-          followRelativeImports: true,
-        }),
+        next: readExports(declarationsIn(packageDirectory, entries)),
         overrides: readOverrides(packageDirectory),
       });
   if (packageProblems.length > 0) {

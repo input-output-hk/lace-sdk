@@ -39,8 +39,9 @@ const Static = ({
   label,
   testID,
   disabled,
+  extraContrast = false,
   ...restProps
-}: IconButtonProps) => {
+}: IconButtonProps & { extraContrast?: boolean }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
   const labelStyleMap = useMemo(
@@ -57,9 +58,18 @@ const Static = ({
         styles.default,
         label ? labelStyleMap[label.position] : null,
         containerStyle,
+        extraContrast && !disabled && styles.extraContrastSurface,
         disabled && styles.disabled,
       ].filter(Boolean),
-    [containerStyle, disabled, label, labelStyleMap, styles.default],
+    [
+      containerStyle,
+      disabled,
+      extraContrast,
+      label,
+      labelStyleMap,
+      styles.default,
+      styles.extraContrastSurface,
+    ],
   );
 
   return (
@@ -71,6 +81,19 @@ const Static = ({
       <View />
       {label && <Text.XS style={textStyle}>{label.content}</Text.XS>}
       {icon}
+      {extraContrast && !disabled && (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.extraContrastBorder,
+            {
+              borderRadius:
+                StyleSheet.flatten(containerStyle)?.borderRadius ??
+                styles.default.borderRadius,
+            },
+          ]}
+        />
+      )}
     </Pressable>
   );
 };
@@ -167,6 +190,14 @@ const getStyles = (theme: Theme) => {
       alignItems: 'center',
       borderRadius: radius.squareRounded,
       padding: spacing.S,
+    },
+    extraContrastSurface: {
+      backgroundColor: theme.background.overlay,
+    },
+    extraContrastBorder: {
+      ...StyleSheet.absoluteFill,
+      borderWidth: 1,
+      borderColor: theme.border.top,
     },
     disabled: {
       backgroundColor: theme.background.tertiary,

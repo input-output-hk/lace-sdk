@@ -9,8 +9,10 @@ import {
   exportSurfaceProblems,
   findMarkers,
   identifierPattern,
+  readDeclarationClosure,
   readDeclaredExports,
   readUnexportedTypeReferences,
+  readUnnameableExports,
 } from '../scripts/export-surface';
 
 import type { DeclaredExports } from '../scripts/export-surface';
@@ -27,6 +29,12 @@ const fixture = (files: Record<string, string>, entry = 'index.d.ts') => {
   }
   return path.join(directory, entry);
 };
+
+/**
+ * The manifest of an ES module package, as the SDK is: a relative specifier in
+ * its declarations names the `.js` file.
+ */
+const PACKAGE = { 'package.json': '{ "type": "module" }' };
 
 const declared = (overrides: Partial<DeclaredExports>): DeclaredExports => ({
   values: [],
@@ -206,6 +214,230 @@ export { other, watch };
     expect(() => readUnexportedTypeReferences(file, ['missing'])).toThrow(
       /does not export 'missing'/,
     );
+  });
+
+  it('reads an owner a shared file declares', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': `
+import { a as make, b as Shape } from './shared-a.js';
+export { make };
+export type { Shape };
+`,
+      'shared-a.d.ts': `
+type Options = { url: string };
+type Shape = { size: number };
+declare const make: (options: Options) => Shape;
+export { make as a, type Shape as b };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['make'])).toEqual([
+      { owner: 'make', type: 'Options' },
+    ]);
+  });
+
+  it('reports a type a shared file declares and the entry does not export', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': `
+import type { Options, Shape } from './shared-a.js';
+declare const make: (options: Options) => Shape;
+export { make };
+export type { Shape };
+`,
+      'shared-a.d.ts': `
+interface Options { url: string }
+interface Shape { size: number }
+export type { Options, Shape };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['make'])).toEqual([
+      { owner: 'make', type: 'Options' },
+    ]);
+  });
+
+  it('reads namespace members through renames and imports across shared files', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': "export { m } from './shared-a.js';",
+      'shared-a.d.ts': `
+import { create } from './shared-b.js';
+type Hidden = { secret: string };
+declare const read: () => Hidden;
+declare const m_read: typeof read;
+declare namespace m {
+  export { create, m_read as read };
+}
+export { m };
+`,
+      'shared-b.d.ts': `
+type Props = { name: string };
+declare const create: (props: Props) => void;
+export { create };
+`,
+    });
+
+    expect(readUnexportedTypeReferences(file, ['m.create', 'm.read'])).toEqual([
+      { owner: 'm.create', type: 'Props' },
+      { owner: 'm.read', type: 'Hidden' },
+    ]);
+  });
+});
+
+describe('readDeclarationClosure', () => {
+  it('reads the files an entry reaches and the packages they import', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': `
+import type { Observable } from 'rxjs';
+import { State } from './shared-a.js';
+declare const state$: Observable<State>;
+declare const next: import('./shared-a.js').Next;
+export { state$, next };
+declare module './shared-a.js' {
+  interface State { added: true }
+}
+declare module 'i18next' {
+  interface CustomTypeOptions { returnNull: false }
+}
+`,
+      'shared-a.d.ts': `
+import type { Cardano } from '@laceio/cardano/core';
+interface State { address: Cardano.PaymentAddress }
+type Next = State;
+export type { Next, State };
+`,
+      'unreached.d.ts': 'export {};',
+    });
+    const directory = path.dirname(file);
+
+    const closure = readDeclarationClosure(file);
+
+    expect(closure.files.sort()).toEqual([
+      path.join(directory, 'index.d.ts'),
+      path.join(directory, 'shared-a.d.ts'),
+    ]);
+    expect(closure.packages).toEqual(['@laceio/cardano', 'i18next', 'rxjs']);
+    expect(closure.problems).toEqual([]);
+  });
+
+  it('reports a shared file that is missing', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': "export { make } from './shared-gone.js';",
+    });
+
+    expect(readDeclarationClosure(file).problems).toEqual([
+      "index.d.ts: './shared-gone.js' reaches no declaration file",
+    ]);
+  });
+
+  it('reports a name a shared file does not export', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': `
+import { make, Gone } from './shared-a.js';
+export { Missing } from './shared-a.js';
+declare const shape: import('./shared-a.js').Shape.Inner;
+export { make, shape };
+`,
+      'shared-a.d.ts': `
+declare const make: () => void;
+export { make };
+`,
+    });
+
+    expect(readDeclarationClosure(file).problems).toEqual([
+      "index.d.ts: './shared-a.js' does not export 'Gone'",
+      "index.d.ts: './shared-a.js' does not export 'Missing'",
+      "index.d.ts: './shared-a.js' does not export 'Shape'",
+    ]);
+  });
+
+  it('reports an augmentation that reaches no file or names an interface its file does not export', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': `
+import type { State } from './shared-a.js';
+declare const state: State;
+export { state };
+declare module './shared-a' {
+  interface State { extensionless: true }
+}
+declare module './shared-a.js' {
+  interface State { added: true }
+  interface Hidden { added: true }
+}
+`,
+      'shared-a.d.ts': `
+interface State { address: string }
+interface Hidden { secret: string }
+export type { State };
+`,
+    });
+
+    expect(readDeclarationClosure(file).problems).toEqual([
+      "index.d.ts: './shared-a' reaches no declaration file",
+      "index.d.ts: the augmentation of './shared-a.js' names 'Hidden', which that file does not export",
+    ]);
+  });
+
+  it('records a package a type reference directive names', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': `/// <reference types="@scope/pkg" />
+/// <reference types="node" />
+export {};
+`,
+    });
+
+    expect(readDeclarationClosure(file).packages).toEqual([
+      '@scope/pkg',
+      '@types/node',
+    ]);
+  });
+
+  it('reports a specifier that leaves the package and reads no file outside it', () => {
+    const file = fixture(
+      {
+        'package/package.json': PACKAGE['package.json'],
+        'package/index.d.ts':
+          "import type { X } from '../outside/x.js';\ndeclare const x: X;\nexport { x };\n",
+        'outside/x.d.ts':
+          "import type { Y } from 'other';\nexport type X = Y;\n",
+      },
+      'package/index.d.ts',
+    );
+
+    const closure = readDeclarationClosure(file);
+
+    expect(closure.problems).toEqual([
+      "index.d.ts: '../outside/x.js' reaches ../outside/x.d.ts, outside the package's declarations",
+    ]);
+    expect(closure.files).toEqual([file]);
+    expect(closure.packages).toEqual([]);
+  });
+});
+
+describe('readUnnameableExports', () => {
+  it('lists what a shared file exports and the entry exports under no name', () => {
+    const file = fixture({
+      ...PACKAGE,
+      'index.d.ts': "export { A, Third as C } from './shared-a.js';\n",
+      'shared-a.d.ts': `
+interface A { a: string }
+type B = A;
+declare const Third: B;
+export type { A, B };
+export { Third };
+`,
+    });
+
+    expect(readUnnameableExports(file)).toEqual([
+      { name: 'B', file: 'shared-a.d.ts' },
+    ]);
   });
 });
 

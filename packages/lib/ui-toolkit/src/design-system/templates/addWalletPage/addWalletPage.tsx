@@ -22,6 +22,7 @@ export interface AddWalletPageTemplateProps {
   title: string;
   actions: AddWalletPageAction[];
   onBackPress?: () => void;
+  extraContrast?: boolean;
   testID?: string;
 }
 
@@ -29,6 +30,7 @@ export const AddWalletPageTemplate = ({
   title,
   actions,
   onBackPress,
+  extraContrast = false,
   testID = 'add-wallet-page',
 }: AddWalletPageTemplateProps) => {
   const styles = getStyles();
@@ -40,6 +42,7 @@ export const AddWalletPageTemplate = ({
       contentContainerStyle={styles.contentContainer}>
       <View style={styles.contentWrapper}>
         <PageHeader
+          extraContrast={extraContrast}
           title={title}
           onBackPress={onBackPress}
           testID={`${testID}-header`}

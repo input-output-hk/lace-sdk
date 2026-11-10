@@ -16,6 +16,7 @@ export const MIDNIGHT_WORKER: {
 export const channelBuildInputSources: (channel: Channel) => string[];
 export const channelEntryNames: (channel: Channel) => string[];
 export const entrySource: (entry: string, channel: Channel) => string;
+export const SHARED_DECLARATIONS: RegExp;
 export const entryFiles: (entry: string) => string[];
 export const channelPublishedPeers: (
   channel: Channel,

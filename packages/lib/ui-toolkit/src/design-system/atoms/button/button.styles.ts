@@ -78,6 +78,15 @@ export const getButtonStyles = ({
       backgroundColor: buttonColors[variant].background.idle,
       overflow: 'hidden',
     },
+    extraContrastSurface: {
+      backgroundColor: theme.background.overlay,
+    },
+    extraContrastBorder: {
+      ...StyleSheet.absoluteFill,
+      borderRadius: OUTER_BORDER_RADIUS[size],
+      borderWidth: 1,
+      borderColor: theme.border.top,
+    },
     content: {
       paddingVertical: PADDING_VERTICAL[size],
       paddingHorizontal: PADDING_HORIZONTAL[size],

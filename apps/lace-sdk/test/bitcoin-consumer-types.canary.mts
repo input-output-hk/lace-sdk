@@ -44,6 +44,7 @@ import {
   signBitcoinTx as rootSignBitcoinTx,
   submitBitcoinTx as rootSubmitBitcoinTx,
   type MaestroConfig as RootMaestroConfig,
+  type State as RootState,
 } from '@laceio/sdk';
 
 // A consumer that lacks a package the declarations import reads its types as
@@ -56,6 +57,13 @@ import {
 0 satisfies MaestroConfig;
 // @ts-expect-error A number is not a Bitcoin provider configuration.
 0 satisfies AppConfig['bitcoinProvider'];
+
+// The program imports neither the Midnight nor the experimental entry, so the
+// configuration and state those entries add stay out of its types.
+// @ts-expect-error The Midnight testnet setting comes with the Midnight entry.
+type MidnightTestnet = AppConfig['defaultMidnightTestnetNetworkId'];
+// @ts-expect-error The Passport state comes with the experimental entry.
+type PassportState = RootState['passport'];
 
 // The Cardano entry carries no Bitcoin exports.
 // @ts-expect-error Bitcoin modules are not on the Cardano entry.

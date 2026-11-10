@@ -31,6 +31,8 @@ type ButtonBaseProps = Omit<PressableProps, 'style'> & {
   onPress: () => void;
   size?: ButtonSize;
   variant?: ButtonVariant;
+  /** Adds a more opaque surface to secondary buttons. */
+  extraContrast?: boolean;
   disabled?: boolean;
   loading?: boolean;
   fullWidth?: boolean;

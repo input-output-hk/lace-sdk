@@ -231,6 +231,7 @@ export type GetAccountRewardsProps = {
   pageSize?: number;
 };
 
+/** What `getUtxosAtAddress` reads: the payment address and how to page and populate its UTxOs. */
 export type GetUtxosAtAddressProps = {
   address: CardanoPaymentAddress;
   pageSize?: number;

@@ -1,9 +1,9 @@
-// Writes the tsconfig the declaration build compiles: the channel's entries
-// (ADR 66) and every workspace file they reach, with the augmentations of
-// exactly the packages they reach (reach.mjs). Reached files are listed because
-// the compiler emits no declarations for workspace files it finds through
-// node_modules symlinks. Compiling whole package directories instead would
-// publish the state types of contracts the SDK never loads.
+// Writes the tsconfig the declaration build compiles: one program of all the
+// channel's entries (ADR 66) and every workspace file they reach, with the
+// augmentations of exactly the packages they reach (reach.mjs). Reached files
+// are listed because the compiler emits no declarations for workspace files it
+// finds through node_modules symlinks. Compiling whole package directories
+// instead would publish the state types of contracts the SDK never loads.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -19,14 +19,10 @@ import {
 } from './reach.mjs';
 
 const channel = process.env.SDK_CHANNEL ?? 'stable';
-const roots = channelEntries(channel).filter(
-  file =>
-    !process.env.ENTRY ||
-    path.basename(file).split('.')[0] === process.env.ENTRY,
+const files = reachedWorkspaceFiles(
+  channelEntries(channel),
+  compilerOptions(channel),
 );
-if (roots.length === 0)
-  throw new Error(`Unknown SDK entry: ${process.env.ENTRY}`);
-const files = reachedWorkspaceFiles(roots, compilerOptions(channel));
 
 // The standalone SDK drops optional private packages; even type imports must not reach them.
 const workspaceRoot = path.resolve(packageDirectory, '../..');

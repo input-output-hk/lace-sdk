@@ -26,6 +26,7 @@ const ButtonRoot = ({
   postNode,
   size = 'medium',
   variant = 'primary',
+  extraContrast = false,
   disabled = false,
   loading = false,
   fullWidth = false,
@@ -65,6 +66,8 @@ const ButtonRoot = ({
     [iconColor, iconSize, styles.icon],
   );
 
+  const hasExtraContrast =
+    extraContrast && variant === 'secondary' && !disabled;
   const LabelTag = size === 'small' ? Text.S : Text.M;
 
   const hasOnlyIcon = useMemo(
@@ -84,6 +87,7 @@ const ButtonRoot = ({
         shouldShowHoveredStyle && styles.hoveredStyle,
         isPressed && styles.pressedStyle,
         isWeb && !isWebBlurEnabled && ({ backdropFilter: 'none' } as ViewStyle),
+        hasExtraContrast && styles.extraContrastSurface,
         hasOnlyIcon ? styles.hasOnlyIcon : styles.minWidth,
         !hasOnlyIcon && fullWidth && styles.fullWidth,
         !hasOnlyIcon && flex !== undefined && { flex },
@@ -98,6 +102,7 @@ const ButtonRoot = ({
       isHovered,
       styles,
       isWebBlurEnabled,
+      hasExtraContrast,
     ],
   );
 
@@ -147,6 +152,9 @@ const ButtonRoot = ({
         {renderIcon(postIconName)}
         {loading && <Loader color={theme.text.primary} style={styles.loader} />}
       </Row>
+      {hasExtraContrast && (
+        <View pointerEvents="none" style={styles.extraContrastBorder} />
+      )}
     </Pressable>
   );
 };

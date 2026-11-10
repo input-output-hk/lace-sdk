@@ -64,6 +64,8 @@ export interface PageHeaderProps {
   testID?: string;
   isDark?: boolean;
   compact?: boolean;
+  /** Keeps the Back control visible over the header background. */
+  extraContrast?: boolean;
   searchBarActions?: SearchBarAction[];
   collapseScrollYProp?: SharedValue<number>;
   stickyInScrollParent?: boolean;
@@ -94,6 +96,7 @@ export const PageHeader = ({
   onClosePress,
   testID = 'page-header',
   compact = false,
+  extraContrast = false,
   searchBarActions,
   collapseScrollYProp,
   stickyInScrollParent = false,
@@ -359,6 +362,7 @@ export const PageHeader = ({
           {onBackPress && (
             <Button.Secondary
               preIconName="CaretLeft"
+              extraContrast={extraContrast}
               size="small"
               onPress={onBackPress}
               testID={`${testID}-back-button`}
@@ -439,6 +443,7 @@ export const PageHeader = ({
             {onBackPress ? (
               <IconButton.Static
                 icon={<Icon name="CaretLeft" />}
+                extraContrast={extraContrast}
                 onPress={onBackPress}
                 testID={`${testID}-back-button`}
                 containerStyle={styles.iconButton}

@@ -2,8 +2,10 @@
 // every type from it as `any`, and with `skipLibCheck` TypeScript reports
 // nothing. Fails when a declaration file imports a package that package.json
 // does not declare, when an exact version in package.json differs from a
-// copy the build uses, and when package.json pins a package that no
-// declaration file imports.
+// copy the build uses, when package.json pins a package that no declaration
+// file imports, and when an entry's declarations reach a peer that only a
+// canary-only entry declares: such a peer is optional, so a consumer of
+// another entry may lack it.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { isBuiltin } from 'node:module';
@@ -11,7 +13,15 @@ import path from 'node:path';
 
 import ts from 'typescript';
 
-import { channelPublishedPeers } from '../scripts/entries.mjs';
+import {
+  CANARY_ONLY_ENTRIES,
+  channelEntryNames,
+  channelPublishedPeers,
+} from '../scripts/entries.mjs';
+import {
+  packageName,
+  readDeclarationClosure,
+} from '../scripts/export-surface.ts';
 
 import { CHANNEL } from './channel.mjs';
 import { manifest, packageDirectory } from './install-package.mjs';
@@ -41,12 +51,6 @@ const INSTALLED_PACKAGE = /^(.*node_modules\/((?:@[^/]+\/)?[^/]+))\//;
 const repositoryRoot = path.resolve(packageDirectory, '../..');
 const distributionDirectory = path.join(packageDirectory, 'dist');
 const distributionFiles = fs.readdirSync(distributionDirectory);
-
-const packageName = specifier =>
-  specifier
-    .split('/')
-    .slice(0, specifier.startsWith('@') ? 2 : 1)
-    .join('/');
 
 const importers = new Map();
 for (const file of distributionFiles.filter(name => name.endsWith('.d.ts'))) {
@@ -93,6 +97,25 @@ for (const file of distributionFiles.filter(name => /\.c?js$/.test(name))) {
   }
 }
 assert(inlinedCopies.size > 0, 'No //#region module paths found in dist/*.js');
+
+/** The canary-only entries that declare `name` as a peer. */
+const peerOwners = name =>
+  CANARY_ONLY_ENTRIES.filter(
+    ({ peers, publishedPeers = {} }) =>
+      peers.some(peer => peer.test(name)) || name in publishedPeers,
+  ).map(({ name: entry }) => entry);
+const misplacedPeers = channelEntryNames(CHANNEL).flatMap(entry =>
+  readDeclarationClosure(
+    path.join(distributionDirectory, `${entry}.d.ts`),
+  ).packages.flatMap(name => {
+    const owners = peerOwners(name);
+    if (owners.length === 0 || owners.includes(entry)) return [];
+    const declaredBy = owners.map(owner => `the ${owner} entry`).join(' and ');
+    return [
+      `the ${entry} entry's declarations reach ${name}, an optional peer of ${declaredBy} only: keep its types out of the declarations other entries reach`,
+    ];
+  }),
+);
 
 const readVersion = directory => {
   const manifestPath = path.join(directory, 'package.json');
@@ -144,6 +167,7 @@ const problems = [
       ([name]) =>
         `apps/lace-sdk/node_modules/${name} exists: the consumer checks would install it in place of the copy the bundle and declarations come from; remove it and reinstall`,
     ),
+  ...misplacedPeers,
   // A package that the bundle does not inline, such as a types-only one,
   // comes from the repository root, where the internal packages resolve it.
   ...pinned.flatMap(([name, version]) =>
@@ -174,5 +198,5 @@ console.log(
     [...importers.keys()].filter(name => name in declared).length
   } declared, ${UNDECLARED.size} listed as undeclared; ${
     pinned.length
-  } exact pins match the copies the build uses`,
+  } exact pins match the copies the build uses; each canary-only entry's peers stay in its own declarations`,
 );

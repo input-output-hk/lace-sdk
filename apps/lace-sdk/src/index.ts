@@ -173,6 +173,7 @@ export {
   SignerPopupBlockedError,
 } from '@lace-lib/passkey';
 export type {
+  CreatePasskeyKeySourceProps,
   CreateSignerClientProps,
   PasskeyCredentialRef,
   PasskeyKeySource,
@@ -356,6 +357,15 @@ export type {
   SubmitTxArgs,
   ValueNotConservedData,
 } from '@lace-lib/cardano-core';
+
+// Types the declarations of other exports take from a shared declaration file
+// of the build, so that a library emitting declarations names them through
+// this entry and sees no TS2742 naming that file.
+export type { BlockchainName } from '@lace-lib/util-store';
+export type { BlockchainNetworkConfig } from '@lace-contract/network';
+export type { DeviceDescriptor } from '@lace-lib/util-hw';
+export type { FailureId } from '@lace-contract/failures';
+export type { GetUtxosAtAddressProps } from '@lace-contract/cardano-context';
 
 // Module maps (re-exported as namespace for single-entrypoint bundling)
 export * as m from './modules-cardano';

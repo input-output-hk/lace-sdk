@@ -7,26 +7,34 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+measure_declarations() {
+  local phase="$1"
+  shift
+  if [[ "$OSTYPE" == linux* && -x /usr/bin/time ]]; then
+    local format="[sdk-declarations:$SDK_CHANNEL:$phase] peak RSS: %M KiB; elapsed: %e s"
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      # Nx can truncate a large buffered build log before these measurements.
+      /usr/bin/time -f "$format" -o >(tee -a "$GITHUB_STEP_SUMMARY" >&2) "$@"
+    else
+      /usr/bin/time -f "$format" "$@"
+    fi
+  else
+    "$@"
+  fi
+}
+
 build() {
   export SDK_CHANNEL="$1"
   node test/check-doc-comments.mjs
   npx tsdown
   (
     trap 'rm -rf dist/.dts-work tsconfig.dts-gen.generated.json' EXIT
-    entries=$(node --input-type=module -e "
-      import { channelEntryNames } from './scripts/entries.mjs';
-      console.log(channelEntryNames(process.env.SDK_CHANNEL).join(' '));
-    ")
-    for entry in $entries; do
-      # Global augmentations from another entry must not enter its declarations.
-      find dist/.dts-work -mindepth 1 -maxdepth 1 ! -name bundled-contracts.json -exec rm -rf {} +
-      ENTRY="$entry" node scripts/dts-gen-config.mjs
-      # The workspace's TypeScript, whatever tsc PATH holds: run directly,
-      # outside Nx and npm, PATH has no node_modules/.bin, and a runner's
-      # global tsc can be another major.
-      npx tsc -p tsconfig.dts-gen.generated.json
-      npx rollup -c rollup.dts.config.mjs --environment "ENTRY:$entry"
-    done
+    node scripts/dts-gen-config.mjs
+    # The workspace's TypeScript, whatever tsc PATH holds: run directly,
+    # outside Nx and npm, PATH has no node_modules/.bin, and a runner's
+    # global tsc can be another major.
+    measure_declarations tsc npx tsc -p tsconfig.dts-gen.generated.json
+    measure_declarations rollup npx rollup -c rollup.dts.config.mjs
   )
   node test/check-declaration-dependencies.mjs
   node test/check-bundled-licences.mjs

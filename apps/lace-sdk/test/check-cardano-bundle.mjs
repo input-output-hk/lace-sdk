@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 import { rolldown } from 'rolldown';
 
+import { readDeclarationClosure } from '../scripts/export-surface.ts';
+
 import { CHANNEL } from './channel.mjs';
 
 const packageDirectory = path.resolve(
@@ -40,6 +42,9 @@ const BITCOIN_SOURCE =
   /^\/\/#region (?:src\/bitcoin\/|\S*packages\/[^/\s]+\/[^/\s]*bitcoin[^/\s]*\/|\S*node_modules\/(?:bitcoinjs-lib|@bitcoinerlab\/secp256k1)\/)\S*$/m;
 const DIST_FILE_REFERENCE =
   /(?:from\s*|import\(\s*|require\(\s*)["'](\.\/[^"'/]+\.c?js)["']/g;
+// Declarations only Bitcoin's types hold: its network enum and its provider
+// configuration.
+const BITCOIN_DECLARATIONS = /declare enum BitcoinNetwork\b|\bbitcoinProvider:/;
 
 /** The output files an entry loads, statically or on demand, itself included. */
 const reachableFiles = entryName => {
@@ -118,6 +123,20 @@ assert.deepEqual(
   [],
   'The Cardano entry reaches Bitcoin code',
 );
+// Nor does any declaration file the Cardano entry's declarations reach
+// declare Bitcoin types, in any channel: the Cardano entry stays free of
+// Bitcoin, types included, so Bitcoin graduating never changes its API.
+for (const file of readDeclarationClosure(
+  path.join(packageDirectory, 'dist/cardano.d.ts'),
+).files) {
+  assert.doesNotMatch(
+    fs.readFileSync(file, 'utf8'),
+    BITCOIN_DECLARATIONS,
+    `${path.basename(
+      file,
+    )}, which the Cardano entry's declarations reach, declares Bitcoin types`,
+  );
+}
 if (CHANNEL === 'stable') {
   assert.deepEqual(
     bitcoinSourcesIn(
@@ -133,7 +152,7 @@ if (CHANNEL === 'stable') {
     .filter(name => name.endsWith('.d.ts'))) {
     assert.doesNotMatch(
       fs.readFileSync(path.join(packageDirectory, 'dist', file), 'utf8'),
-      /declare enum BitcoinNetwork\b|\bbitcoinProvider:/,
+      BITCOIN_DECLARATIONS,
       `The stable ${file} declares Bitcoin types`,
     );
   }

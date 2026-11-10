@@ -738,8 +738,12 @@ describe('the family', () => {
       fs.writeFileSync(path.join(root, file), text);
     };
     write(
+      'apps/lace-sdk/dist/shared-0a1b2c3d.d.ts',
+      'interface Network { magic: number }\ndeclare const sdk: Network;\nexport { sdk as s };\n',
+    );
+    write(
       'apps/lace-sdk/dist/index.d.ts',
-      'declare const sdk: number;\nexport { sdk };\n',
+      "export { s as sdk } from './shared-0a1b2c3d.js';\n",
     );
     write(
       'apps/lace-cardano/dist/core-chunk.d.ts',
@@ -759,6 +763,7 @@ describe('the family', () => {
       '@laceio/cardano/core:Address',
       'index:sdk',
     ]);
+    expect(exports.get('index:sdk')?.signature).toContain('magic');
     expect(exports.get('@laceio/cardano/core:Address')?.signature).toContain(
       'bech32',
     );
@@ -910,7 +915,22 @@ describe('a stable release below a canary', () => {
   // an override then declared the change compatible, so the stable release
   // is 0.2.1, below that canary.
   const exported = (signature: string) =>
-    new Map([['index:f', { key: 'index:f', signature, deprecated: false }]]);
+    new Map([
+      [
+        'index:f',
+        {
+          key: 'index:f',
+          signature,
+          own: [signature],
+          locals: [],
+          graph: {
+            root: 0,
+            nodes: [{ declarations: [signature], references: [], exports: [] }],
+          },
+          deprecated: false,
+        },
+      ],
+    ]);
   const before = exported('declare function f(a: string): void;');
   const after = exported('declare function f(a: string, b?: number): void;');
   const published = (...records: [tagName: string, publishedAt: string][]) =>
@@ -1069,7 +1089,17 @@ describe('dependencies in the release scope', () => {
 });
 
 describe('overrides and the canary floor', () => {
-  const sig = (signature: string) => ({ key: '', signature, deprecated: true });
+  const sig = (signature: string) => ({
+    key: '',
+    signature,
+    own: [signature],
+    locals: [],
+    graph: {
+      root: 0,
+      nodes: [{ declarations: [signature], references: [], exports: [] }],
+    },
+    deprecated: true,
+  });
   const before = new Map([
     ['index:gone', sig('declare const gone: number;')],
     ['index:f', sig('declare function f(a: string): void;')],

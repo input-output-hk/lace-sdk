@@ -82,6 +82,7 @@ const SDK_SHIPPING_PATHS: readonly string[] = [
   'apps/lace-sdk/tsconfig.dts-bundle.json',
   'apps/lace-sdk/tsconfig.dts-gen.json',
   'apps/lace-sdk/scripts/build.sh',
+  'apps/lace-sdk/scripts/declaration-chunks.mjs',
   'apps/lace-sdk/scripts/dts-gen-config.mjs',
   'apps/lace-sdk/scripts/entries.mjs',
   'apps/lace-sdk/scripts/pack.mjs',
