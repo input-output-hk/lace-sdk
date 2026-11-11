@@ -16,6 +16,7 @@
     "./qr": "./src/qr.ts",
     "./zxcvbn": "./src/zxcvbn.ts",
     "./midnight-proof-servers": "./src/midnight-proof-servers.ts",
+    "./midnight-proving-provider": "./src/midnight-proving-provider.ts",
     "./proof-server-transport": "./src/proof-server-transport.ts",
     "./midnight-connector-transaction": "./src/midnight-connector-transaction.ts",
     "./midnight-sign-data": "./src/midnight-sign-data.ts",

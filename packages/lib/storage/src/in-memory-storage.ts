@@ -31,8 +31,8 @@ export const observeAll =
 
 /**
  * A second, independent implementation of {@link CollectionStorage} with no
- * conformance test against CollectionStore — and the only storage module the
- * public SDK namespace exposes, so an SDK consumer gets this one. It diverges:
+ * conformance test against CollectionStore — and the one `m.storageInMemory`
+ * gives SDK consumers. It diverges:
  * observeAll does not de-duplicate and getAll returns the internal array by
  * reference. Rebuilding it on CollectionStore is tracked as LW-15268.
  */

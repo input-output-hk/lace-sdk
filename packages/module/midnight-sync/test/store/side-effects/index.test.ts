@@ -2,10 +2,8 @@ import { EMPTY } from 'rxjs';
 import { dummyLogger } from 'ts-log';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  createInitializeSideEffects,
-  initializeSideEffects,
-} from '../../../src/store/side-effects';
+import { initializeSideEffects } from '../../../src/store/side-effects';
+import { createInitializeSideEffects } from '../../../src/store/side-effects/initialize';
 
 import type { SideEffect } from '../../../src';
 import type { SerializedMidnightWallet } from '@lace-contract/midnight-context';
@@ -31,6 +29,7 @@ const spies = vi.hoisted(() => {
     watchProofActivities: sideEffect(),
     dismissProofActivity: sideEffect(),
     watchMidnightAccount: vi.fn(),
+    createAccountKeyManager: vi.fn(),
   };
 });
 
@@ -67,7 +66,10 @@ vi.mock('../../../src/store/side-effects/proof-activities', () => ({
 }));
 vi.mock('../../../src/store/side-effects/watch', () => ({
   watchMidnightAccounts: vi.fn(() => spies.accountWalletWatcher),
-  watchMidnightAccount: spies.watchMidnightAccount,
+  createWatchMidnightAccount: vi.fn(() => spies.watchMidnightAccount),
+}));
+vi.mock('../../../src/store/account-keys', () => ({
+  createAccountKeyManager: spies.createAccountKeyManager,
 }));
 
 const storage = {} as CollectionStorage<SerializedMidnightWallet>;
@@ -114,6 +116,7 @@ describe('midnight-sync side-effect composition', () => {
 
     expect(resync.createDeleteWalletSideEffect).toHaveBeenCalledWith(storage);
     expect(resync.createClearWalletStateOnResync).toHaveBeenCalledWith(storage);
+    // The watcher is the one built with the page's key manager, which decrypts the keys here.
     expect(watch.watchMidnightAccounts).toHaveBeenCalledWith(
       storage,
       spies.watchMidnightAccount,
@@ -163,7 +166,7 @@ describe('midnight-sync side-effect composition', () => {
     const loadoutSideEffect = vi.fn(() => EMPTY);
     const loadout = vi.fn(() => [loadoutSideEffect]);
 
-    runInit(createInitializeSideEffects(loadout));
+    runInit(createInitializeSideEffects(loadout, spies.watchMidnightAccount));
 
     expect(loadout).toHaveBeenCalledWith(storage);
     expect(loadoutSideEffect).toHaveBeenCalledWith(

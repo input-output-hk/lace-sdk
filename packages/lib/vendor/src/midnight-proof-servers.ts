@@ -212,3 +212,21 @@ export type ProofCircuitRequest = {
 };
 
 export type { CircuitProvider as ProofCircuitProvider } from '@lace-lib/midnight-prover';
+
+export type AttestationFailureStage =
+  | 'appraisal'
+  | 'channel'
+  | 'evidence'
+  | 'policy';
+
+/** Common diagnostic categories of an attested prover; providers retain their own error details. */
+export class AttestationError extends Error {
+  public constructor(
+    readonly providerId: string,
+    readonly stage: AttestationFailureStage,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AttestationError';
+  }
+}

@@ -1,4 +1,4 @@
-import { Cardano } from '@lace-lib/vendor';
+import { Cardano, Serialization } from '@lace-lib/vendor';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -100,6 +100,50 @@ const bodyOf = (
       ? {}
       : { collateralReturn: txOut(returnValue === 'own' ? WALLET : FOREIGN) }),
   });
+
+describe('LW-15596 T-7: asset-bearing collateral return', () => {
+  it.each([
+    { destination: FOREIGN, expected: REFUSE },
+    { destination: WALLET_PAYMENT_FOREIGN_STAKE, expected: REFUSE },
+    { destination: WALLET, expected: null },
+  ])(
+    'classifies the complete return address $destination',
+    ({ destination, expected }) => {
+      const collateral = {
+        txId: Cardano.TransactionId('11'.repeat(32)),
+        index: 0,
+      };
+      const tx = Serialization.Transaction.fromCore({
+        id: collateral.txId,
+        body: body({
+          collaterals: [collateral],
+          collateralReturn: {
+            address: destination,
+            value: {
+              coins: 2_000_000n,
+              assets: new Map([
+                [Cardano.AssetId(`${'ab'.repeat(28)}4e4654`), 1n],
+              ]),
+            },
+          },
+        }),
+        witness: { signatures: new Map() },
+      });
+      const decoded = Serialization.Transaction.fromCbor(tx.toCbor())
+        .body()
+        .toCore();
+      expect(
+        collateralRefusalCase(
+          decoded,
+          toCollateralOwnershipSets({
+            ownInputs: [collateral],
+            ownAddresses,
+          }),
+        ),
+      ).toBe(expected);
+    },
+  );
+});
 
 describe('the rule over the resolver authority', () => {
   it.each(MATRIX)(

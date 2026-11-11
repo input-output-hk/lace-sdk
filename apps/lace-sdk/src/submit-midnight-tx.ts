@@ -1,11 +1,7 @@
 import { ActivityType } from '@lace-contract/activities';
 import { isRemoteMidnightEngine } from '@lace-contract/midnight-context';
 import { derivePendingActivityFromMidnightTx } from '@lace-module/dapp-connector-midnight/sdk';
-import {
-  preparePendingActivity,
-  remoteEngineClientOf,
-  submitTransaction,
-} from '@lace-module/midnight-sync/sdk';
+import { remoteEngineClientOf } from '@lace-module/midnight-sync/sdk';
 import {
   catchError,
   defer,
@@ -18,6 +14,7 @@ import {
   timeout,
 } from 'rxjs';
 
+import { pageOperationsFor } from './midnight-engine-operations';
 import {
   MidnightSubmitTimeoutError,
   toMidnightSdkError,
@@ -165,37 +162,42 @@ const submitOnPage = ({
   pendingRowTimeout: number;
   submitTimeout: number;
 }): Observable<{ txId: string }> =>
-  (pendingRow
-    ? preparePendingActivity(
-        engine,
-        transaction,
-        derivePendingActivityFromMidnightTx,
+  pageOperationsFor(engine).pipe(
+    switchMap(operations =>
+      (pendingRow
+        ? operations
+            .preparePendingActivity(
+              transaction,
+              derivePendingActivityFromMidnightTx,
+            )
+            .pipe(
+              timeout({
+                first: pendingRowTimeout,
+                with: () => of(undefined),
+              }),
+            )
+        : of(undefined)
       ).pipe(
-        timeout({
-          first: pendingRowTimeout,
-          with: () => of(undefined),
+        switchMap(activity => {
+          const outcome$ = operations.submitTransaction(transaction).pipe(
+            share({
+              connector: () => new ReplaySubject<{ txId: string }>(1),
+              resetOnError: false,
+              resetOnComplete: false,
+              resetOnRefCountZero: false,
+            }),
+          );
+          outcome$.subscribe({ error: () => undefined });
+          if (activity && pendingRow?.record(activity))
+            outcome$.subscribe({
+              error: () => {
+                pendingRow.remove(activity);
+              },
+            });
+          return waitForFinality(outcome$, transaction, submitTimeout);
         }),
-      )
-    : of(undefined)
-  ).pipe(
-    switchMap(activity => {
-      const outcome$ = submitTransaction(engine, transaction).pipe(
-        share({
-          connector: () => new ReplaySubject<{ txId: string }>(1),
-          resetOnError: false,
-          resetOnComplete: false,
-          resetOnRefCountZero: false,
-        }),
-      );
-      outcome$.subscribe({ error: () => undefined });
-      if (activity && pendingRow?.record(activity))
-        outcome$.subscribe({
-          error: () => {
-            pendingRow.remove(activity);
-          },
-        });
-      return waitForFinality(outcome$, transaction, submitTimeout);
-    }),
+      ),
+    ),
   );
 
 /**

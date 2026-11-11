@@ -8,11 +8,8 @@ import { TokenId } from '@lace-contract/tokens';
 import { whileActive } from '@lace-contract/wallet-active-state';
 import { deepEquals, isNotNil, Percent } from '@lace-lib/cardano-util';
 import { blockingWithLatestFrom } from '@lace-lib/cardano-util-rxjs';
-import { SecretBox } from '@lace-lib/core';
-import { BigNumber, ByteArray, Timestamp } from '@lace-lib/util';
+import { BigNumber, Timestamp } from '@lace-lib/util';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { createKeystore } from '@midnightntwrk/wallet-sdk/unshielded';
 import { retryBackoff } from 'backoff-rxjs';
 import isEqual from 'lodash/isEqual';
 import {
@@ -33,10 +30,8 @@ import {
   mergeAll,
   mergeMap,
   of,
-  pairwise,
   ReplaySubject,
   share,
-  startWith,
   switchMap,
   take,
   takeUntil,
@@ -49,7 +44,6 @@ import {
 } from 'rxjs';
 
 import { FEATURE_FLAG_MIDNIGHT_UNSHIELDED } from '../../const';
-import { MidnightSyncFailureId } from '../../value-objects/midnight-sync-failure-id.vo';
 import { acrossMidnightEngineResets } from '../../worker/engine-client';
 import {
   dustBalancesOf,
@@ -59,17 +53,14 @@ import {
 } from '../../worker/state-accessors';
 import { createVeriteeLedgerIndexerResolver } from '../veritee-ledger-indexer';
 
-import { createAccountKeyManager as createAccountKeyManagerImpl } from './account-key-manager';
+import { midnightSyncFailedActions } from './sync-failure';
 
 import type { ActionCreators, SideEffect } from '../../context';
-import type { MidnightEngineClient } from '../../worker/engine-client';
-import type { AuthSecret } from '@lace-contract/authentication-prompt';
+import type { CreateAccountKeyManager } from '../account-keys';
 import type { FeatureFlag } from '@lace-contract/feature';
 import type {
   MidnightEngine,
   MidnightEnginesByAccountId,
-  AccountKeyManager,
-  AccountKeys,
   CoinsByTokenType,
   CoinStatus,
   MidnightAccountId,
@@ -90,7 +81,6 @@ import type {
   AnyAccount,
   InMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
-import type { HexBytes } from '@lace-lib/util';
 
 type MidnightWatchAction = ActionType<ActionCreators>;
 
@@ -579,114 +569,17 @@ const subscribeToEngine =
     );
 
 /**
- * Helper to decrypt an encrypted key buffer with an auth secret.
- */
-export const decryptKey = async (
-  encryptedKey: HexBytes,
-  authSecret: AuthSecret,
-): Promise<ByteArray> =>
-  ByteArray(await SecretBox.open(ByteArray.fromHex(encryptedKey), authSecret));
-
-/**
- * Pre-computes ledger key objects from decrypted key buffers and assembles
- * the AccountKeys structure. Extracted as a top-level helper to avoid
- * deeply nested function expressions inside the requestKeys observable chain.
- */
-export const buildAccountKeys = (
-  [nightKeyBuffer, dustKeyBuffer, zswapKeyBuffer]: readonly [
-    ByteArray,
-    ByteArray,
-    ByteArray,
-  ],
-  networkId: MidnightSDKNetworkId,
-): AccountKeys => {
-  // Pre-compute ledger key objects once to avoid repeated fromSeed() calls
-  const dustSecretKey = ledger.DustSecretKey.fromSeed(dustKeyBuffer);
-  const zswapSecretKeys = ledger.ZswapSecretKeys.fromSeed(zswapKeyBuffer);
-
-  return {
-    unshieldedKeystore: createKeystore(nightKeyBuffer, networkId),
-    walletKeys: {
-      dustKeyBuffer,
-      zswapKeyBuffer,
-      dustSecretKey,
-      zswapSecretKeys,
-    },
-    clear: () => {
-      nightKeyBuffer.fill(0);
-      zswapKeyBuffer.fill(0);
-      dustKeyBuffer.fill(0);
-      // Safe for both: the sync streams hold their own copies derived from
-      // these buffers, so clearing here cannot wedge them. Transaction paths
-      // re-derive on their NEXT keys$ read; a call already in flight holds
-      // these and fails — intended when locking mid-signing.
-      zswapSecretKeys.clear();
-      dustSecretKey.clear();
-    },
-  };
-};
-
-type AccountKeyManagerResult = {
-  keyManager: AccountKeyManager;
-  destroyAccountKeyManager: () => void;
-};
-
-/**
- * Creates an AccountKeyManager for a Midnight account with auth prompt integration.
- */
-const createAccountKeyManager =
-  (
-    account: InMemoryWalletAccount<MidnightAccountProps>,
-  ): ((...props: Parameters<SideEffect>) => AccountKeyManagerResult) =>
-  (_, __, { accessAuthSecret }) => {
-    const { networkId } = account.blockchainSpecific;
-
-    /**
-     * Decrypts all account keys using available auth secret.
-     * Hangs on the secret access if app is locked.
-     * Pre-computes ledger key objects (DustSecretKey, ZswapSecretKeys) to avoid
-     * repeated fromSeed() calls during sync and wallet operations.
-     */
-    const requestKeys = (): Observable<AccountKeys> =>
-      accessAuthSecret(authSecret =>
-        from(
-          Promise.all([
-            decryptKey(
-              account.blockchainSpecific.nightExternalKey.encryptedKey,
-              authSecret,
-            ),
-            decryptKey(
-              account.blockchainSpecific.dustKey.encryptedKey,
-              authSecret,
-            ),
-            decryptKey(
-              account.blockchainSpecific.zswapKey.encryptedKey,
-              authSecret,
-            ),
-          ]),
-        ),
-      ).pipe(map(buffers => buildAccountKeys(buffers, networkId)));
-
-    const keyManager = createAccountKeyManagerImpl({ requestKeys });
-
-    return {
-      keyManager,
-      destroyAccountKeyManager: () => {
-        keyManager.destroy();
-      },
-    };
-  };
-
-/**
- * Creates a side effect that watches a single Midnight account for changes.
- * Stops the wallet when unsubscribed.
+ * Creates the side effect that watches a single Midnight account for changes
+ * and stops the wallet when unsubscribed, given how the loadout builds the
+ * account's key manager: page mode and the extension decrypt the keys here,
+ * Worker mode's page holds none (the worker decrypts them).
  *
- * @param account - The Midnight account to watch
- * @param config - Network configuration for the Midnight wallet
- * @param store - Storage for persisting serialized wallet state
- * @returns A side effect that monitors the account
+ * The returned function takes the Midnight account to watch, the network
+ * configuration for the Midnight wallet and the storage for persisting
+ * serialized wallet state, and returns a side effect that monitors the account.
  */
-export const watchMidnightAccount =
+export const createWatchMidnightAccount =
+  (createKeyManager: CreateAccountKeyManager) =>
   (
     account: InMemoryWalletAccount<MidnightAccountProps>,
     config: MidnightNetworkConfig,
@@ -694,9 +587,11 @@ export const watchMidnightAccount =
   ): SideEffect =>
   (actionObservables, stateObservables, dependencies) => {
     const midnightWallets$ = midnightWalletsForRuntime(dependencies.runtime);
-    const { keyManager, destroyAccountKeyManager } = createAccountKeyManager(
-      account,
-    )(actionObservables, stateObservables, dependencies);
+    const { keyManager, destroyAccountKeyManager } = createKeyManager(account)(
+      actionObservables,
+      stateObservables,
+      dependencies,
+    );
 
     return dependencies
       .startMidnightAccountWallet({
@@ -753,65 +648,17 @@ export const watchMidnightAccount =
       );
   };
 
-// The failure and the Failed sync operation of an account whose engine does not run. Without `retryAction`, the
-// failure offers no tap-to-retry.
-const midnightSyncFailedActions = (
-  actions: ActionCreators,
-  accountId: AccountId,
-  retryAction?: MidnightWatchAction,
-): MidnightWatchAction[] => {
-  const failedAt = Timestamp(Date.now());
-  return [
-    actions.failures.addFailure({
-      failureId: MidnightSyncFailureId(accountId),
-      message: 'sync.error.midnight-sync-failed',
-      retryAction,
-    }),
-    actions.sync.addSyncOperation({
-      accountId,
-      operation: {
-        operationId: `${accountId}-midnight-sync`,
-        status: 'Failed',
-        description: 'sync.operation.midnight-wallet-sync',
-        error: 'sync.error.midnight-sync-failed',
-        startedAt: failedAt,
-        failedAt,
-      },
-    }),
-  ];
-};
-
-/**
- * Publishes each failure the Worker-mode engine client records for an account (a refused start, a worker that cannot
- * start or run, or the end of the worker that served the account) as the watcher publishes a start whose retries ran
- * out, but without a tap-to-retry (ADR 15's natural tier). The client holds the account's next start instead of
- * failing it, so that the watcher does not retry what a retry cannot change; only a public operation asking for the
- * engine lets it start again, which `restartWalletWatch` does not do. The recorded failures replay, so a failure
- * recorded before this subscribes is still published. The failure clears once the next start syncs.
- */
-export const surfaceMidnightEngineFailures =
-  (client: Pick<MidnightEngineClient, 'startFailures$'>): SideEffect =>
-  (_, __, { actions }) =>
-    client.startFailures$.pipe(
-      startWith<Readonly<Partial<Record<AccountId, Error>>>>({}),
-      pairwise(),
-      mergeMap(([before, after]) =>
-        (Object.keys(after) as AccountId[])
-          .filter(
-            accountId =>
-              after[accountId] !== undefined &&
-              after[accountId] !== before[accountId],
-          )
-          .flatMap(accountId => midnightSyncFailedActions(actions, accountId)),
-      ),
-    );
+/** Watches one account; see {@link createWatchMidnightAccount}. */
+export type WatchMidnightAccount = ReturnType<
+  typeof createWatchMidnightAccount
+>;
 
 type WatchSingleMidnightAccountOptions = {
   account: InMemoryWalletAccount<MidnightAccountProps>;
   accounts$: Observable<InMemoryWalletAccount<MidnightAccountProps>[]>;
   config: MidnightNetworkConfig;
   store: CollectionStorage<SerializedMidnightWallet>;
-  watchAccount: typeof watchMidnightAccount;
+  watchAccount: WatchMidnightAccount;
 };
 
 const watchSingleMidnightAccount =
@@ -869,7 +716,7 @@ const watchMidnightAccountsInNetwork =
   (
     currentNetwork: MidnightNetwork,
     store: CollectionStorage<SerializedMidnightWallet>,
-    watchAccount: typeof watchMidnightAccount,
+    watchAccount: WatchMidnightAccount,
   ): SideEffect =>
   (actionObservables, selectorObservables, dependencies) => {
     const accounts$ = combineLatest([
@@ -955,7 +802,7 @@ const watchMidnightAccountsInNetwork =
 export const watchMidnightAccounts =
   (
     store: CollectionStorage<SerializedMidnightWallet>,
-    watchAccount: typeof watchMidnightAccount,
+    watchAccount: WatchMidnightAccount,
   ): SideEffect =>
   (actionObservables, selectorObservables, dependencies) =>
     // `whileActive` MUST stay at the end of the pipe. On lock, the upstream

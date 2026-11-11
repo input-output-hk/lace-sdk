@@ -1,4 +1,5 @@
 import * as fixture from '@lace-contract/midnight-context/src/stub-data';
+import { CollectionStore } from '@lace-contract/storage';
 import { toSerializableObject } from '@lace-lib/cardano-util';
 import {
   createBackgroundMessenger,
@@ -39,18 +40,18 @@ import {
 import type { MidnightEngineWorkerScope } from '../src/midnight-worker/run-engine-worker';
 import type { SerializedMidnightWallet } from '@lace-contract/midnight-context';
 import type { Channel, SharedWorkerPort } from '@lace-lib/extension-messaging';
-import type * as MidnightSyncSdk from '@lace-module/midnight-sync/sdk';
 import type {
   MidnightEngineHost,
   MidnightEngineRuntimeStatus,
   MidnightSessionStreams,
 } from '@lace-module/midnight-sync/sdk';
+import type * as MidnightSyncSdkEngine from '@lace-module/midnight-sync/sdk-engine';
 
 const { hostDependencies } = vi.hoisted(() => ({
   hostDependencies: [] as unknown[],
 }));
-vi.mock('@lace-module/midnight-sync/sdk', async importActual => ({
-  ...(await importActual<typeof MidnightSyncSdk>()),
+vi.mock('@lace-module/midnight-sync/sdk-engine', async importActual => ({
+  ...(await importActual<typeof MidnightSyncSdkEngine>()),
   createMidnightEngineHost: (dependencies: unknown) => {
     hostDependencies.push(dependencies);
     return {};
@@ -962,10 +963,10 @@ describe('test:lace-sdk-build-checks', () => {
     });
   });
 
-  it("composes the worker's host with the SDK's storage modules, one store per storage kind keyed by account as page mode keys it, and the dApp connector's Pending activity derivation", async () => {
-    await createSdkMidnightEngineHost(dummyLogger);
+  it("composes the worker's host with the storage backends the SDK's storage modules build on, one store per storage kind keyed by account as page mode keys it, and the dApp connector's Pending activity derivation", async () => {
+    createSdkMidnightEngineHost(dummyLogger);
     const [dependencies] = hostDependencies as Parameters<
-      typeof MidnightSyncSdk.createMidnightEngineHost
+      typeof MidnightSyncSdkEngine.createMidnightEngineHost
     >[0][];
     const memory = dependencies.createStore('memory');
     const checkpoint = {
@@ -982,6 +983,8 @@ describe('test:lace-sdk-build-checks', () => {
     expect(await firstValueFrom(memory.get(String(fixture.accountId)))).toBe(
       checkpoint,
     );
-    expect(dependencies.createStore('indexeddb')).not.toBe(memory);
+    const indexedDb = dependencies.createStore('indexeddb');
+    expect(indexedDb).toBeInstanceOf(CollectionStore);
+    expect(indexedDb).not.toBe(memory);
   });
 });

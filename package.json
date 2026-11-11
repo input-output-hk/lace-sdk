@@ -63,6 +63,7 @@
     "packages/lib/midnight-prover",
     "packages/lib/observability",
     "packages/lib/passkey",
+    "packages/lib/storage",
     "packages/lib/ui-toolkit",
     "packages/lib/util",
     "packages/lib/util-dev-cardano",

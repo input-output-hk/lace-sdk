@@ -9,24 +9,12 @@ import type {
 } from './midnight-proof-servers';
 import type { ProofServerAccess } from './proof-server-transport';
 
-export type ProofOperation = keyof ProofServerTransport;
-export type AttestationFailureStage =
-  | 'appraisal'
-  | 'channel'
-  | 'evidence'
-  | 'policy';
+// The error class sits with the proof-server modes, free of the transport this module imports, so that a
+// provider such as the Veritee prover can throw it without carrying the transport, and the ledger it imports.
+export { AttestationError } from './midnight-proof-servers';
+export type { AttestationFailureStage } from './midnight-proof-servers';
 
-/** Common diagnostic categories; providers retain their own error details. */
-export class AttestationError extends Error {
-  public constructor(
-    readonly providerId: string,
-    readonly stage: AttestationFailureStage,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'AttestationError';
-  }
-}
+export type ProofOperation = keyof ProofServerTransport;
 
 export class ProofOperationUnavailableError extends Error {
   public constructor(

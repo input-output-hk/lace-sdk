@@ -4,8 +4,6 @@ import {
   MidnightDustAddress,
   MidnightShieldedAddress,
   MidnightUnshieldedAddress,
-  inProcessMidnightWallets$,
-  midnightWalletsForRuntime,
   SerialisedWalletState,
   toUnshieldedTokenType,
 } from '@lace-contract/midnight-context';
@@ -38,11 +36,9 @@ import {
   defaultIfEmpty,
   defer,
   distinctUntilChanged,
-  EMPTY,
   exhaustMap,
   filter,
   firstValueFrom,
-  forkJoin,
   from,
   map,
   Observable,
@@ -61,8 +57,8 @@ import {
   createHttpProofServerTransport,
   createProofServerAccess,
 } from './proof-server-transport';
+import { createMidnightRegistryDependencies } from './registry-dependencies';
 import { createScopedProofServerAccess } from './scoped-proving';
-import { teeAttestationProgress$ } from './send-proof-progress';
 
 import type { AttestedProverProvider } from './attested-proving-service';
 import type { ProofServerAccess } from './proof-server-transport';
@@ -79,7 +75,6 @@ import type {
   StartMidnightAccountWalletParams,
 } from '@lace-contract/midnight-context';
 import type { LaceInitSync } from '@lace-contract/module';
-import type { AccountId } from '@lace-contract/wallet-repo';
 import type { WithLogger } from '@lace-lib/util';
 import type { DefaultConfiguration } from '@midnightntwrk/wallet-sdk/facade';
 import type { Subscription } from 'rxjs';
@@ -983,9 +978,9 @@ export const createStartMidnightAccountWallet =
     );
 
 /**
- * The engine's side-effect dependencies. The attested prover is the
- * loadout's: the app proves through the bundled Veritee deployment, which a
- * headless loadout does not ship.
+ * The engine's side-effect dependencies for a loadout whose engines run in this JavaScript context: the registry
+ * dependencies every loadout has, plus the engine start. The attested prover is the loadout's: the app proves
+ * through the bundled Veritee deployment, which a headless loadout does not ship.
  */
 export const createMidnightSideEffectDependencies =
   (
@@ -997,60 +992,10 @@ export const createMidnightSideEffectDependencies =
       >;
     }
   > =>
-  ({ runtime }, dependencies) => {
-    const midnightWallets$ = midnightWalletsForRuntime(runtime);
-    return {
-      // The transaction executor and the dApp connector read ledger objects; they never load in Worker mode.
-      midnightWallets$: inProcessMidnightWallets$(
-        midnightWallets$,
-        'The Midnight transaction executor',
-      ),
-      midnightEngines$: midnightWallets$,
-
-      wasmProofActivities$: EMPTY,
-      dismissWasmProofActivity: () => undefined,
-      teeAttestationProgress$,
-
-      getMidnightWalletByAccountId: (accountId: AccountId) =>
-        midnightWallets$.pipe(
-          take(1),
-          map(wallets => wallets[accountId]),
-          switchMap(wallet =>
-            wallet
-              ? of(wallet)
-              : throwError(
-                  () =>
-                    new Error(
-                      `Could not load midnight wallet for account ${accountId}`,
-                    ),
-                ),
-          ),
-        ),
-
-      stopAllMidnightWallets: () => {
-        const walletsArray = Object.values(midnightWallets$.value);
-        midnightWallets$.next({});
-        if (walletsArray.length === 0) {
-          return of(void 0);
-        }
-        return forkJoin(walletsArray.map(wallet => wallet.stop())).pipe(
-          map(() => void 0),
-        );
-      },
-
-      stopMidnightWallet: (accountId: AccountId) => {
-        const wallet = midnightWallets$.value[accountId];
-        if (!wallet) {
-          return of(void 0);
-        }
-        const { [accountId]: _, ...remaining } = midnightWallets$.value;
-        midnightWallets$.next(remaining);
-        return wallet.stop().pipe(map(() => void 0));
-      },
-
-      startMidnightAccountWallet: createStartMidnightAccountWallet(
-        dependencies,
-        options,
-      ),
-    };
-  };
+  ({ runtime }, dependencies) => ({
+    ...createMidnightRegistryDependencies(runtime),
+    startMidnightAccountWallet: createStartMidnightAccountWallet(
+      dependencies,
+      options,
+    ),
+  });

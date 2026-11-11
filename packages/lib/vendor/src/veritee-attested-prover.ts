@@ -1,5 +1,7 @@
-import { AttestationError } from './attested-proving-service';
-import { VERITEE_PROOF_SERVER_MODES } from './midnight-proof-servers';
+import {
+  AttestationError,
+  VERITEE_PROOF_SERVER_MODES,
+} from './midnight-proof-servers';
 
 import type {
   AttestedProverProvider,

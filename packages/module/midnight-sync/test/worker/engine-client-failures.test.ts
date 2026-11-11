@@ -13,7 +13,7 @@ import {
 } from 'vitest';
 
 import { midnightSyncActions } from '../../src/store/actions';
-import { surfaceMidnightEngineFailures } from '../../src/store/side-effects/watch';
+import { surfaceMidnightEngineFailures } from '../../src/store/side-effects/sync-failure';
 import { MidnightSyncFailureId } from '../../src/value-objects/midnight-sync-failure-id.vo';
 import { MidnightEngineClientError } from '../../src/worker/engine-client';
 

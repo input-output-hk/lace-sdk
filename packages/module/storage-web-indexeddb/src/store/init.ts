@@ -1,9 +1,9 @@
-import { initializeDependencies } from './dependencies';
+import { createIndexedDbStorageDependencies } from '@lace-lib/storage/indexeddb';
 
 import type { LaceInit, LaceModuleStoreInit } from '@lace-contract/module';
 
-const store: LaceInit<LaceModuleStoreInit> = (props, dependencies) => ({
-  sideEffectDependencies: initializeDependencies(props, dependencies),
+const store: LaceInit<LaceModuleStoreInit> = (_, { logger }) => ({
+  sideEffectDependencies: createIndexedDbStorageDependencies({ logger }),
 });
 
 export default store;

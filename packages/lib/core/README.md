@@ -27,8 +27,12 @@ cloned-vector equivalence gate needed).
 
 `dapp-connector/signing` holds dApp signing rules that every wallet enforces the
 same way: lace-extension and lace-mobile read them through
-`@lace-contract/cardano-context`, and the extension shell host reads them from its
-vendored copy. Each rule decides against ownership sets its caller resolves. The
+`@lace-contract/cardano-context`, lace-next imports the subpath from its Cardano
+crypto adapter, and the extension shell host reads them from its vendored copy.
+Each rule decides against ownership sets its caller resolves. lace-next acquires
+its collateral-input outputs before `resolveCollateralOwnershipSets` classifies
+them: it fails a request whose input it cannot resolve, where the resolver given
+a provider directly counts such an input as not owned (LW-15506). The
 dApp-facing refusal sentence is untranslated by contract; each app localizes its
 own on-screen copy.
 

@@ -25,8 +25,9 @@ import { walletRepoStoreContract } from '@lace-contract/wallet-repo';
 
 import { FEATURE_FLAG_MIDNIGHT } from './const';
 import { midnightSyncActions } from './store/actions';
+import { createWorkerSdkStoreInit } from './store/sdk-worker-init';
 
-import type { MidnightSyncSdkOptions } from './store/sdk-init';
+import type { MidnightSyncSdkOptions } from './store/sdk-options';
 
 export {
   FEATURE_FLAG_MIDNIGHT,
@@ -40,7 +41,7 @@ export type {
   MidnightSyncAuth,
   MidnightSyncSdkOptions,
   MidnightSyncWorkerOptions,
-} from './store/sdk-init';
+} from './store/sdk-options';
 export type { MidnightNetworkConfigOverrides } from './store/side-effects/network-config';
 
 export const createMidnightSyncModule = (options: MidnightSyncSdkOptions) =>
@@ -73,15 +74,22 @@ export const createMidnightSyncModule = (options: MidnightSyncSdkOptions) =>
       },
     },
     store: inferStoreContext({
+      // Only page mode loads the init that carries the engine; Worker mode's init loads with this entry.
       load: async () => {
+        const { worker } = options;
+        if (worker)
+          return { default: createWorkerSdkStoreInit({ ...options, worker }) };
         const { createSdkStoreInit } = await import('./store/sdk-init');
         return { default: createSdkStoreInit(options) };
       },
       context: { actions: midnightSyncActions, selectors: {} },
     }),
     addons: {
+      // The signer store loads this when the wallet starts; Worker mode's factory signs through the worker.
       loadSignerFactory: async () =>
-        import('./exported-modules/signer-factory'),
+        options.worker
+          ? import('./exported-modules/worker-signer-factory')
+          : import('./exported-modules/signer-factory'),
       loadMidnightEngine: async () =>
         import('./exported-modules/midnight-engine'),
       loadInMemoryWalletIntegration: async () =>
@@ -100,10 +108,10 @@ export type {
   AttestedProverProvider,
   AttestedProvingSession,
 } from './store/attested-proving-service';
-export {
-  createProvingProviderFromTransport,
-  createProvingProviderFromCircuits,
-} from './store/proof-server-transport';
+// From the ledger-free vendor module itself, so that a Worker-mode page's static closure holds no transport that
+// imports the ledger's payload codecs.
+export { createProvingProviderFromCircuits } from '@lace-lib/vendor/midnight-proving-provider';
+export { createProvingProviderFromTransport } from './store/proof-server-transport';
 export { MIDNIGHT_CHECKPOINT_COLLECTION } from './store/checkpoint-collection';
 export { dustBalancesOf, midnightStateOf$ } from './worker/state-accessors';
 export { strictCompletionOf } from './worker/state-accessors';
@@ -111,10 +119,6 @@ export type {
   OpaqueMidnightFinalizedTx,
   OpaqueMidnightRecipe,
 } from './worker/codec';
-export {
-  createMidnightEngineHost,
-  MIDNIGHT_ENGINE_START_BOUND_MS,
-} from './worker/engine-host';
 export {
   acrossMidnightEngineResets,
   MidnightEngineClientError,
@@ -128,20 +132,9 @@ export type {
   MidnightRemoteEngineClient,
 } from './worker/engine-client';
 export {
-  buildConnectorTransaction,
-  buildTransaction,
-  discardRecipe,
-  estimateFee,
-  preparePendingActivity,
-  proveRecipe,
-  signRecipe,
-  submitTransaction,
-} from './worker/engine-operations';
-export {
-  checkCircuitThroughPort,
-  proveCircuitThroughPort,
-} from './worker/prover-port';
-export { MidnightWorkerError } from './worker/protocol';
+  MIDNIGHT_ENGINE_START_BOUND_MS,
+  MidnightWorkerError,
+} from './worker/protocol';
 export type {
   MidnightConnectorRequest,
   MidnightEngineHost,

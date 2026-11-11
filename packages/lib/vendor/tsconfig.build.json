@@ -20,6 +20,7 @@
     "src/wasm-proof-compute.ts",
     "src/midnight-submission-service.ts",
     "src/midnight-proof-servers.ts",
+    "src/midnight-proving-provider.ts",
     "src/proof-server-transport.ts",
     "src/midnight-connector-transaction.ts",
     "src/midnight-sign-data.ts",

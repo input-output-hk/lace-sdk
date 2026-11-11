@@ -1,11 +1,11 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { storageApi } from '../src/storage-api-adapter';
+import { storageApi } from '../src/indexeddb-adapter';
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('storage-web-indexeddb:storage-api-adapter', () => {
+describe('storage:indexeddb-adapter', () => {
   describe('getItem', () => {
     it('returns null when the item does not exist', async () => {
       await expect(storageApi.getItem('missing')).resolves.toBeNull();
@@ -19,7 +19,7 @@ describe('storage-web-indexeddb:storage-api-adapter', () => {
         },
       });
       const { storageApi: brokenStorageApi } = await import(
-        '../src/storage-api-adapter'
+        '../src/indexeddb-adapter'
       );
       await expect(brokenStorageApi.getItem('key')).rejects.toThrow(
         'storage failure',
@@ -38,7 +38,7 @@ describe('storage-web-indexeddb:storage-api-adapter', () => {
         },
       });
       const { storageApi: recoveringStorageApi } = await import(
-        '../src/storage-api-adapter'
+        '../src/indexeddb-adapter'
       );
 
       await expect(recoveringStorageApi.getItem('key')).rejects.toThrow(
@@ -82,7 +82,7 @@ describe('storage-web-indexeddb:storage-api-adapter', () => {
         },
       });
       const { storageApi: brokenStorageApi } = await import(
-        '../src/storage-api-adapter'
+        '../src/indexeddb-adapter'
       );
       await expect(brokenStorageApi.setItem('key', 'value')).rejects.toThrow(
         'storage failure',

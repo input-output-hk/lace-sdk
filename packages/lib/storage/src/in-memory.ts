@@ -11,7 +11,8 @@ import type {
   StorageDependencies,
 } from '@lace-contract/storage';
 
-export const sideEffectDependencies: KeyValueStorageDependencies &
+/** The storage factories over process memory: every store lasts as long as the process. */
+export const inMemoryStorageDependencies: KeyValueStorageDependencies &
   StorageDependencies = {
   createDocumentStorage: (_props: Readonly<CreateDocumentStorageProps>) =>
     new InMemoryDocumentStore(),

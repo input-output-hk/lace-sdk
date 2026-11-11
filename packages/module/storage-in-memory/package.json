@@ -11,7 +11,8 @@
   "main": "src/index.ts",
   "dependencies": {
     "@lace-contract/module": "*",
-    "@lace-contract/storage": "*"
+    "@lace-contract/storage": "*",
+    "@lace-lib/storage": "*"
   },
   "devDependencies": {}
 }

@@ -1,72 +1,33 @@
+import { inMemoryStorageDependencies } from '@lace-lib/storage/in-memory';
+import { createIndexedDbStorageDependencies } from '@lace-lib/storage/indexeddb';
 import { derivePendingActivityFromMidnightTx } from '@lace-module/dapp-connector-midnight/sdk';
-import {
-  createMidnightEngineHost,
-  MIDNIGHT_CHECKPOINT_COLLECTION,
-} from '@lace-module/midnight-sync/sdk';
-import storageInMemory from '@lace-module/storage-in-memory/sdk';
-import storageWebIndexeddb from '@lace-module/storage-web-indexeddb/sdk';
+import { MIDNIGHT_CHECKPOINT_COLLECTION } from '@lace-module/midnight-sync/sdk';
+import { createMidnightEngineHost } from '@lace-module/midnight-sync/sdk-engine';
 
-import type {
-  AppConfig,
-  LaceModule,
-  ModuleInitProps,
-} from '@lace-contract/module';
+import type { StorageDependencies } from '@lace-contract/storage';
 import type {
   MidnightEngineHost,
   MidnightWorkerStorageKind,
 } from '@lace-module/midnight-sync/sdk';
 import type { Logger } from 'ts-log';
 
-// The worker loads no app and no other module: the storage modules read neither this runtime nor the loader.
-const WORKER_MODULE_PROPS: ModuleInitProps = {
-  runtime: {
-    app: 'lace-sdk',
-    env: 'production',
-    config: {} as AppConfig,
-    platform: 'web',
-    features: {
-      availableModules: [],
-      loaded: { featureFlags: [], modules: [] },
-    },
-  },
-  loadModules: () => {
-    throw new Error(
-      'A storage module in the Midnight worker cannot load other modules',
-    );
-  },
-};
-
-// A storage module's collection factory, from its store as the app's loader would initialize it.
-const collectionStorageOf = async (module: LaceModule, logger: Logger) => {
-  const store = await module.store?.load();
-  const createCollectionStorage = store
-    ? (await store.default(WORKER_MODULE_PROPS, { logger }))
-        .sideEffectDependencies?.createCollectionStorage
-    : undefined;
-  if (!createCollectionStorage)
-    throw new Error(
-      `Storage module "${module.moduleName}" provides no collection storage for the Midnight worker`,
-    );
-  return createCollectionStorage;
-};
-
 /**
- * The engine host the SDK's worker serves: checkpoints in the SDK's storage modules, in memory or in the origin's
- * IndexedDB as each client asks, in the collection page mode uses; Pending activities derived as the dApp connector
- * derives them.
+ * The engine host the SDK's worker serves: checkpoints in the storage backends the SDK's storage modules build on, in
+ * memory or in the origin's IndexedDB as each client asks, in the collection page mode uses; Pending activities
+ * derived as the dApp connector derives them.
  *
  * @param logger - Receives the host's diagnostics.
  */
-export const createSdkMidnightEngineHost = async (
+export const createSdkMidnightEngineHost = (
   logger: Logger,
-): Promise<MidnightEngineHost> => {
-  const [inMemory, indexedDb] = await Promise.all([
-    collectionStorageOf(storageInMemory as LaceModule, logger),
-    collectionStorageOf(storageWebIndexeddb as LaceModule, logger),
-  ]);
-  const factories: Record<MidnightWorkerStorageKind, typeof inMemory> = {
-    memory: inMemory,
-    indexeddb: indexedDb,
+): MidnightEngineHost => {
+  const factories: Record<
+    MidnightWorkerStorageKind,
+    StorageDependencies['createCollectionStorage']
+  > = {
+    memory: inMemoryStorageDependencies.createCollectionStorage,
+    indexeddb: createIndexedDbStorageDependencies({ logger })
+      .createCollectionStorage,
   };
   return createMidnightEngineHost({
     createStore: kind => factories[kind](MIDNIGHT_CHECKPOINT_COLLECTION),

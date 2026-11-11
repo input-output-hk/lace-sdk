@@ -37,7 +37,7 @@ import { midnightWalletFor } from '../src/midnight-wallet';
 
 // Test-only engine boundary: the package deliberately does not export its internals.
 // eslint-disable-next-line @nx/enforce-module-boundaries
-import type * as SdkInit from '../../../packages/module/midnight-sync/src/store/sdk-init';
+import type * as WorkerInit from '../../../packages/module/midnight-sync/src/store/sdk-worker-init';
 import type {
   MidnightEngineConnection,
   MidnightEngineRuntimeStatus,
@@ -48,16 +48,17 @@ import type { Observable } from 'rxjs';
 const { workerConnect } = vi.hoisted(() => ({
   workerConnect: { current: undefined as unknown },
 }));
+// The module is created in Worker mode; the worker's connection is the test's, in place of a SharedWorker.
 vi.mock(
-  '../../../packages/module/midnight-sync/src/store/sdk-init',
+  '../../../packages/module/midnight-sync/src/store/sdk-worker-init',
   async importActual => {
-    const actual = await importActual<typeof SdkInit>();
+    const actual = await importActual<typeof WorkerInit>();
     return {
       ...actual,
-      createSdkStoreInit: (
-        options: Parameters<typeof actual.createSdkStoreInit>[0],
+      createWorkerSdkStoreInit: (
+        options: Parameters<typeof actual.createWorkerSdkStoreInit>[0],
       ) =>
-        actual.createSdkStoreInit({
+        actual.createWorkerSdkStoreInit({
           ...options,
           worker: {
             connect: clientId =>
@@ -259,6 +260,7 @@ const createWallet = async () => {
             indexerAddress: 'http://localhost:8088/graphql',
           },
         },
+        worker: true,
       }),
     ] as const,
     environment: 'development',

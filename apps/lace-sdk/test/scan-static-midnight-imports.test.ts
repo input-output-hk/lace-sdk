@@ -5,7 +5,9 @@ import path from 'node:path';
 import { expect, it } from 'vitest';
 
 import {
+  chunksHolding,
   filesImportingEntry,
+  findLedgerReachingImports,
   findStaticMidnightImports,
   packageRequireClosure,
   undeclaredPackageRequires,
@@ -252,6 +254,96 @@ it('names each file of an entry graph, static and lazy, that imports the entry i
       'export const take = 1;\n',
     );
     expect(filesImportingEntry(directory, 'midnight-worker.js')).toEqual([]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it('reports the ledger-reaching imports of several roots together: the ledger of either scope, the address format and the wallet SDK engine, but not its HD derivation or abstractions', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lace-sdk-ledger-'));
+  try {
+    fs.writeFileSync(
+      path.join(directory, 'midnight.js'),
+      "import './light.js';\nimport('./page-init.js');\n",
+    );
+    fs.writeFileSync(
+      path.join(directory, 'light.js'),
+      [
+        "import { NetworkId } from '@midnightntwrk/wallet-sdk-abstractions';",
+        "import { HDWallet } from '@midnightntwrk/wallet-sdk/hd';",
+        "import { HDWallet as Leaf } from '@midnightntwrk/wallet-sdk-hd';",
+        "import { ErrorCodes } from '@midnight-ntwrk/dapp-connector-api';",
+        "import { Buffer } from 'buffer';",
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(directory, 'page-init.js'),
+      "import './light.js';\nimport * as ledger from '@midnight-ntwrk/ledger-v8';\n",
+    );
+    fs.writeFileSync(
+      path.join(directory, 'addon.js'),
+      [
+        "import { EncryptionSecretKey } from '@midnightntwrk/wallet-sdk-address-format';",
+        "import { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';",
+        "import { DustWallet } from '@midnightntwrk/wallet-sdk-dust-wallet';",
+        "import * as v9 from '@midnightntwrk/ledger-v9';",
+        "import { ContractState } from '@midnight-ntwrk/compact-runtime';",
+      ].join('\n'),
+    );
+
+    // The lazy page init is not followed; the addon root is checked as a second root.
+    expect(findLedgerReachingImports(directory, ['midnight.js'])).toEqual([]);
+    expect(
+      findLedgerReachingImports(directory, ['midnight.js', 'addon.js']),
+    ).toEqual([
+      'addon.js: static import of "@midnightntwrk/wallet-sdk-address-format"',
+      'addon.js: static import of "@midnightntwrk/wallet-sdk/facade"',
+      'addon.js: static import of "@midnightntwrk/wallet-sdk-dust-wallet"',
+      'addon.js: static import of "@midnightntwrk/ledger-v9"',
+      'addon.js: static import of "@midnight-ntwrk/compact-runtime"',
+    ]);
+    expect(findLedgerReachingImports(directory, ['page-init.js'])).toEqual([
+      'page-init.js: static import of "@midnight-ntwrk/ledger-v8"',
+    ]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it('finds the one chunk of the right format that inlines each source, by its region marker, and refuses none or several', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lace-sdk-chunks-'));
+  try {
+    fs.writeFileSync(
+      path.join(directory, 'midnight-engine-Ab12.js'),
+      '//#region ../../packages/module/midnight-sync/src/exported-modules/midnight-engine.ts\nexport const a = 1;\n',
+    );
+    fs.writeFileSync(
+      path.join(directory, 'midnight-engine-Cd34.cjs'),
+      '//#region ../../packages/module/midnight-sync/src/exported-modules/midnight-engine.ts\nexports.a = 1;\n',
+    );
+    fs.writeFileSync(
+      path.join(directory, 'other.js'),
+      '//#region ../../packages/module/midnight-sync/src/store/sdk-init.ts\nexport const b = 1;\n',
+    );
+    const engine =
+      'packages/module/midnight-sync/src/exported-modules/midnight-engine.ts';
+
+    expect(chunksHolding(directory, [engine], 'midnight.js')).toEqual([
+      'midnight-engine-Ab12.js',
+    ]);
+    expect(chunksHolding(directory, [engine], 'midnight.cjs')).toEqual([
+      'midnight-engine-Cd34.cjs',
+    ]);
+    expect(() =>
+      chunksHolding(directory, ['src/missing.ts'], 'midnight.js'),
+    ).toThrow('found 0');
+    fs.writeFileSync(
+      path.join(directory, 'twin.js'),
+      '//#region ../../packages/module/midnight-sync/src/exported-modules/midnight-engine.ts\n',
+    );
+    expect(() => chunksHolding(directory, [engine], 'midnight.js')).toThrow(
+      'found 2',
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

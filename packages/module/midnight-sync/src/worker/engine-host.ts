@@ -28,9 +28,9 @@ import {
 } from 'rxjs';
 
 import { signWithWallet } from '../signing/midnight-in-memory-transaction-signer';
+import { buildAccountKeys, decryptKey } from '../store/account-keys';
 import { createStartMidnightAccountWallet } from '../store/dependencies';
 import { createAccountKeyManager } from '../store/side-effects/account-key-manager';
-import { buildAccountKeys, decryptKey } from '../store/side-effects/watch';
 
 import { midnightEngineGeneration } from './codec';
 import {
@@ -43,7 +43,10 @@ import {
   signRecipe,
   submitTransaction,
 } from './engine-operations';
-import { MidnightWorkerError } from './protocol';
+import {
+  MIDNIGHT_ENGINE_START_BOUND_MS,
+  MidnightWorkerError,
+} from './protocol';
 import {
   assertWorkerProofServer,
   checkCircuitThroughPort,
@@ -201,10 +204,6 @@ const createGate = () => {
 // Bounded, unlike call replies (ADR 47: proving may run for minutes), because this is teardown. Carrying on without
 // the acknowledgement is safe: stop() halts persistence as it is called, so no write can land after the wipe.
 const ENGINE_STOP_BOUND_MS = 30_000;
-
-// Bounded so that a start that never arrives cannot hold its lane and the gate. 120 s, as page mode waits for a start
-// (the SDK's `DEFAULT_START_TIMEOUT_MS`), leaves room for restoring a large checkpoint on a slow device.
-export const MIDNIGHT_ENGINE_START_BOUND_MS = 120_000;
 
 // During a DUST replay the engine state changes with every block. The page's DUST readers throttle the same way
 // (`updateDustBalance`), and the trailing value still delivers the last state.

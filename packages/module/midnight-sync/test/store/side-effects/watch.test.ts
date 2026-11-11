@@ -30,6 +30,7 @@ import {
 import { dummyLogger } from 'ts-log';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createAccountKeyManager } from '../../../src/store/account-keys';
 import { midnightSyncActions } from '../../../src/store/actions';
 import {
   updateDustBalance,
@@ -38,7 +39,7 @@ import {
   updateSyncProgress,
   updateTokens,
   upsertAddresses,
-  watchMidnightAccount,
+  createWatchMidnightAccount,
   watchMidnightAccounts,
 } from '../../../src/store/side-effects/watch';
 import { MidnightSyncFailureId } from '../../../src/value-objects/midnight-sync-failure-id.vo';
@@ -62,6 +63,11 @@ import type {
 } from '@lace-contract/wallet-repo';
 import type { FacadeState } from '@midnightntwrk/wallet-sdk/facade';
 import type { RunHelpers } from 'rxjs/testing';
+
+// The page's watcher: it decrypts the account keys here, as the extension and page mode do.
+const watchMidnightAccount = createWatchMidnightAccount(
+  createAccountKeyManager,
+);
 
 // The wallet's coinsByTokenType$ emits this structure (not exported from midnight-context)
 type ObservableMidnightWalletCoinsByTokenType = {

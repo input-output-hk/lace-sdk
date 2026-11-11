@@ -4,6 +4,7 @@ import {
   ModuleName,
 } from '@lace-contract/module';
 import { storageDependencyContract } from '@lace-contract/storage';
+import { createDocumentStorage } from '@lace-lib/storage/indexeddb';
 
 import store from './store';
 
@@ -35,7 +36,4 @@ export type SideEffect = LaceSideEffect<Selectors, ActionCreators>;
 // exporting anything other than a module from a module package is an anti-pattern
 // however, this is required to bootstrap the application in order to select
 // modules to load, before they are loaded
-export const loadCreateDocumentStorage = async () => {
-  const { createDocumentStorage } = await import('./create-document-storage');
-  return createDocumentStorage;
-};
+export const loadCreateDocumentStorage = async () => createDocumentStorage;

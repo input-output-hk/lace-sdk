@@ -9,10 +9,8 @@ import {
   applyMidnightSignedMessagePrefix,
   decodeMidnightSignData,
 } from '@lace-lib/vendor/midnight-sign-data';
-import {
-  buildConnectorTransaction,
-  MidnightWorkerError,
-} from '@lace-module/midnight-sync/sdk';
+import { MidnightWorkerError } from '@lace-module/midnight-sync/sdk';
+import { buildConnectorTransaction } from '@lace-module/midnight-sync/sdk-engine';
 import { firstValueFrom, map, NEVER, of, TimeoutError, timer } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

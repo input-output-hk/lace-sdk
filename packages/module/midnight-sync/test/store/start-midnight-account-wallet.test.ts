@@ -30,11 +30,12 @@ import {
 import { dummyLogger } from 'ts-log';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createAccountKeyManager } from '../../src/store/account-keys';
 import { createMidnightSideEffectDependencies } from '../../src/store/dependencies';
 import { initializeMidnightSideEffectDependencies } from '../../src/store/initialize-dependencies';
 import { createSdkStoreInit } from '../../src/store/sdk-init';
 import * as accountKeyManager from '../../src/store/side-effects/account-key-manager';
-import { watchMidnightAccount } from '../../src/store/side-effects/watch';
+import { createWatchMidnightAccount } from '../../src/store/side-effects/watch';
 
 import type { CreateAttestedProver } from '../../src/store/dependencies';
 import type {
@@ -49,6 +50,10 @@ import type { ModuleInitProps } from '@lace-contract/module';
 import type { CollectionStorage } from '@lace-contract/storage';
 import type { InMemoryWalletAccount } from '@lace-contract/wallet-repo';
 import type * as WalletSdkFacade from '@midnightntwrk/wallet-sdk/facade';
+
+const watchMidnightAccount = createWatchMidnightAccount(
+  createAccountKeyManager,
+);
 
 // ===== MOCKS =====
 

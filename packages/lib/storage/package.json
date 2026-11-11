@@ -1,0 +1,18 @@
+{
+  "name": "@lace-lib/storage",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    "./in-memory": "./src/in-memory.ts",
+    "./indexeddb": "./src/indexeddb.ts"
+  },
+  "dependencies": {
+    "@lace-contract/module": "*",
+    "@lace-contract/storage": "*",
+    "@lace-lib/util-store": "*",
+    "rxjs": "^7.8.1",
+    "ts-log": "^2.2.5"
+  }
+}

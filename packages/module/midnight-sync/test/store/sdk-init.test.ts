@@ -3,7 +3,7 @@ import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSdkStoreInit } from '../../src/store/sdk-init';
-import * as sideEffects from '../../src/store/side-effects';
+import * as sideEffects from '../../src/store/side-effects/initialize';
 import * as resync from '../../src/store/side-effects/resync';
 
 import type { SideEffect } from '../../src';
@@ -12,7 +12,7 @@ import type { CollectionStorage } from '@lace-contract/storage';
 
 const headlessReset = vi.hoisted(() => () => undefined);
 
-vi.mock('../../src/store/side-effects', () => ({
+vi.mock('../../src/store/side-effects/initialize', () => ({
   createInitializeSideEffects: vi.fn(() => () => []),
 }));
 vi.mock('../../src/store/side-effects/resync', () => ({

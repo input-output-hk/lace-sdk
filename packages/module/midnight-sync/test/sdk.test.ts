@@ -9,10 +9,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { createMidnightSyncModule, FEATURE_FLAG_MIDNIGHT } from '../src/sdk';
 
 import type { MidnightSyncAuth } from '../src/sdk';
+import type * as PageInit from '../src/store/sdk-init';
+import type { MidnightSignerFactory } from '@lace-contract/midnight-context';
 import type { Contract, ModuleInitProps } from '@lace-contract/module';
+import type { SignerAuth } from '@lace-contract/signer';
 
 // Loading the store init pulls in the engine's WASM, which takes seconds under full-suite load.
 vi.setConfig({ testTimeout: 30_000 });
+
+// Page mode's init, counted: Worker mode must never load it.
+const { pageInitLoads } = vi.hoisted(() => ({ pageInitLoads: { count: 0 } }));
+vi.mock('../src/store/sdk-init', async importActual => {
+  const actual = await importActual<typeof PageInit>();
+  return {
+    ...actual,
+    createSdkStoreInit: (
+      ...args: Parameters<typeof actual.createSdkStoreInit>
+    ) => {
+      pageInitLoads.count += 1;
+      return actual.createSdkStoreInit(...args);
+    },
+  };
+});
 
 const secret = AuthSecret(ByteArray.fromUTF8('sdk-password'));
 const auth: MidnightSyncAuth = {
@@ -67,6 +85,7 @@ describe('createMidnightSyncModule', () => {
       logger: dummyLogger,
     });
 
+    expect(pageInitLoads.count).toBeGreaterThan(0);
     const served = await firstValueFrom(
       loaded.sideEffectDependencies!.accessAuthSecret!(authSecret =>
         of(authSecret),
@@ -85,6 +104,46 @@ describe('createMidnightSyncModule', () => {
       loaded.sideEffectDependencies!.startMidnightAccountWallet,
     ).toBeTypeOf('function');
     expect(loaded.sideEffects).toHaveLength(1);
+  });
+
+  it("serves Worker mode from an init of its own that starts engines through the worker's client, without page mode's init", async () => {
+    const before = pageInitLoads.count;
+    const connect = vi.fn();
+    const module = createMidnightSyncModule({
+      auth,
+      worker: { connect, storage: 'memory' },
+    });
+    const { default: init } = await module.store!.load();
+    const loaded = await init(runtimeProps(), { logger: dummyLogger });
+
+    expect(pageInitLoads.count).toBe(before);
+    expect(
+      loaded.sideEffectDependencies!.startMidnightAccountWallet,
+    ).toBeTypeOf('function');
+    expect(loaded.sideEffects).toHaveLength(1);
+    expect(
+      await firstValueFrom(
+        loaded.sideEffectDependencies!.accessAuthSecret!(authSecret =>
+          of(authSecret),
+        ),
+      ),
+    ).toBe(secret);
+    // Nothing connects until an engine is asked for.
+    expect(connect).not.toHaveBeenCalled();
+    // The signer store's factory of this page signs through the engines in the worker.
+    const { default: initSignerFactory } =
+      await module.addons.loadSignerFactory();
+    const signerFactory = await initSignerFactory(runtimeProps(), {
+      logger: dummyLogger,
+    });
+    expect(signerFactory.canSign(stubData.midnightAccount)).toBe(true);
+    expect(
+      (signerFactory as MidnightSignerFactory).createTransactionSigner({
+        wallet: stubData.midnightWallet,
+        accountId: stubData.accountId,
+        auth: auth as SignerAuth,
+      }).sign,
+    ).toBeTypeOf('function');
   });
 
   it('refuses to start without a valid testnet for a wallet to start on', async () => {

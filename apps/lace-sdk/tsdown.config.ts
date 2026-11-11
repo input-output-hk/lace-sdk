@@ -16,7 +16,9 @@ import {
   MIDNIGHT_WORKER,
 } from './scripts/entries.mjs';
 import {
+  chunksHolding,
   filesImportingEntry,
+  findLedgerReachingImports,
   findStaticMidnightImports,
   undeclaredPackageRequires,
   unexpectedPackageImports,
@@ -561,6 +563,30 @@ const assertNoForbiddenPackages = {
         )}`,
       );
     }
+    if (CHANNEL === 'canary') {
+      // A Worker-mode page loads the Midnight entry, the Worker-mode store
+      // init (a static import of the entry) and, lazily, the engine addon and
+      // the in-memory wallet integration; the engine and its WebAssembly load
+      // only behind page mode's store init and the page operations (#3026).
+      // In both formats, their static import closure together must name no
+      // package whose import evaluates the ledger. The CommonJS output lowers
+      // import() to a `() => require(...)` the scan leaves out, and bundles the
+      // import-only wallet SDK packages, whose engine code then requires the
+      // ledger itself and is caught the same way.
+      for (const entry of ['midnight.js', 'midnight.cjs']) {
+        const ledgerReaching = findLedgerReachingImports(distDir, [
+          entry,
+          ...chunksHolding(distDir, WORKER_MODE_PAGE_SOURCES, entry),
+        ]);
+        if (ledgerReaching.length > 0) {
+          throw new Error(
+            `A Worker-mode page would load the Midnight ledger's WebAssembly: the static import closure of ${entry} and the Worker-mode chunks reaches a ledger package. Move the import behind page mode's store init or the page operations:\n  ${ledgerReaching.join(
+              '\n  ',
+            )}`,
+          );
+        }
+      }
+    }
     if (BUNDLES_IMPORT_ONLY('cjs')) {
       // The ESM Midnight entry imports the wallet SDK packages from the
       // consumer's install, wherever the engine sits in its chunk graph; the
@@ -665,6 +691,15 @@ const ENTRIES = Object.fromEntries(
 // packages). Polkadot stays in the bundle: the wallet SDK's node client checks
 // the block numbers Polkadot returns with `instanceof` against its own bn.js,
 // so both must use the bundle's one copy.
+// The sources a Worker-mode page loads lazily, beside the entry's static
+// closure: the engine addon the helpers look engines up through, the signer
+// factory the signer store loads at startup, and the in-memory wallet
+// integration that derives accounts (pure JavaScript).
+const WORKER_MODE_PAGE_SOURCES = [
+  'packages/module/midnight-sync/src/exported-modules/midnight-engine.ts',
+  'packages/module/midnight-sync/src/exported-modules/worker-signer-factory.ts',
+  'packages/module/midnight-sync/src/exported-modules/in-memory-wallet-integration/in-memory-wallet-integration-factory.ts',
+];
 const WORKER_EXTERNAL = [
   ...FORBIDDEN_EXTERNAL,
   ...MIDNIGHT_WASM_EXTERNAL,

@@ -9,11 +9,8 @@ import {
 import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
 import { storageDependencyContract } from '@lace-contract/storage';
 import { Cardano } from '@lace-lib/cardano-core';
+import { inMemoryStorageDependencies } from '@lace-lib/storage/in-memory';
 import { HexBytes, Milliseconds, Timestamp } from '@lace-lib/util';
-import {
-  InMemoryCollectionStore,
-  InMemoryDocumentStore,
-} from '@lace-module/storage-in-memory';
 import { EMPTY, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -45,10 +42,7 @@ import type {
   LaceInit,
   LaceModuleStoreInit,
 } from '@lace-contract/module';
-import type {
-  CreateCollectionStorageProps,
-  StorageDependencies,
-} from '@lace-contract/storage';
+import type { StorageDependencies } from '@lace-contract/storage';
 import type { AccountId } from '@lace-contract/wallet-repo';
 import type * as CardanoProviderCore from '@lace-lib/cardano-provider-core';
 import type { PasskeyKeySource } from '@lace-lib/passkey';
@@ -111,12 +105,8 @@ const persistentStorageModule = () => {
   };
   const sideEffectDependencies: KeyValueStorageDependencies &
     StorageDependencies = {
+    ...inMemoryStorageDependencies,
     createKeyValueStorage,
-    createDocumentStorage: () => new InMemoryDocumentStore(),
-    createCollectionStorage: <T extends object>({
-      computeDocId,
-    }: Readonly<CreateCollectionStorageProps<T>>) =>
-      new InMemoryCollectionStore<T>(computeDocId),
   };
   const store: LaceInit<LaceModuleStoreInit> = () => ({
     sideEffectDependencies,

@@ -6,7 +6,8 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./sdk": "./src/sdk.ts"
+    "./sdk": "./src/sdk.ts",
+    "./sdk-engine": "./src/sdk-engine.ts"
   },
   "main": "src/index.ts",
   "dependencies": {

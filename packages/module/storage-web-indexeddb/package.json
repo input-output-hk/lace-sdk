@@ -12,7 +12,7 @@
   "dependencies": {
     "@lace-contract/module": "*",
     "@lace-contract/storage": "*",
-    "@lace-lib/util-store": "*"
+    "@lace-lib/storage": "*"
   },
   "nx": {
     "projectType": "library",

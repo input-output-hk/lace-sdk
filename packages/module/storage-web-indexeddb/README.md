@@ -1,7 +1,9 @@
 # @lace-module/storage-web-indexeddb
 
 Data storage system for web, backed by raw IndexedDB (one database, one
-key-value object store). Used by `lace-extension-guest`.
+key-value object store). Used by `lace-extension-carbon` and `lace-extension-guest`.
 
-Uses `@lace-contract/storage` store classes by passing the storage-api-adapter which abstracts
-over the API interaction. Provides the store dependencies required to fulfill the storage contract.
+Provides the storage contract's dependencies from `@lace-lib/storage/indexeddb`, which holds the IndexedDB adapter
+and the store factories over the `@lace-contract/storage` store classes. `loadCreateDocumentStorage` loads the
+library's document store factory for the apps' bootstrap, which reads the persisted feature flags before any module
+loads.

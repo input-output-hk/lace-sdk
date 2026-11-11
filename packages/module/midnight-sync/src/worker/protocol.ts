@@ -31,6 +31,14 @@ import type { Observable } from 'rxjs';
 export type MidnightWorkerStorageKind = 'indexeddb' | 'memory';
 
 /**
+ * How long the worker lets an account's engine take to start before it fails the start, so that a start that never
+ * arrives cannot hold its lane and the gate. 120 s, as page mode waits for a start (the SDK's
+ * `DEFAULT_START_TIMEOUT_MS`), leaves room for restoring a large checkpoint on a slow device. Both sides read it
+ * here: the host to bound the start, the page to name the bound in its error.
+ */
+export const MIDNIGHT_ENGINE_START_BOUND_MS = 120_000;
+
+/**
  * The settings that change how an account's engine behaves. A client attaching to a running engine with other
  * settings is refused unless it adopts the running ones.
  */

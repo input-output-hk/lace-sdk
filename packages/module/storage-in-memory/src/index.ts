@@ -30,8 +30,3 @@ export default moduleMap;
 export type Selectors = ModuleSelectors<typeof sharedModule>;
 export type ActionCreators = ModuleActionCreators<typeof sharedModule>;
 export type SideEffect = LaceSideEffect<Selectors, ActionCreators>;
-
-export {
-  InMemoryCollectionStore,
-  InMemoryDocumentStore,
-} from './store/in-memory-storage';

@@ -767,8 +767,11 @@ SDK's API and can change with a wallet SDK update.
 - **Provers.** A delegated prover, attested or not, receives every transaction and circuit it proves. In-process and
   paired-device proving are not supported.
 - **Worker mode.**
-  - The page still loads the ledger's WebAssembly, because the `/midnight` entry imports the engine's modules, and
-    deriving a wallet entity still runs wherever the app calls it.
+  - The page loads no ledger WebAssembly: the engine's code loads only in the worker, and the build refuses an
+    import of the Midnight entry that would bring it back. The page still runs what is not the engine: deriving
+    a wallet entity (`createInMemoryWalletEntity`, `createMidnightAccounts`), which is CPU-bound pure JavaScript,
+    and the address and network helpers. In page mode the engine loads when the module's store loads, and the
+    operations behind the transaction helpers on the first operation, not at import time.
   - A `proveTimeout` stops the wait but cannot cancel the proof in the worker, so proving the same recipe again
     returns `This transaction is already being finalized` until the first proof settles.
   - A submission counts as interrupted once the page has handed it to the worker, also when the worker ended before

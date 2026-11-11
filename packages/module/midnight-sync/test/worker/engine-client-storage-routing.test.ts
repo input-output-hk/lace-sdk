@@ -36,6 +36,7 @@ import {
 } from 'vitest';
 
 import { FEATURE_FLAG_MIDNIGHT_SHIELDED_ACTIVITY_ROWS } from '../../src/const';
+import { createAccountKeyManager } from '../../src/store/account-keys';
 import { midnightSyncActions } from '../../src/store/actions';
 import { updateActivities } from '../../src/store/side-effects/activities';
 import {
@@ -44,10 +45,10 @@ import {
   createWorkerResetSyncStateSideEffect,
   showMidnightEngineResets,
 } from '../../src/store/side-effects/resync';
+import { surfaceMidnightEngineFailures } from '../../src/store/side-effects/sync-failure';
 import {
-  surfaceMidnightEngineFailures,
+  createWatchMidnightAccount,
   updateSyncProgress,
-  watchMidnightAccount,
 } from '../../src/store/side-effects/watch';
 import { MidnightSyncFailureId } from '../../src/value-objects/midnight-sync-failure-id.vo';
 import { encodeMidnightFinalizedTx } from '../../src/worker/codec';
@@ -94,6 +95,10 @@ import type {
 } from '@lace-contract/wallet-repo';
 import type { Action } from '@reduxjs/toolkit';
 import type { Observable, ObservedValueOf, Subscription } from 'rxjs';
+
+const watchMidnightAccount = createWatchMidnightAccount(
+  createAccountKeyManager,
+);
 
 vi.mock('../../src/store/dependencies', async importOriginal => {
   const fakes = await import('./engine-host-fakes');
