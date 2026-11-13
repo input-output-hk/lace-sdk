@@ -1,4 +1,7 @@
-import { derivePendingActivityFromCbor } from '@lace-contract/cardano-context';
+import {
+  derivePendingActivityFromCbor,
+  inFlightTransactionOf,
+} from '@lace-contract/cardano-context';
 import { Serialization } from '@lace-lib/cardano-core';
 import { Err, Ok } from '@lace-lib/util';
 import { TimeoutError } from 'rxjs';
@@ -39,6 +42,8 @@ export type CardanoCustodySubmission = {
 
 type SubmitCardanoCustodyTransactionProps = {
   signedTransaction: HexBytes;
+  /** The network the transaction is built for and submitted to. */
+  chainId: Cardano.ChainId;
   accountId: AccountId;
   /** The custody account's address. */
   address: Cardano.PaymentAddress;
@@ -52,13 +57,12 @@ type SubmitCardanoCustodyTransactionProps = {
 
 /**
  * Records a submitted custody transaction as the account's pending activity,
- * derived from the signed bytes, so the in-flight view drops the control,
- * grant and fund UTxOs it spends at once. The activity carries the
- * transaction's upper validity bound, so the wallet drops it once the
+ * derived from the signed bytes. The activity carries the transaction's upper
+ * validity bound, the operation, the submission status and the caller's
+ * reference, so the operation can be listed and reconciled after a restart.
+ * The wallet drops it with the transaction's in-flight entry once the
  * transaction can no longer settle, whether or not anyone waits for it, and
- * whether a device or an agent authorised it. It also carries the operation,
- * the submission status and the caller's reference, so the operation can be
- * listed and reconciled after a restart.
+ * whether a device or an agent authorised it.
  */
 const recordPendingActivity = (
   wallet: WalletWithCardanoCustody,
@@ -102,15 +106,38 @@ const recordPendingActivity = (
 };
 
 /**
+ * Records a submitted custody transaction in flight, as an accepted
+ * submission does, so the in-flight view leaves out what it spends until it
+ * settles or can no longer settle. A later acceptance keeps this record.
+ */
+const recordInFlight = (
+  wallet: WalletWithCardanoCustody,
+  { signedTransaction, chainId }: SubmitCardanoCustodyTransactionProps,
+): void => {
+  try {
+    wallet.dispatch(
+      'cardanoContext.recordInFlightTransaction',
+      inFlightTransactionOf({ serializedTx: signedTransaction, chainId }),
+    );
+  } catch {
+    // The answer stays the unknown outcome. Without the record, the
+    // builder's own chain read still refuses to build on the spent control
+    // UTxO.
+  }
+};
+
+/**
  * Submits a signed custody transaction and records it as the account's
- * pending activity, so builds for the account wait until it settles.
+ * pending activity, so builds for the account wait until it settles. The
+ * provider's acceptance records the transaction in flight, so the in-flight
+ * view drops the control, grant and fund UTxOs it spends at once.
  *
  * A submission that does not answer in time has an unknown outcome: the
- * transaction may still settle, so it is recorded as pending all the same,
- * and the answer is {@link CardanoCustodyOutcomeUnknownError}. A refused
- * submission records nothing. A refusal because inputs are no longer on
- * chain answers the typed error for the input that moved: the control
- * UTxO, a grant UTxO or funds.
+ * transaction may still settle, so it is recorded in flight and as pending
+ * all the same, and the answer is {@link CardanoCustodyOutcomeUnknownError}.
+ * A refused submission records nothing. A refusal because inputs are no
+ * longer on chain answers the typed error for the input that moved: the
+ * control UTxO, a grant UTxO or funds.
  */
 export const submitCardanoCustodyTransaction = async (
   wallet: WalletWithCardanoCustody,
@@ -136,6 +163,7 @@ export const submitCardanoCustodyTransaction = async (
         ) ?? submitted.error,
       );
     }
+    recordInFlight(wallet, props);
     recordPendingActivity(wallet, props, 'outcome-unknown');
     return Err(
       new CardanoCustodyOutcomeUnknownError(accountId, {

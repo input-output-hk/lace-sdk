@@ -1,11 +1,10 @@
-import { ActivityType } from '@lace-contract/activities';
 import {
   mergeVkeyWitnesses,
   verifyVkeyWitnesses,
 } from '@lace-contract/cardano-context';
 import { Serialization } from '@lace-lib/cardano-core';
 import { HexBlob } from '@lace-lib/cardano-util';
-import { HexBytes } from '@lace-lib/util';
+import { HexBytes, Timestamp } from '@lace-lib/util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { openCardanoCustodyAccount } from '../../src/custody/cardano-custody-account-entity';
@@ -44,6 +43,7 @@ import {
   liveControl,
   otherAgentKey,
   payout,
+  PREPROD,
   preprodEraSummaries,
   RECIPIENT_ADDRESS,
   record,
@@ -59,6 +59,7 @@ import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildError,
   CardanoCustodyBuildRequest,
+  CardanoTxId,
 } from '@lace-contract/cardano-context';
 import type { Cardano } from '@lace-lib/cardano-core';
 import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
@@ -239,28 +240,26 @@ describe('buildCardanoCustodyGrantSpend', () => {
   });
 
   it('refuses while a submitted owner operation has not settled, before asking the sponsor', async () => {
-    const { build, accountId, sponsor, settledUtxos$, activities$ } =
+    const { build, accountId, sponsor, settledUtxos$, inFlight$ } =
       await setup();
     settledUtxos$.next({ [accountId]: [liveControl, fundUtxo] });
-    activities$.next({
-      [accountId]: [
-        {
-          accountId,
-          activityId: 'pending',
-          timestamp: NOW as never,
-          tokenBalanceChanges: [],
-          type: ActivityType.Pending,
-          blockchainSpecific: {
-            Cardano: {
-              consumedInputs: [liveControl[0]],
-              producedOutputs: [
-                [{ txId: 'ab'.repeat(32), index: 0 }, grantedControl[1]],
-              ],
-            },
-          },
+    const ownerOperation = 'ab'.repeat(32) as CardanoTxId;
+    inFlight$.next([
+      {
+        chainId: PREPROD,
+        txId: ownerOperation,
+        effects: {
+          consumedInputs: [liveControl[0]],
+          producedOutputs: [
+            [
+              { ...liveControl[0], txId: ownerOperation, index: 0 },
+              grantedControl[1],
+            ],
+          ],
         },
-      ],
-    });
+        submittedAt: Timestamp(NOW),
+      },
+    ]);
 
     const built = await build();
 
@@ -506,14 +505,13 @@ describe('submitCardanoCustodyGrantSpend', () => {
       expect.objectContaining({
         activityId: grantSpend.bodyHash,
         blockchainSpecific: {
-          Cardano: expect.objectContaining({
-            consumedInputs: spendInputs,
+          Cardano: {
             custody: {
               invalidHereafter: grantSpend.invalidHereafter,
               operation: 'grant-spend',
               status: 'pending',
             },
-          }) as unknown,
+          },
         },
       }),
     ]);

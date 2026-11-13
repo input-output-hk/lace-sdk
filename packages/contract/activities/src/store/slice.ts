@@ -1,9 +1,11 @@
 import { failuresSelectors } from '@lace-contract/failures';
 import { markParameterizedSelector } from '@lace-contract/module';
 import { AccountId, walletsActions } from '@lace-contract/wallet-repo';
+import { BigNumber } from '@lace-lib/util';
 import { Serializable } from '@lace-lib/util-store';
 import { createAction, createSelector, createSlice } from '@reduxjs/toolkit';
 import flatten from 'lodash/flatten';
+import isEqual from 'lodash/isEqual';
 import values from 'lodash/values';
 import { REHYDRATE } from 'redux-persist';
 
@@ -74,6 +76,32 @@ const decodeActivity = (activity: Activity): Activity => {
     blockchainSpecific: Serializable.fromCached(
       activity.blockchainSpecific as unknown as Serializable<unknown>,
     ),
+  };
+};
+
+const mergeProvisionalActivity = (
+  held: Activity | undefined,
+  incoming: Activity,
+): Activity => {
+  if (
+    !incoming.provisional ||
+    incoming.type !== ActivityType.Pending ||
+    incoming.blockchainSpecific !== undefined
+  )
+    return incoming;
+  const provisional = { ...incoming.provisional, ...held?.provisional };
+  const totals = new Map<TokenId, bigint>();
+  for (const changes of Object.values(provisional)) {
+    for (const { tokenId, amount } of changes) {
+      totals.set(tokenId, (totals.get(tokenId) ?? 0n) + BigInt(amount));
+    }
+  }
+  return {
+    ...(held ?? incoming),
+    provisional,
+    tokenBalanceChanges: [...totals]
+      .filter(([, amount]) => amount !== 0n)
+      .map(([tokenId, amount]) => ({ tokenId, amount: BigNumber(amount) })),
   };
 };
 
@@ -155,19 +183,82 @@ const slice = createSlice({
         payload: { accountId, activities: activities.map(encodeActivity) },
       }),
     },
+    /**
+     * Adds missing activities and unions the immutable balance contributions of
+     * provisional Pending rows. Confirmed rows, feature rows and metadata stay
+     * protected when delayed or out-of-order publications reach the reducer.
+     */
+    addActivities: {
+      reducer: (
+        state,
+        {
+          payload: { accountId, activities: incomingActivities },
+        }: Readonly<
+          PayloadAction<{
+            accountId: AccountId;
+            activities: Activity[];
+          }>
+        >,
+      ) => {
+        const currentActivities = state.activities[accountId] ?? [];
+        const byId = new Map(
+          currentActivities.map(activity => [activity.activityId, activity]),
+        );
+        let hasChanged = false;
+        for (const activity of incomingActivities) {
+          const held = byId.get(activity.activityId);
+          if (
+            held &&
+            !(
+              held.provisional &&
+              activity.provisional &&
+              held.type === ActivityType.Pending &&
+              activity.type === ActivityType.Pending &&
+              held.blockchainSpecific === undefined &&
+              activity.blockchainSpecific === undefined
+            )
+          )
+            continue;
+          const merged = mergeProvisionalActivity(held, activity);
+          if (isEqual(held, merged)) continue;
+          byId.set(activity.activityId, merged);
+          hasChanged = true;
+        }
+        if (!hasChanged) return;
+        state.activities[accountId] = [...byId.values()].sort(
+          sortActivitiesCallback,
+        );
+      },
+      prepare: ({
+        accountId,
+        activities,
+      }: {
+        accountId: AccountId;
+        activities: Activity[];
+      }) => ({
+        payload: { accountId, activities: activities.map(encodeActivity) },
+      }),
+    },
     removeActivities: (
       state,
       {
-        payload: { accountId, activityIds },
+        payload: { accountId, activityIds, onlyPending = false },
       }: Readonly<
-        PayloadAction<{ accountId: AccountId; activityIds: string[] }>
+        PayloadAction<{
+          accountId: AccountId;
+          activityIds: string[];
+          /** Protects rows confirmed while an asynchronous expiry check was running. */
+          onlyPending?: boolean;
+        }>
       >,
     ) => {
       const currentActivities = state.activities[accountId];
       if (!currentActivities) return;
       const idsToRemove = new Set(activityIds);
       const remaining = currentActivities.filter(
-        activity => !idsToRemove.has(activity.activityId),
+        activity =>
+          !idsToRemove.has(activity.activityId) ||
+          (onlyPending && activity.type !== ActivityType.Pending),
       );
       // Preserve the reference when nothing matched: callers dispatch this on
       // every sync tick, and an unconditional write would churn the slice (and

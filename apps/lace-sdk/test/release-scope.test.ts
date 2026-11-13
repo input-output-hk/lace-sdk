@@ -1,9 +1,10 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   binaryOwners,
@@ -17,7 +18,6 @@ import {
   signatureChanges,
   type Lockfile,
 } from '../scripts/dependency-scope';
-import * as reach from '../scripts/reach.mjs';
 import { internalTermFindings } from '../scripts/release-notes-check';
 import {
   cleanTitle,
@@ -25,8 +25,8 @@ import {
   isBuildTargetUnchanged,
   isInScope,
   otherChannelSource,
-  packageScope,
   type NotesApi,
+  type ReleaseScope,
   renderNotes,
   renderPublicNotes,
   workspaceManifestChanges,
@@ -138,66 +138,92 @@ describe('the dependencies the family reaches', () => {
 });
 
 describe("a channel's release", () => {
-  // The first call compiles both channels' builds, about 15 s alone and
-  // twice that beside the suite's other workers; later calls reuse them.
-  it(
-    'leaves out the SDK source only the other channel reaches',
-    { timeout: 120_000 },
-    () => {
-      const canaryOnly = otherChannelSource(['stable']);
-      expect(canaryOnly.has('apps/lace-sdk/src/experimental.canary.ts')).toBe(
-        true,
-      );
-      expect(canaryOnly.has('apps/lace-sdk/src/index.ts')).toBe(false);
-      expect(
-        otherChannelSource(['canary']).has('apps/lace-sdk/src/index.ts'),
-      ).toBe(false);
-    },
-  );
+  type SerializedScope = Omit<ReleaseScope, 'excluded' | 'reached'> & {
+    excluded: string[];
+    reached: string[];
+  };
+  let stable: ReleaseScope;
+  let canary: ReleaseScope;
+  let stableSources: Set<string>;
+  let canaryEntries: string[];
+
+  beforeAll(async () => {
+    // Compiler walks block Vitest's RPC loop and become much slower under
+    // coverage. A child keeps the worker responsive; all assertions still
+    // use the real workspace scopes, shared across this suite.
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        '--input-type=module',
+        '--eval',
+        `
+          import { packageScope } from './apps/lace-sdk/scripts/release-scope.ts';
+          import { reachedOwnSource } from './apps/lace-sdk/scripts/reach.mjs';
+          const serialize = ({ reached, excluded, ...scope }) => ({
+            ...scope, reached: [...reached], excluded: [...excluded],
+          });
+          console.log(JSON.stringify({
+            stable: serialize(packageScope('apps/lace-sdk', ['stable'])),
+            canary: serialize(packageScope('apps/lace-sdk', ['canary'])),
+            stableSources: [...reachedOwnSource('stable')],
+            canaryEntries: [...reachedOwnSource('canary')].filter(file => file.endsWith('.canary.ts')),
+          }));
+        `,
+      ],
+      {
+        cwd: path.resolve(import.meta.dirname, '../../..'),
+        timeout: 120_000,
+      },
+    );
+    const result = JSON.parse(stdout) as {
+      stable: SerializedScope;
+      canary: SerializedScope;
+      stableSources: string[];
+      canaryEntries: string[];
+    };
+    const restore = (scope: SerializedScope): ReleaseScope => ({
+      ...scope,
+      reached: new Set(scope.reached),
+      excluded: new Set(scope.excluded),
+    });
+    stable = restore(result.stable);
+    canary = restore(result.canary);
+    stableSources = new Set(result.stableSources);
+    canaryEntries = result.canaryEntries;
+  }, 120_000);
+
+  it('leaves out the SDK source only the other channel reaches', () => {
+    expect(
+      stable.excluded?.has('apps/lace-sdk/src/experimental.canary.ts'),
+    ).toBe(true);
+    expect(stable.excluded?.has('apps/lace-sdk/src/index.ts')).toBe(false);
+    expect(canary.excluded?.has('apps/lace-sdk/src/index.ts')).toBe(false);
+  });
 
   it('leaves out nothing for a release of both channels', () => {
     expect(otherChannelSource(['canary', 'stable']).size).toBe(0);
   });
 
-  it(
-    'ships a change to a source only the canary worker reaches in a canary release alone',
-    // Both workspace graphs can take over two minutes beside CI's other workers.
-    { timeout: 180_000 },
-    () => {
-      const workerOnly = [
-        'apps/lace-sdk/src/midnight-worker/worker.ts',
-        'apps/lace-sdk/src/midnight-worker/run-engine-worker.ts',
-        'apps/lace-sdk/src/midnight-worker/engine-host.ts',
-        'apps/lace-sdk/src/midnight-worker/serve-engine-host.ts',
-      ];
-      // SDK-owned files use the real channel exclusion; compiling workspace
-      // dependencies again adds no evidence about which channel ships them.
-      const workspaceReach = vi
-        .spyOn(reach, 'reachedWorkspaceFiles')
-        .mockReturnValue([]);
-      try {
-        const stable = packageScope('apps/lace-sdk', ['stable']);
-        const canary = packageScope('apps/lace-sdk', ['canary']);
+  it('ships a change to a source only the canary worker reaches in a canary release alone', () => {
+    const workerOnly = [
+      'apps/lace-sdk/src/midnight-worker/worker.ts',
+      'apps/lace-sdk/src/midnight-worker/run-engine-worker.ts',
+      'apps/lace-sdk/src/midnight-worker/engine-host.ts',
+      'apps/lace-sdk/src/midnight-worker/serve-engine-host.ts',
+    ];
 
-        expect(workerOnly.map(file => isInScope(file, stable))).toEqual(
-          workerOnly.map(() => false),
-        );
-        expect(workerOnly.map(file => isInScope(file, canary))).toEqual(
-          workerOnly.map(() => true),
-        );
-      } finally {
-        workspaceReach.mockRestore();
-      }
-    },
-  );
+    expect(workerOnly.map(file => isInScope(file, stable))).toEqual(
+      workerOnly.map(() => false),
+    );
+    expect(workerOnly.map(file => isInScope(file, canary))).toEqual(
+      workerOnly.map(() => true),
+    );
+  });
 
   it("finds the canary entries in the canary build's own source alone", () => {
-    const stable = reach.reachedOwnSource('stable');
-    const canaryEntries = [...reach.reachedOwnSource('canary')].filter(file =>
-      file.endsWith('.canary.ts'),
-    );
     expect(canaryEntries.length).toBeGreaterThan(0);
-    for (const file of canaryEntries) expect(stable.has(file)).toBe(false);
+    for (const file of canaryEntries)
+      expect(stableSources.has(file)).toBe(false);
   });
 });
 

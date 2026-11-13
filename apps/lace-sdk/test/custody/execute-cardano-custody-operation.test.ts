@@ -1176,7 +1176,15 @@ describe('executeCardanoCustodyOperation', () => {
         'clearInterval',
       ],
     });
-    const { execute, control, activities$, accountId, sponsor } = await setup();
+    const {
+      execute,
+      control,
+      activities$,
+      inFlight$,
+      dispatch,
+      accountId,
+      sponsor,
+    } = await setup();
     control.answerSubmit = () => 'silent';
 
     let isSettled = false;
@@ -1203,12 +1211,33 @@ describe('executeCardanoCustodyOperation', () => {
         activityId: txId,
         type: ActivityType.Pending,
         blockchainSpecific: {
-          Cardano: expect.objectContaining({
+          Cardano: {
             custody: expect.objectContaining({
               status: 'outcome-unknown',
             }) as unknown,
-          }) as unknown,
+          },
         },
+      }),
+    ]);
+    // Recorded in flight before its activity, as an accepted submission is,
+    // so its inputs stay reserved and its bound expires both.
+    const dispatched = dispatch.mock.calls.map(([key]) => key);
+    expect(
+      dispatched.slice(dispatched.lastIndexOf('cardanoContext.submitTx')),
+    ).toEqual([
+      'cardanoContext.submitTx',
+      'cardanoContext.recordInFlightTransaction',
+      'activities.upsertActivities',
+    ]);
+    expect(inFlight$.value).toEqual([
+      expect.objectContaining({
+        txId,
+        invalidHereafter,
+        effects: expect.objectContaining({
+          consumedInputs: expect.arrayContaining([
+            { txId: liveControl[0].txId, index: liveControl[0].index },
+          ]) as unknown,
+        }) as unknown,
       }),
     ]);
     sponsor.collateral.mockClear();

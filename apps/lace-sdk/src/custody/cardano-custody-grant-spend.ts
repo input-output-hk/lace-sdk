@@ -460,6 +460,7 @@ const submitExclusively = async (
       witnesses: [agent, sponsorWitness],
       resolvedInputs,
     }),
+    chainId,
     accountId,
     address,
     resolvedInputs,

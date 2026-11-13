@@ -238,8 +238,6 @@ describe('night-designation-flow side-effects', () => {
                     type: ActivityType.Pending,
                     blockchainSpecific: {
                       Cardano: {
-                        consumedInputs: [],
-                        producedOutputs: [],
                         nightDesignation: { action: 'designate' },
                       },
                     },
@@ -308,95 +306,10 @@ describe('night-designation-flow side-effects', () => {
                     type: ActivityType.Pending,
                     blockchainSpecific: {
                       Cardano: {
-                        consumedInputs: [],
-                        producedOutputs: [],
                         nightDesignation: {
                           action: 'designate',
                           dustPubkeyHex,
                         },
-                      },
-                    },
-                  },
-                ],
-              }),
-              b: nightDesignationFlowActions.nightDesignationFlow.processingResulted(
-                { result: submitResult },
-              ),
-            });
-          },
-        }),
-      );
-
-      vi.restoreAllMocks();
-    });
-
-    it('merges upstream blockchainSpecificActivityMetadata with nightDesignation', () => {
-      const upstreamConsumedInput = {
-        txId: 'a'.repeat(64),
-        index: 0,
-      };
-      const upstreamProducedOutput = {
-        input: { txId: 'b'.repeat(64), index: 1 },
-        output: { address: 'addr1...', value: { coins: 5n } },
-      };
-      // Without them the balance would count withdrawn rewards twice.
-      const upstreamWithdrawal = { stakeAddress: 'stake_test1', quantity: 5n };
-      const submitResult: TxSubmissionResult = {
-        success: true,
-        txId: testTxId,
-        blockchainSpecificActivityMetadata: {
-          Cardano: {
-            consumedInputs: [upstreamConsumedInput],
-            producedOutputs: [upstreamProducedOutput],
-            withdrawals: [upstreamWithdrawal],
-          },
-        },
-      };
-      const mockTimestamp = 1_700_000_000_000;
-      vi.spyOn(Date, 'now').mockReturnValue(mockTimestamp);
-
-      testSideEffect(
-        {
-          build: ({ cold }) =>
-            makeNightDesignationProcessing({
-              submitTx: (_, mapResult) =>
-                cold('a', { a: mapResult(submitResult) }),
-            }),
-        },
-        ({ cold, expectObservable }) => ({
-          stateObservables: {
-            nightDesignationFlow: {
-              selectState$: cold('a', { a: processingState }),
-            },
-          },
-          dependencies: {
-            actions: {
-              ...nightDesignationFlowActions,
-              ...activitiesActions,
-            },
-          },
-          assertion: sideEffect$ => {
-            expectObservable(sideEffect$).toBe('(ab)', {
-              a: activitiesActions.activities.upsertActivities({
-                accountId: testAccountId,
-                activities: [
-                  {
-                    accountId: testAccountId,
-                    activityId: testTxId,
-                    timestamp: Timestamp(mockTimestamp),
-                    tokenBalanceChanges: [
-                      {
-                        tokenId: LOVELACE_TOKEN_ID,
-                        amount: BigNumber(-200_000n),
-                      },
-                    ],
-                    type: ActivityType.Pending,
-                    blockchainSpecific: {
-                      Cardano: {
-                        consumedInputs: [upstreamConsumedInput],
-                        producedOutputs: [upstreamProducedOutput],
-                        withdrawals: [upstreamWithdrawal],
-                        nightDesignation: { action: 'designate' },
                       },
                     },
                   },

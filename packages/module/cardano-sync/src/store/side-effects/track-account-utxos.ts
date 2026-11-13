@@ -87,10 +87,10 @@ const outpointKey = (outpoint: Cardano.TxIn): string =>
  * the next spend — so it cannot stand as evidence that a provider is behind.
  *
  * Evidence-based, so it under-subtracts: an activity carrying no
- * `consumedInputs` reports nothing spent. Pending rows written without
- * blockchain metadata (the staking and earn-rewards flows do this) therefore
- * do not disarm the proof until their confirmed activity maps, which is what
- * bounds the withhold rather than the pending row.
+ * `consumedInputs` reports nothing spent. A Pending row carries none, since
+ * the in-flight store holds a submitted transaction's spend, so it does not
+ * disarm the proof until its confirmed activity maps, which is what bounds the
+ * withhold.
  */
 const unspentAnchorOutpoints = (
   topActivity: TopOnChainActivity | undefined,

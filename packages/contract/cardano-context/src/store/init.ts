@@ -8,11 +8,12 @@ import { readMisroutedPreviewAccountIds } from '@lace-contract/wallet-repo';
 import { createMigrate, createTransform } from 'redux-persist';
 
 import {
-  cardanoAccountUnspendableUtxos$,
-  cardanoAccountUtxos$,
+  cardanoSettledAccountUnspendableUtxos$,
+  cardanoSettledAvailableAccountUtxos$,
   cardanoAddresses$,
   cardanoChainId$,
   cardanoNetworkMagic$,
+  cardanoPendingRewardWithdrawals$,
   cardanoProtocolParameters$,
   cardanoRewardAccountDetails$,
 } from '../cardano-observables';
@@ -102,11 +103,12 @@ const store: LaceInit<LaceModuleStoreInit> = async (
       txExecutorCardano: {
         cardanoProtocolParameters$,
         cardanoNetworkMagic$,
-        cardanoAccountUtxos$,
-        cardanoAccountUnspendableUtxos$,
+        cardanoSettledAvailableAccountUtxos$,
+        cardanoSettledAccountUnspendableUtxos$,
         cardanoAddresses$,
         cardanoChainId$,
         cardanoRewardAccountDetails$,
+        cardanoPendingRewardWithdrawals$,
       },
     },
     persistConfig: {
@@ -117,6 +119,7 @@ const store: LaceInit<LaceModuleStoreInit> = async (
           'accountRewardsHistory',
           'networkInfo',
           'accountUtxos',
+          'inFlightTransactions',
           'securityScanByAccount',
           'securityRescanDismissedByAccount',
         ],

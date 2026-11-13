@@ -50,7 +50,7 @@ const setup = async () => {
 
 type Setup = Awaited<ReturnType<typeof setup>>;
 
-/** What the wallet's stale-activity side effect does once a sync round found the transaction nowhere. */
+/** What the wallet does once its provider, asked past the bound, does not hold the transaction. */
 const dropPending = ({ activities$, accountId }: Setup) => {
   activities$.next({ [accountId]: [] });
 };

@@ -1,10 +1,9 @@
 // Pending withdrawals (LW-15725): a submitted transaction's rewards already
 // sit in its pending outputs, so the balance must not also count them as
 // withdrawable, and builders must know they are spoken for.
-import { ActivityType } from '@lace-contract/activities';
 import { AccountId } from '@lace-contract/wallet-repo';
 import { Cardano } from '@lace-lib/cardano-core';
-import { BigNumber, Timestamp } from '@lace-lib/util';
+import { BigNumber } from '@lace-lib/util';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -13,9 +12,7 @@ import {
   pendingRewardWithdrawals,
 } from '../src/apply-in-flight-utxo-adjustments';
 
-import type { CardanoActivityUtxoMetadata } from '../src/augmentations';
 import type { AccountRewardAccountDetailsMap } from '../src/types';
-import type { Activity } from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
 
 const ACCOUNT_A = AccountId('account-a');
@@ -31,28 +28,15 @@ const KEY_B = Cardano.RewardAccount(
   'stake_test1upjghly04re6yrr3nh3ntp9en3p5flnxh2yf6camc3vfhwg6dhc5w',
 );
 
-const pending = ({
-  accountId,
-  activityId,
-  withdrawals,
-  type = ActivityType.Pending,
-}: {
-  accountId: AccountId;
-  activityId: string;
-  withdrawals?: Cardano.Withdrawal[];
-  type?: ActivityType;
-}): Activity => ({
-  accountId,
-  activityId,
-  timestamp: Timestamp(0),
-  tokenBalanceChanges: [],
-  type,
-  blockchainSpecific: {
-    Cardano: {
-      consumedInputs: [],
-      producedOutputs: [],
-      ...(withdrawals && { withdrawals }),
-    } satisfies CardanoActivityUtxoMetadata,
+const inFlight = (
+  withdrawals?: Cardano.Withdrawal[],
+  chainId: Cardano.ChainId = Cardano.ChainIds.Preprod,
+) => ({
+  chainId,
+  effects: {
+    consumedInputs: [],
+    producedOutputs: [],
+    ...(withdrawals && { withdrawals }),
   },
 });
 
@@ -106,28 +90,16 @@ const key = (rewardAccount: Cardano.RewardAccount, networkMagic = PREPROD) =>
   pendingRewardWithdrawalKey(networkMagic, rewardAccount);
 
 describe('pendingRewardWithdrawals', () => {
-  it('sums withdrawals per reward account across every account of a network', () => {
-    // A tx recorded for account A that withdraws B's rewards still counts for B.
-    const totals = pendingRewardWithdrawals(
-      {
-        [ACCOUNT_A]: [
-          pending({
-            accountId: ACCOUNT_A,
-            activityId: 'tx-1',
-            withdrawals: [
-              { stakeAddress: KEY_A, quantity: 3n },
-              { stakeAddress: KEY_B, quantity: 5n },
-            ],
-          }),
-          pending({
-            accountId: ACCOUNT_A,
-            activityId: 'tx-2',
-            withdrawals: [{ stakeAddress: KEY_A, quantity: 4n }],
-          }),
-        ],
-      },
-      addresses,
-    );
+  it('sums withdrawals per reward account across every in-flight transaction of a network', () => {
+    // Whichever account pays for a transaction, its withdrawal of B's rewards
+    // counts for B.
+    const totals = pendingRewardWithdrawals([
+      inFlight([
+        { stakeAddress: KEY_A, quantity: 3n },
+        { stakeAddress: KEY_B, quantity: 5n },
+      ]),
+      inFlight([{ stakeAddress: KEY_A, quantity: 4n }]),
+    ]);
 
     expect(totals).toEqual(
       new Map([
@@ -137,73 +109,20 @@ describe('pendingRewardWithdrawals', () => {
     );
   });
 
-  it('counts a transaction recorded for several accounts once', () => {
-    const withdrawals = [{ stakeAddress: KEY_A, quantity: 3n }];
-    const totals = pendingRewardWithdrawals(
-      {
-        [ACCOUNT_A]: [
-          pending({
-            accountId: ACCOUNT_A,
-            activityId: 'tx-1',
-            withdrawals: withdrawals,
-          }),
-        ],
-        [ACCOUNT_B]: [
-          pending({
-            accountId: ACCOUNT_B,
-            activityId: 'tx-1',
-            withdrawals: withdrawals,
-          }),
-        ],
-      },
-      addresses,
-    );
-
-    expect(totals.get(key(KEY_A))).toBe(3n);
-  });
-
-  it('keeps networks apart even when the reward address is the same', () => {
-    const totals = pendingRewardWithdrawals(
-      {
-        [ACCOUNT_A_PREVIEW]: [
-          pending({
-            accountId: ACCOUNT_A_PREVIEW,
-            activityId: 'tx-preview',
-            withdrawals: [{ stakeAddress: KEY_A, quantity: 3n }],
-          }),
-        ],
-      },
-      addresses,
-    );
+  it("keys each withdrawal by its transaction's network even when the reward address is the same", () => {
+    const totals = pendingRewardWithdrawals([
+      inFlight(
+        [{ stakeAddress: KEY_A, quantity: 3n }],
+        Cardano.ChainIds.Preview,
+      ),
+    ]);
 
     expect(totals.get(key(KEY_A, PREVIEW))).toBe(3n);
     expect(totals.has(key(KEY_A))).toBe(false);
   });
 
-  it('ignores settled activities, activities without withdrawals and accounts of unknown network', () => {
-    const totals = pendingRewardWithdrawals(
-      {
-        [ACCOUNT_A]: [
-          pending({
-            accountId: ACCOUNT_A,
-            activityId: 'tx-settled',
-            withdrawals: [{ stakeAddress: KEY_A, quantity: 3n }],
-            type: ActivityType.Send,
-          }),
-          pending({ accountId: ACCOUNT_A, activityId: 'tx-no-withdrawal' }),
-        ],
-        [AccountId('account-without-addresses')]: [
-          pending({
-            accountId: AccountId('account-without-addresses'),
-            activityId: 'tx-3',
-            withdrawals: [{ stakeAddress: KEY_A, quantity: 3n }],
-          }),
-        ],
-      },
-      addresses,
-    );
-
-    expect(totals.size).toBe(0);
+  it('ignores in-flight transactions without withdrawals', () => {
+    expect(pendingRewardWithdrawals([inFlight(), inFlight([])]).size).toBe(0);
   });
 });
 

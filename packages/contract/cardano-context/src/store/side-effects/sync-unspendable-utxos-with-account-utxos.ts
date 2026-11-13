@@ -6,19 +6,32 @@ import { utxoKey } from '../../util';
 import type { SideEffect, CardanoContextAction } from '../../contract';
 
 /**
- * Side effect that removes UTXOs from accountUnspendableUtxos when they are
- * no longer present in accountUtxos (e.g. after being spent). Keeps
- * unspendable list in sync with current account UTXOs.
+ * Side effect that drops a reserved UTxO from accountUnspendableUtxos once
+ * the account's ownership view (`selectCollateralOwnershipUtxos`) no longer
+ * holds its outpoint, such as after a spend of it settles.
+ *
+ * The ownership view, not the settled set: the collateral flow reserves its
+ * own transaction's output as soon as that transaction's entry offers it. The
+ * reservation then holds through settlement, as the refetch that lets the
+ * entry settle also lists the output, and goes if the entry expires.
  */
 export const syncUnspendableUtxosWithAccountUtxos: SideEffect = (
   _,
-  { cardanoContext: { selectAccountUtxos$, selectAccountUnspendableUtxos$ } },
+  {
+    cardanoContext: {
+      selectCollateralOwnershipUtxos$,
+      selectAccountUnspendableUtxos$,
+    },
+  },
   { actions },
 ) =>
-  combineLatest([selectAccountUtxos$, selectAccountUnspendableUtxos$]).pipe(
+  combineLatest([
+    selectCollateralOwnershipUtxos$,
+    selectAccountUnspendableUtxos$,
+  ]).pipe(
     mergeMap(
       ([
-        accountUtxos,
+        ownershipUtxos,
         accountUnspendableUtxos,
       ]): Observable<CardanoContextAction> => {
         const actionsToDispatch: CardanoContextAction[] = [];
@@ -28,11 +41,11 @@ export const syncUnspendableUtxosWithAccountUtxos: SideEffect = (
             accountUnspendableUtxos[AccountId(accountId)] ?? [];
           if (unspendableUtxos.length === 0) continue;
 
-          const availableUtxoKeys = new Set(
-            (accountUtxos[AccountId(accountId)] ?? []).map(utxoKey),
+          const ownedUtxoKeys = new Set(
+            (ownershipUtxos[AccountId(accountId)] ?? []).map(utxoKey),
           );
           const filteredUnspendable = unspendableUtxos.filter(utxo =>
-            availableUtxoKeys.has(utxoKey(utxo)),
+            ownedUtxoKeys.has(utxoKey(utxo)),
           );
 
           if (filteredUnspendable.length !== unspendableUtxos.length) {

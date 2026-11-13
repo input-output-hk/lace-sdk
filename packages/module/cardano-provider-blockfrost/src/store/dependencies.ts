@@ -5,6 +5,7 @@ import {
   type CardanoProviderContext,
   type CardanoProviderDependencies,
   type CardanoTokenMetadata,
+  type CardanoTransactionInclusion,
   type GetTokensProps,
   LOVELACE_TOKEN_ID,
   cardanoNetworkMagicToNetworkType,
@@ -26,12 +27,14 @@ import {
   BlockfrostStakePoolProvider,
   BlockfrostTokensProvider,
   BlockfrostUtxoProvider,
+  BlockfrostTxProvider,
   BlockfrostTxSubmitProvider,
   BlockfrostTxEvaluationProvider,
   LOVELACE_METADATA,
   toContractTokenMetadata,
   computeBlockfrostConfigIdentifier,
   getBlockfrostClient,
+  getTransactionInclusion,
   type BlockfrostConfig,
 } from '@lace-lib/cardano-provider-core';
 import { Bip32Account } from '@lace-lib/core';
@@ -144,6 +147,11 @@ const getStakePoolProvider = memoize(
 const getUtxoProvider = memoize((config: BlockfrostConfig, logger: Logger) => {
   const client = getBlockfrostClient(config);
   return new BlockfrostUtxoProvider(client, logger);
+}, computeBlockfrostConfigIdentifier);
+
+const getTxProvider = memoize((config: BlockfrostConfig, logger: Logger) => {
+  const client = getBlockfrostClient(config);
+  return new BlockfrostTxProvider(client, logger);
 }, computeBlockfrostConfigIdentifier);
 
 const getTxSubmitProvider = memoize(
@@ -375,6 +383,18 @@ export const initializeDependencies: LaceInit<
           logger,
         );
         return activityProvider.getTransactionDetails(txId);
+      },
+      checkTransaction: (txId: Cardano.TransactionId, context) => {
+        const provider = getTxProvider(
+          getBlockfrostConfig(context, blockfrostConfigs),
+          logger,
+        );
+        // `defer`, not `from`: a caller's retry re-requests.
+        return defer(async () =>
+          getTransactionInclusion(provider, txId)
+            .then(Ok<CardanoTransactionInclusion | null>)
+            .catch(Err<ProviderError>),
+        );
       },
       resolveInput: (txIn: Cardano.TxIn, context) => {
         const provider = getInputResolverProvider(

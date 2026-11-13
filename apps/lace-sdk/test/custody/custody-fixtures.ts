@@ -1,11 +1,10 @@
 import { ActivityType } from '@lace-contract/activities';
 import {
-  applyInFlightUtxoAdjustments,
   cardanoContextActions,
   cardanoCustodyActions,
   CardanoNetworkId,
-  CardanoPaymentAddress,
   classifyCardanoCustodyAccount,
+  inFlightTransactionOf,
   isCardanoCustodyAccount,
 } from '@lace-contract/cardano-context';
 import { Cardano, Milliseconds, Serialization } from '@lace-lib/cardano-core';
@@ -62,6 +61,7 @@ import type {
   CardanoCustodyDeviceBinding,
   CardanoTransactionHistoryItem,
   CardanoVkeyWitness,
+  DecodedInFlightTransaction,
   RequiredProtocolParameters,
 } from '@lace-contract/cardano-context';
 import type {
@@ -72,6 +72,7 @@ import type {
 } from '@lace-contract/wallet-repo';
 import type { EraSummary } from '@lace-lib/cardano-core';
 import type { CustodyGrant } from '@lace-lib/cardano-custody';
+import type { HexBytes } from '@lace-lib/util';
 
 type CardanoCustodyBuildOutcome = Awaited<
   ReturnType<typeof requestCardanoCustodyBuild>
@@ -318,11 +319,45 @@ export const preprodEraSummaries: EraSummary[] = [
 
 type SubmitAnswer = 'ok' | 'silent' | { error: string };
 
+const outpointOf = ([{ txId, index }]: Cardano.Utxo) => `${txId}#${index}`;
+
 /**
- * A wallet whose store holds wallets, settled UTxOs and activities, and
- * whose Cardano module answers builds and submissions as each test says.
- * Custody account states are classified from the settled UTxOs with the
- * pending activities applied, as the real selector does.
+ * An account's settled UTxOs with the transactions in flight applied, as the
+ * store's in-flight view does: the inputs they spend leave, and the outputs
+ * they pay to `address` join.
+ */
+const withInFlight = (
+  settled: readonly Cardano.Utxo[],
+  address: Cardano.PaymentAddress | undefined,
+  inFlight: readonly DecodedInFlightTransaction[],
+): Cardano.Utxo[] => {
+  const spent = new Set(
+    inFlight.flatMap(({ effects }) =>
+      effects.consumedInputs.map(({ txId, index }) => `${txId}#${index}`),
+    ),
+  );
+  const unspent = settled.filter(utxo => !spent.has(outpointOf(utxo)));
+  const known = new Set(unspent.map(outpointOf));
+  return [
+    ...unspent,
+    ...inFlight
+      .flatMap(({ effects }) => effects.producedOutputs)
+      .filter(
+        utxo =>
+          utxo[1].address === address &&
+          !spent.has(outpointOf(utxo)) &&
+          !known.has(outpointOf(utxo)),
+      ),
+  ];
+};
+
+/**
+ * A wallet whose store holds wallets, settled UTxOs, the transactions in
+ * flight and activities, and whose Cardano module answers builds and
+ * submissions as each test says. An accepted submission is recorded in
+ * flight before it completes, as the Cardano sync module records it. Custody
+ * account states are classified from the settled UTxOs with the transactions
+ * in flight applied, as the real selector does.
  */
 export const createCustodyTestWallet = () => {
   const wallets$ = new BehaviorSubject<AnyWallet[]>([]);
@@ -330,6 +365,7 @@ export const createCustodyTestWallet = () => {
     {},
   );
   const activities$ = new BehaviorSubject<Record<AccountId, Activity[]>>({});
+  const inFlight$ = new BehaviorSubject<DecodedInFlightTransaction[]>([]);
   const history$ = new BehaviorSubject<
     Record<AccountId, CardanoTransactionHistoryItem[]>
   >({});
@@ -404,13 +440,39 @@ export const createCustodyTestWallet = () => {
       .flatMap(wallet => wallet.accounts as AnyAccount[])
       .filter(isCardanoCustodyAccount);
 
+  /** Records a transaction in flight, keeping the record it already holds. */
+  const recordInFlight = (transaction: DecodedInFlightTransaction) => {
+    if (inFlight$.value.some(({ txId }) => txId === transaction.txId)) return;
+    inFlight$.next([...inFlight$.value, transaction]);
+  };
+
+  const utxosWithInFlight$ = combineLatest([
+    wallets$,
+    settledUtxos$,
+    inFlight$,
+  ]).pipe(
+    map(([, settled, inFlight]) =>
+      Object.fromEntries(
+        Object.entries(settled).map(([accountId, utxos]) => [
+          accountId,
+          withInFlight(
+            utxos,
+            custodyAccounts().find(account => account.accountId === accountId)
+              ?.blockchainSpecific.address,
+            inFlight,
+          ),
+        ]),
+      ),
+    ),
+  );
+
   const accountState$ = combineLatest([
     wallets$,
     settledUtxos$,
-    activities$,
+    inFlight$,
     networkInfo$,
   ]).pipe(
-    map(([, settled, activities, networkInfo]) => (accountId: AccountId) => {
+    map(([, settled, inFlight, networkInfo]) => (accountId: AccountId) => {
       const account = custodyAccounts().find(
         candidate => candidate.accountId === accountId,
       );
@@ -421,11 +483,7 @@ export const createCustodyTestWallet = () => {
       if (!protocolParameters) return undefined;
       return classifyCardanoCustodyAccount({
         account: account.blockchainSpecific,
-        utxos: applyInFlightUtxoAdjustments(
-          settled[accountId] ?? [],
-          [CardanoPaymentAddress(address)],
-          activities[accountId] ?? [],
-        ),
+        utxos: withInFlight(settled[accountId] ?? [], address, inFlight),
         withdrawableRewards: 0n,
         protocolParameters,
       });
@@ -521,6 +579,12 @@ export const createCustodyTestWallet = () => {
         ).getId();
         const answer = control.answerSubmit();
         if (answer === 'ok') {
+          recordInFlight(
+            inFlightTransactionOf({
+              serializedTx: serializedTx as HexBytes,
+              chainId: chainId$.value ?? PREPROD,
+            }),
+          );
           submitCompleted$.next(
             actions.submitTxCompleted({ txId: txId as never }),
           );
@@ -532,6 +596,10 @@ export const createCustodyTestWallet = () => {
             }),
           );
         }
+        return;
+      }
+      case 'cardanoContext.recordInFlightTransaction': {
+        recordInFlight(args[0] as DecodedInFlightTransaction);
         return;
       }
       case 'activities.upsertActivities': {
@@ -603,6 +671,7 @@ export const createCustodyTestWallet = () => {
     stateObservables: {
       cardanoContext: {
         selectAccountUtxos$: settledUtxos$,
+        selectAccountUtxosWithInFlight$: utxosWithInFlight$,
         selectChainId$: chainId$,
         selectEraSummaries$: eraSummaries$,
         selectTip$: tip$,
@@ -653,6 +722,7 @@ export const createCustodyTestWallet = () => {
     wallets$,
     settledUtxos$,
     activities$,
+    inFlight$,
     history$,
     tip$,
     chainId$,

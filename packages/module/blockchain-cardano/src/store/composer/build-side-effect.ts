@@ -1,7 +1,4 @@
-import {
-  LOVELACE_TOKEN_ID,
-  filterSpendableUtxos,
-} from '@lace-contract/cardano-context';
+import { LOVELACE_TOKEN_ID } from '@lace-contract/cardano-context';
 import { BigNumber } from '@lace-lib/util';
 import { firstStateOfStatus } from '@lace-lib/util-store';
 import { firstValueFrom, from, map, switchMap } from 'rxjs';
@@ -110,15 +107,13 @@ const buildComposition = async (
       tip,
       eraSummaries,
       accountUtxos,
-      unspendableUtxos,
       addresses,
     ] = await Promise.all([
       firstValueFrom(cardano.cardanoNetworkMagic$),
       firstValueFrom(cardanoContext.selectProtocolParameters$),
       firstValueFrom(cardanoContext.selectTip$),
       firstValueFrom(cardanoContext.selectEraSummaries$),
-      firstValueFrom(cardano.cardanoAccountUtxos$),
-      firstValueFrom(cardano.cardanoAccountUnspendableUtxos$),
+      firstValueFrom(cardano.cardanoSettledAvailableAccountUtxos$),
       firstValueFrom(cardano.cardanoAddresses$),
     ]);
 
@@ -150,10 +145,7 @@ const buildComposition = async (
       changeAddress,
       networkMagic: networkMagic as Cardano.NetworkMagics,
       protocolParameters,
-      spendableUtxos: filterSpendableUtxos(
-        accountUtxos[accountId] ?? [],
-        unspendableUtxos[accountId] ?? [],
-      ),
+      spendableUtxos: accountUtxos[accountId] ?? [],
       tipSlot: Number(tip.slot),
       eraSummaries,
       logger: dependencies.logger,

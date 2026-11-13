@@ -36,38 +36,30 @@ export type CardanoActivitySecurityMetadata = {
 };
 
 /**
- * UTxO-shaped metadata carried on a Cardano activity. Some fields are
- * populated on PENDING activities only and some on CONFIRMED ones only —
- * each field's doc says which. (Named for the data, not a lifecycle stage:
- * `slot`, `security` and the confirmed outpoints below are not in-flight
- * information.)
+ * UTxO-shaped metadata carried on a CONFIRMED Cardano activity. A Pending
+ * activity is a display row: it carries none of these, only the feature
+ * metadata of {@link ActivityExtensionMetadata}, and the in-flight views read
+ * the spend of its transaction from `cardanoContext.inFlightTransactions`,
+ * never from the row (see
+ * `packages/module/cardano-sync/docs/in-flight-transactions.md`). (Named for
+ * the data, not a lifecycle stage: `slot`, `security` and the outpoints below
+ * are not in-flight information.)
  */
 export type CardanoActivityUtxoMetadata = {
   /**
-   * Every outpoint the transaction spent, NOT only the ones this account owned:
-   * on a confirmed activity these come straight off the tx body, with no
-   * ownership resolution. Consumers that need "ours" intersect this with the
-   * account's own UTxO set, which filters it for free — see
-   * `canTrustFetchAsSettled` in cardano-sync, which reads an overlap as proof a
-   * provider has not yet applied the transaction.
+   * Every outpoint the confirmed transaction spent, NOT only the ones this
+   * account owned: these come straight off the tx body, with no ownership
+   * resolution. Consumers that need "ours" intersect this with the account's
+   * own UTxO set, which filters it for free — see `canTrustFetchAsSettled` in
+   * cardano-sync, which reads an overlap as proof a provider has not yet
+   * applied the transaction.
    *
-   * Empty means UNKNOWN, never "spent nothing": activities persisted before
-   * confirmed transactions carried this, and Pending activities derived without
-   * a resolvable body, both leave it empty. Treat an empty list as no
-   * information rather than as evidence.
+   * Absent on Pending activities. Empty or absent means UNKNOWN, never "spent
+   * nothing": activities persisted before confirmed transactions carried this
+   * leave it empty. Treat an empty list as no information rather than as
+   * evidence.
    */
-  consumedInputs: Cardano.TxIn[];
-  /** Every output of the signed tx, unfiltered — populated on PENDING
-   * activities only; consumers intersect with own addresses at read (see
-   * `applyInFlightUtxoAdjustments`). */
-  producedOutputs: Cardano.Utxo[];
-  /**
-   * Every reward withdrawal of the signed tx, unfiltered — PENDING activities
-   * only, so the rewards it moves into `producedOutputs` are not also counted
-   * as still withdrawable (see `pendingRewardWithdrawals`). Absent means no
-   * withdrawal, or an activity persisted before this field existed.
-   */
-  withdrawals?: Cardano.Withdrawal[];
+  consumedInputs?: Cardano.TxIn[];
   /**
    * Outpoints of the confirmed tx's outputs paying addresses the account
    * owned at map time. Outpoints, not full outputs: the one consumer

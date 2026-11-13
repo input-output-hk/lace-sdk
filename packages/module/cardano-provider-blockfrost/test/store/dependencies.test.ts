@@ -249,6 +249,69 @@ describe('cardano-provider-blockfrost dependencies', () => {
     });
   });
 
+  describe('checkTransaction', () => {
+    const txEndpoint = `txs/${txIn.txId}`;
+
+    it('answers where the chain included a transaction the provider holds', async () => {
+      transport.respond = async () => ({
+        data: {
+          hash: txIn.txId,
+          block: 'ab'.repeat(32),
+          block_height: 4_100_000,
+          block_time: 1_700_000_000,
+          slot: 104_000_000,
+          index: 3,
+          valid_contract: false,
+        },
+      });
+      const { cardanoProvider } = await init();
+
+      const result = await firstValueFrom(
+        cardanoProvider.checkTransaction(txIn.txId, context),
+      );
+
+      expect(result.isOk() && result.value).toEqual({
+        blockHash: Cardano.BlockId('ab'.repeat(32)),
+        blockHeight: Cardano.BlockNo(4_100_000),
+        slot: Cardano.Slot(104_000_000),
+        txIndex: Cardano.TxIndex(3),
+        isValid: false,
+      });
+      expect(transport.issued).toEqual([txEndpoint]);
+    });
+
+    it('answers null for a transaction the provider does not hold', async () => {
+      transport.respond = failWith(404);
+      const { cardanoProvider } = await init();
+
+      const result = await firstValueFrom(
+        cardanoProvider.checkTransaction(txIn.txId, context),
+      );
+
+      expect(result.isOk() && result.value).toBeNull();
+    });
+
+    it('fails when the provider cannot answer', async () => {
+      transport.respond = failWith(500);
+      const { cardanoProvider } = await init();
+
+      const result = await firstValueFrom(
+        cardanoProvider.checkTransaction(txIn.txId, context),
+      );
+
+      expect(result.isErr()).toBe(true);
+    });
+
+    it('issues no request until something subscribes', async () => {
+      const { cardanoProvider } = await init();
+
+      cardanoProvider.checkTransaction(txIn.txId, context);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(transport.issued).toEqual([]);
+    });
+  });
+
   describe('getAssetTransactionHistory', () => {
     const assetId = Cardano.AssetId(
       '87e5931f96faa62899239102381dd637acd7d7b20752f070651f88904879647261486561645632',

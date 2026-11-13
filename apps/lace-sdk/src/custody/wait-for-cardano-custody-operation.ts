@@ -64,11 +64,11 @@ const holdsAccountToken = (
  * the wallet has dropped the transaction's pending activity, the chain tip
  * is past its validity bound plus the depth the wallet allows its provider
  * to catch up, and the account's history does not hold it. The wallet drops
- * that activity only after a sync round that started past the bound found
- * the transaction nowhere; the account can then run operations again. A tip
- * past the bound alone is not enough: after a long time in the background,
- * the tip moves before the next sync round fetches the history, and a
- * confirmed transaction must not read as expired.
+ * that activity once its provider, asked after the tip passed the bound by
+ * that depth, does not hold the transaction; the account can then run
+ * operations again. A tip past the bound alone is not enough: after a long
+ * time in the background, the tip moves before the wallet next fetches the
+ * history, and a confirmed transaction must not read as expired.
  */
 export const waitForCardanoCustodyOperation = async (
   wallet: WalletWithCardanoCustody,

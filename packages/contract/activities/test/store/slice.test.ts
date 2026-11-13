@@ -126,9 +126,357 @@ describe('activities slice', () => {
           [accountId]: [updatedActivity1, activity2],
         });
       });
+
+      it('replaces an activity that addActivities added', () => {
+        const added = activitiesReducers.activities(
+          initialState,
+          actions.activities.addActivities({
+            accountId,
+            activities: [activity1],
+          }),
+        );
+        const updatedActivity1 = { ...activity1, type: ActivityType.Receive };
+        const state = activitiesReducers.activities(
+          added,
+          actions.activities.upsertActivities({
+            accountId,
+            activities: [updatedActivity1],
+          }),
+        );
+        expect(state.activities).toStrictEqual({
+          [accountId]: [updatedActivity1],
+        });
+      });
+    });
+
+    describe('addActivities', () => {
+      const held = { ...activity1, type: ActivityType.Send };
+
+      describe('retained provisional balance evidence', () => {
+        const contribution = (amount: bigint) => [
+          { tokenId: TokenId('tDust'), amount: BigNumber(amount) },
+        ];
+        const outputOnly = {
+          ...activity1,
+          type: ActivityType.Pending,
+          provisional: { output: contribution(9_600_000n) },
+          tokenBalanceChanges: contribution(9_600_000n),
+        };
+        const resolved = {
+          ...outputOnly,
+          provisional: {
+            ...outputOnly.provisional,
+            input: contribution(-9_800_000n),
+          },
+          tokenBalanceChanges: contribution(-200_000n),
+        };
+
+        it.each([
+          ['shrinking ownership after reload', resolved, outputOnly],
+          [
+            'an older publication reduced after the corrected publication',
+            resolved,
+            outputOnly,
+          ],
+          ['new ownership evidence', outputOnly, resolved],
+        ])('keeps the resolved balance with %s', (_name, first, second) => {
+          const persisted = JSON.parse(
+            JSON.stringify({
+              ...initialState,
+              activities: { [accountId]: [first] },
+            }),
+          ) as ActivitiesSliceState;
+          const state = activitiesReducers.activities(
+            persisted,
+            actions.activities.addActivities({
+              accountId,
+              activities: [second],
+            }),
+          );
+          expect(state.activities[accountId]).toStrictEqual([resolved]);
+        });
+
+        it('unions disjoint partial input evidence instead of freezing or replacing the earlier partial amount', () => {
+          const first = {
+            ...outputOnly,
+            provisional: {
+              ...outputOnly.provisional,
+              firstInput: contribution(-4_800_000n),
+            },
+            tokenBalanceChanges: contribution(4_800_000n),
+          };
+          const second = {
+            ...outputOnly,
+            provisional: {
+              ...outputOnly.provisional,
+              secondInput: contribution(-5_000_000n),
+            },
+            tokenBalanceChanges: contribution(4_600_000n),
+          };
+          const before = JSON.parse(
+            JSON.stringify({
+              ...initialState,
+              activities: { [accountId]: [first] },
+            }),
+          ) as ActivitiesSliceState;
+          const after = activitiesReducers.activities(
+            before,
+            actions.activities.addActivities({
+              accountId,
+              activities: [second, first, second],
+            }),
+          );
+          expect(after.activities[accountId][0]).toStrictEqual({
+            ...resolved,
+            provisional: { ...first.provisional, ...second.provisional },
+          });
+        });
+
+        it('merges each token once per source and omits zero nets', () => {
+          const asset = (amount: bigint) => ({
+            tokenId: TokenId('asset'),
+            amount: BigNumber(amount),
+          });
+          const first = {
+            ...outputOnly,
+            provisional: {
+              output: [...contribution(9_600_000n), asset(3n)],
+              firstInput: [...contribution(-4_800_000n), asset(-2n)],
+            },
+          };
+          const second = {
+            ...outputOnly,
+            provisional: {
+              output: [...contribution(9_600_000n), asset(3n)],
+              secondInput: [...contribution(-5_000_000n), asset(-1n)],
+            },
+          };
+          const state = activitiesReducers.activities(
+            initialState,
+            actions.activities.addActivities({
+              accountId,
+              activities: [first, second, first],
+            }),
+          );
+          expect(
+            state.activities[accountId][0].tokenBalanceChanges,
+          ).toStrictEqual(contribution(-200_000n));
+        });
+      });
+
+      it('refreshes a provisional pending row with a corrected derived balance', () => {
+        const provisional = {
+          ...activity1,
+          type: ActivityType.Pending,
+          provisional: { output: activity1.tokenBalanceChanges },
+        };
+        const corrected = {
+          ...provisional,
+          provisional: {
+            ...provisional.provisional,
+            input: [
+              { tokenId: TokenId('tDust'), amount: BigNumber(-200_000n) },
+            ],
+          },
+          tokenBalanceChanges: [
+            { tokenId: TokenId('tDust'), amount: BigNumber(-200_000n) },
+          ],
+        };
+        const state = activitiesReducers.activities(
+          { ...initialState, activities: { [accountId]: [provisional] } },
+          actions.activities.addActivities({
+            accountId,
+            activities: [corrected],
+          }),
+        );
+        expect(state.activities[accountId]).toStrictEqual([corrected]);
+      });
+
+      it('preserves references for an unchanged provisional publication', () => {
+        const row = {
+          ...activity1,
+          type: ActivityType.Pending,
+          provisional: {},
+          tokenBalanceChanges: [],
+        };
+        const before = { ...initialState, activities: { [accountId]: [row] } };
+        const after = activitiesReducers.activities(
+          before,
+          actions.activities.addActivities({
+            accountId,
+            activities: [{ ...row }],
+          }),
+        );
+        expect(after).toBe(before);
+      });
+
+      it.each([
+        { ...activity1, type: ActivityType.Send, provisional: {} },
+        { ...activity1, type: ActivityType.Pending },
+        {
+          ...activity1,
+          type: ActivityType.Pending,
+          provisional: {},
+          blockchainSpecific: { Cardano: { custom: 'feature metadata' } },
+        },
+      ])(
+        'keeps a confirmed or feature row that lands before a delayed provisional publication: %j',
+        current => {
+          const delayed = actions.activities.addActivities({
+            accountId,
+            activities: [
+              {
+                ...activity1,
+                type: ActivityType.Pending,
+                provisional: {},
+              },
+            ],
+          });
+          const arrived = activitiesReducers.activities(
+            initialState,
+            actions.activities.upsertActivities({
+              accountId,
+              activities: [current],
+            }),
+          );
+          const state = activitiesReducers.activities(arrived, delayed);
+          expect(state).toBe(arrived);
+        },
+      );
+
+      it('adds activities with new IDs, sorted newest first', () => {
+        const newer = {
+          ...activity1,
+          activityId: 'activity3',
+          timestamp: Timestamp(activity1.timestamp + 10),
+        };
+        const state = activitiesReducers.activities(
+          { ...initialState, activities: { [accountId]: [activity1] } },
+          actions.activities.addActivities({
+            accountId,
+            activities: [newer],
+          }),
+        );
+        expect(state.activities).toStrictEqual({
+          [accountId]: [newer, activity1],
+        });
+      });
+
+      it('adds activities to an account that holds none', () => {
+        const state = activitiesReducers.activities(
+          initialState,
+          actions.activities.addActivities({
+            accountId,
+            activities: [activity1],
+          }),
+        );
+        expect(state.activities).toStrictEqual({ [accountId]: [activity1] });
+      });
+
+      it('keeps an activity the account holds, whatever the incoming one carries', () => {
+        const incoming = {
+          ...held,
+          type: ActivityType.Pending,
+          timestamp: Timestamp(held.timestamp + 10),
+          blockchainSpecific: { Cardano: { fee: 1n } },
+        };
+        const other = { ...activity1, activityId: 'activity3' };
+        const state = activitiesReducers.activities(
+          { ...initialState, activities: { [accountId]: [held] } },
+          actions.activities.addActivities({
+            accountId,
+            activities: [incoming, other],
+          }),
+        );
+        expect(state.activities).toStrictEqual({
+          [accountId]: [held, other],
+        });
+      });
+
+      it('keeps the first of two incoming activities with the same ID', () => {
+        const second = { ...activity1, type: ActivityType.Receive };
+        const state = activitiesReducers.activities(
+          initialState,
+          actions.activities.addActivities({
+            accountId,
+            activities: [activity1, second],
+          }),
+        );
+        expect(state.activities).toStrictEqual({ [accountId]: [activity1] });
+      });
+
+      it('preserves the array reference when the account holds every activity', () => {
+        const activities = [held];
+        const state = activitiesReducers.activities(
+          { ...initialState, activities: { [accountId]: activities } },
+          actions.activities.addActivities({
+            accountId,
+            activities: [{ ...held, type: ActivityType.Pending }],
+          }),
+        );
+        expect(state.activities[accountId]).toBe(activities);
+      });
+
+      it('encodes chain-specific metadata as upsertActivities does', () => {
+        const blockchainSpecific = { Cardano: { fee: 1n } };
+        const encoded = actions.activities.upsertActivities({
+          accountId,
+          activities: [{ ...activity1, blockchainSpecific }],
+        }).payload.activities;
+        expect(
+          actions.activities.addActivities({
+            accountId,
+            activities: [{ ...activity1, blockchainSpecific }],
+          }).payload.activities,
+        ).toStrictEqual(encoded);
+        expect(encoded[0].blockchainSpecific).toStrictEqual(
+          Serializable.to(blockchainSpecific),
+        );
+      });
     });
 
     describe('removeActivities', () => {
+      it('removes only Pending rows when expiry requests it', () => {
+        const pending = { ...activity1, type: ActivityType.Pending };
+        const state = activitiesReducers.activities(
+          {
+            ...initialState,
+            activities: { [accountId]: [pending, activity2] },
+          },
+          actions.activities.removeActivities({
+            accountId,
+            activityIds: [pending.activityId, activity2.activityId],
+            onlyPending: true,
+          }),
+        );
+        expect(state.activities[accountId]).toEqual([activity2]);
+      });
+
+      it('keeps a row confirmed after the expiry action was created, without changing references', () => {
+        const expiry = actions.activities.removeActivities({
+          accountId,
+          activityIds: [activity1.activityId],
+          onlyPending: true,
+        });
+        const pending = activitiesReducers.activities(
+          initialState,
+          actions.activities.upsertActivities({
+            accountId,
+            activities: [{ ...activity1, type: ActivityType.Pending }],
+          }),
+        );
+        const confirmed = activitiesReducers.activities(
+          pending,
+          actions.activities.upsertActivities({
+            accountId,
+            activities: [activity1],
+          }),
+        );
+        expect(activitiesReducers.activities(confirmed, expiry)).toBe(
+          confirmed,
+        );
+      });
+
       it('removes the listed activities and keeps the rest', () => {
         const otherActivity = { ...activity1, activityId: 'activity3' };
         const state = activitiesReducers.activities(

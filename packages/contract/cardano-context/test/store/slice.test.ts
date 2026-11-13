@@ -18,6 +18,7 @@ import {
   CardanoAccountId,
   CardanoSyncFailureId,
   RewardAccountDetailsCacheKey,
+  UNBOUNDED_IN_FLIGHT_SLOTS,
   UtxoCacheKey,
 } from '../../src';
 import {
@@ -25,6 +26,7 @@ import {
   cardanoContextReducers as reducers,
   cardanoContextSelectors as selectors,
 } from '../../src/store/slice';
+import { recordInFlight } from '../in-flight-mocks';
 import {
   threeAccountCardanoWalletAccounts,
   cardanoAccount1Addr,
@@ -39,6 +41,7 @@ import {
 import type {
   AccountRewardAccountDetailsMap,
   CardanoContextSliceState,
+  InFlightTransactionKey,
   CardanoTransactionHistoryItem,
   RequiredProtocolParameters,
   Reward,
@@ -61,6 +64,7 @@ describe('cardanoContext slice', () => {
 
   beforeEach(() => {
     initialState = {
+      inFlightTransactions: {},
       accountTransactionHistory: {},
       accountRewardsHistory: {},
       networkInfo: {},
@@ -1137,6 +1141,333 @@ describe('cardanoContext slice', () => {
             initialState.accountTransactionHistory,
           );
         });
+      });
+    });
+  });
+
+  describe('in-flight transactions', () => {
+    const txId = Cardano.TransactionId('ab'.repeat(32));
+    const otherTxId = Cardano.TransactionId('cd'.repeat(32));
+    const spentInput = {
+      txId: Cardano.TransactionId('ef'.repeat(32)),
+      index: 0,
+    };
+    const preprodKey: InFlightTransactionKey = `${testNetwork}:${txId}`;
+    const previewKey: InFlightTransactionKey = `${CardanoNetworkId(
+      Cardano.NetworkMagics.Preview,
+    )}:${txId}`;
+    const accountId = AccountId('in-flight-account');
+
+    const withTip = (network: CardanoNetworkId, slot: number) =>
+      reducers.cardanoContext(
+        initialState,
+        actions.cardanoContext.setTip({
+          network,
+          tip: {
+            slot: Cardano.Slot(slot),
+            blockNo: Cardano.BlockNo(1),
+            hash: Cardano.BlockId('12'.repeat(32)),
+          },
+        }),
+      );
+
+    const selectInFlight = (cardanoContext: CardanoContextSliceState) =>
+      selectors.cardanoContext.selectInFlightTransactions({
+        cardanoContext,
+      } as unknown as Parameters<typeof selectors.cardanoContext.selectInFlightTransactions>[0]);
+
+    describe('recordInFlightTransaction', () => {
+      it('stores the transaction under its network and transaction id', () => {
+        const state = recordInFlight(initialState, {
+          txId,
+          consumedInputs: [spentInput],
+          invalidHereafter: Cardano.Slot(500),
+          submittedAt: Timestamp(42),
+        });
+
+        expect(Object.keys(state.inFlightTransactions)).toEqual([preprodKey]);
+        expect(selectInFlight(state)).toEqual({
+          [preprodKey]: {
+            chainId: Cardano.ChainIds.Preprod,
+            txId,
+            effects: { consumedInputs: [spentInput], producedOutputs: [] },
+            invalidHereafter: Cardano.Slot(500),
+            submittedAt: Timestamp(42),
+          },
+        });
+      });
+
+      it('keeps the first entry of a transaction: a repeated record never extends its bound or moves its time', () => {
+        const first = recordInFlight(initialState, {
+          txId,
+          invalidHereafter: Cardano.Slot(500),
+          submittedAt: Timestamp(1),
+        });
+        const second = recordInFlight(first, {
+          txId,
+          consumedInputs: [spentInput],
+          invalidHereafter: Cardano.Slot(900),
+          submittedAt: Timestamp(2),
+        });
+
+        expect(second).toBe(first);
+      });
+
+      it('records a body that sets no upper bound without one, whatever tip is stored', () => {
+        const state = recordInFlight(withTip(testNetwork, 1_000), { txId });
+
+        expect(state.inFlightTransactions[preprodKey]).toBeDefined();
+        expect(state.inFlightTransactions[preprodKey]).not.toHaveProperty(
+          'invalidHereafter',
+        );
+      });
+
+      it('keeps the same transaction on two networks apart (ADR 11)', () => {
+        const both = recordInFlight(recordInFlight(initialState, { txId }), {
+          txId,
+          chainId: Cardano.ChainIds.Preview,
+          consumedInputs: [spentInput],
+        });
+
+        expect(Object.keys(both.inFlightTransactions).sort()).toEqual(
+          [preprodKey, previewKey].sort(),
+        );
+        expect(
+          selectInFlight(both)[previewKey]?.effects.consumedInputs,
+        ).toEqual([spentInput]);
+        expect(
+          selectInFlight(both)[preprodKey]?.effects.consumedInputs,
+        ).toEqual([]);
+      });
+    });
+
+    describe('setTip', () => {
+      const tipAt = (slot: number): Cardano.Tip => ({
+        slot: Cardano.Slot(slot),
+        blockNo: Cardano.BlockNo(slot),
+        hash: Cardano.BlockId(slot.toString(16).padStart(64, '0')),
+      });
+      const setTip = (
+        state: CardanoContextSliceState,
+        slot: number,
+        network = testNetwork,
+      ) =>
+        reducers.cardanoContext(
+          state,
+          actions.cardanoContext.setTip({ network, tip: tipAt(slot) }),
+        );
+
+      it("gives an entry without a bound the cut-off from its network's next tip", () => {
+        const state = setTip(
+          recordInFlight(withTip(testNetwork, 1_000), { txId }),
+          1_020,
+        );
+
+        expect(state.inFlightTransactions[preprodKey]?.invalidHereafter).toBe(
+          1_020 + UNBOUNDED_IN_FLIGHT_SLOTS,
+        );
+      });
+
+      it('never moves a cut-off once set', () => {
+        const state = setTip(
+          setTip(recordInFlight(initialState, { txId }), 1_020),
+          1_040,
+        );
+
+        expect(state.inFlightTransactions[preprodKey]?.invalidHereafter).toBe(
+          1_020 + UNBOUNDED_IN_FLIGHT_SLOTS,
+        );
+      });
+
+      it("keeps the body's upper bound", () => {
+        const state = setTip(
+          recordInFlight(initialState, {
+            txId,
+            invalidHereafter: Cardano.Slot(1_200),
+          }),
+          1_020,
+        );
+
+        expect(state.inFlightTransactions[preprodKey]?.invalidHereafter).toBe(
+          1_200,
+        );
+      });
+
+      it('leaves the entries of another network without a bound', () => {
+        const state = setTip(
+          recordInFlight(initialState, { txId }),
+          1_020,
+          CardanoNetworkId(Cardano.NetworkMagics.Preview),
+        );
+
+        expect(state.inFlightTransactions[preprodKey]).not.toHaveProperty(
+          'invalidHereafter',
+        );
+      });
+    });
+
+    describe('removeInFlightTransactions', () => {
+      it('removes the named entries only', () => {
+        const recorded = recordInFlight(
+          recordInFlight(recordInFlight(initialState, { txId }), {
+            txId,
+            chainId: Cardano.ChainIds.Preview,
+          }),
+          { txId: otherTxId },
+        );
+
+        const state = reducers.cardanoContext(
+          recorded,
+          actions.cardanoContext.removeInFlightTransactions({
+            keys: [preprodKey],
+          }),
+        );
+
+        expect(Object.keys(state.inFlightTransactions).sort()).toEqual(
+          [previewKey, `${testNetwork}:${otherTxId}`].sort(),
+        );
+      });
+    });
+
+    describe('recordInFlightTransactionLookup', () => {
+      const lookup = {
+        tipSlot: Cardano.Slot(1_200),
+        inclusion: {
+          blockHash: Cardano.BlockId('12'.repeat(32)),
+          blockHeight: Cardano.BlockNo(7),
+          slot: Cardano.Slot(480),
+          txIndex: Cardano.TxIndex(2),
+          isValid: true,
+        },
+      };
+      const recordLookup = (
+        state: CardanoContextSliceState,
+        key: InFlightTransactionKey,
+      ) =>
+        reducers.cardanoContext(
+          state,
+          actions.cardanoContext.recordInFlightTransactionLookup({
+            key,
+            lookup,
+          }),
+        );
+
+      it('records the answer on the entry and changes nothing else', () => {
+        const recorded = recordInFlight(
+          recordInFlight(initialState, {
+            txId,
+            consumedInputs: [spentInput],
+            invalidHereafter: Cardano.Slot(500),
+            submittedAt: Timestamp(42),
+          }),
+          { txId, chainId: Cardano.ChainIds.Preview },
+        );
+
+        const state = recordLookup(recorded, preprodKey);
+
+        expect(state.inFlightTransactions[preprodKey]).toEqual({
+          ...recorded.inFlightTransactions[preprodKey],
+          lookup,
+        });
+        expect(state.inFlightTransactions[previewKey]).toBe(
+          recorded.inFlightTransactions[previewKey],
+        );
+        expect(selectInFlight(state)[preprodKey]?.lookup).toEqual(lookup);
+      });
+
+      it('records nothing for a key the store holds no entry for', () => {
+        const recorded = recordInFlight(initialState, { txId });
+
+        expect(recordLookup(recorded, previewKey)).toBe(recorded);
+      });
+
+      it('keeps the answer through what a restart reads back from storage', () => {
+        const state = recordLookup(
+          recordInFlight(initialState, {
+            txId,
+            invalidHereafter: Cardano.Slot(500),
+          }),
+          preprodKey,
+        );
+        const restored = JSON.parse(
+          JSON.stringify(state),
+        ) as CardanoContextSliceState;
+
+        expect(selectInFlight(restored)[preprodKey]?.lookup).toEqual(lookup);
+      });
+    });
+
+    it.each([
+      [
+        'removeAccount',
+        walletsActions.wallets.removeAccount(WalletId('wallet'), accountId),
+      ],
+      [
+        'removeWallet',
+        walletsActions.wallets.removeWallet(WalletId('wallet'), [accountId]),
+      ],
+      [
+        'resetWalletSyncState',
+        actions.cardanoContext.resetWalletSyncState({ accountId }),
+      ],
+    ])('keeps every entry on %s: an entry names no account', (_, action) => {
+      const recorded = recordInFlight(initialState, { txId });
+
+      expect(
+        reducers.cardanoContext(recorded, action).inFlightTransactions,
+      ).toBe(recorded.inFlightTransactions);
+    });
+
+    describe('selectInFlightTransactions', () => {
+      it('returns one stable empty object while nothing is in flight', () => {
+        const first = selectInFlight(initialState);
+
+        expect(first).toEqual({});
+        expect(
+          selectInFlight({ ...initialState, inFlightTransactions: {} }),
+        ).toBe(first);
+      });
+
+      it('decodes the effects as persisted, values and assets included', () => {
+        const assetId = Cardano.AssetId(
+          'b0d07d45fe9514f80213f4020e5a61241458be626841cde717cb38a76e75746f6b656e31',
+        );
+        const output: Cardano.Utxo = [
+          {
+            txId,
+            index: 0,
+            address: Cardano.PaymentAddress(cardanoAccount1Addr.address),
+          },
+          {
+            address: Cardano.PaymentAddress(cardanoAccount1Addr.address),
+            value: {
+              coins: 9_007_199_254_740_993n,
+              assets: new Map([[assetId, 5n]]),
+            },
+          },
+        ];
+        const recorded = recordInFlight(initialState, {
+          txId,
+          producedOutputs: [output],
+        });
+        // What a restart reads back from storage.
+        const restored = JSON.parse(
+          JSON.stringify(recorded),
+        ) as CardanoContextSliceState;
+
+        expect(
+          selectInFlight(restored)[preprodKey]?.effects.producedOutputs,
+        ).toEqual([output]);
+      });
+
+      it('keeps the decoded entry of an unchanged transaction across emissions', () => {
+        const one = recordInFlight(initialState, { txId });
+        const first = selectInFlight(one)[preprodKey];
+        const two = recordInFlight(one, { txId: otherTxId });
+        const second = selectInFlight(two);
+
+        expect(Object.keys(second)).toHaveLength(2);
+        expect(second[preprodKey]).toBe(first);
       });
     });
   });
@@ -2621,6 +2952,80 @@ describe('cardanoContext slice', () => {
       });
     });
 
+    describe('selectSettledAvailableAccountUtxos', () => {
+      const settledAccountId = AccountId('acc1');
+      const unsyncedAccountId = AccountId('acc2');
+
+      const stateOf = (cardanoContext: CardanoContextSliceState) =>
+        ({
+          cardanoContext,
+          activities: {
+            activities: {},
+            desiredLoadedActivitiesCountPerAccount: {},
+            hasLoadedOldestEntry: {},
+          },
+          addresses: { addresses: [] },
+          wallets: { ids: [], entities: {} },
+        } as unknown as Parameters<
+          typeof selectors.cardanoContext.selectSettledAvailableAccountUtxos
+        >[0]);
+
+      const withSettled = (utxos: Cardano.Utxo[]) =>
+        reducers.cardanoContext(
+          initialState,
+          actions.cardanoContext.setAccountUtxos({
+            accountId: settledAccountId,
+            utxos,
+          }),
+        );
+
+      const withReserved = (
+        cardanoContext: CardanoContextSliceState,
+        accountId: AccountId,
+        utxos: Cardano.Utxo[],
+      ) =>
+        reducers.cardanoContext(
+          cardanoContext,
+          actions.cardanoContext.setAccountUnspendableUtxos({
+            accountId,
+            utxos,
+          }),
+        );
+
+      it('returns the settled array itself when nothing is reserved', () => {
+        const state = stateOf(withSettled([utxo1, utxo2]));
+
+        const result =
+          selectors.cardanoContext.selectSettledAvailableAccountUtxos(state);
+
+        expect(result[settledAccountId]).toBe(
+          selectors.cardanoContext.selectAccountUtxos(state)[settledAccountId],
+        );
+      });
+
+      it('leaves out reserved collateral', () => {
+        const state = stateOf(
+          withReserved(withSettled([utxo1, utxo2]), settledAccountId, [utxo2]),
+        );
+
+        const result =
+          selectors.cardanoContext.selectSettledAvailableAccountUtxos(state);
+
+        expect(result[settledAccountId]).toEqual([utxo1]);
+      });
+
+      it('omits an account with no settled set', () => {
+        const state = stateOf(
+          withReserved(withSettled([utxo1]), unsyncedAccountId, [utxo2]),
+        );
+
+        const result =
+          selectors.cardanoContext.selectSettledAvailableAccountUtxos(state);
+
+        expect(result).toEqual({ [settledAccountId]: [utxo1] });
+      });
+    });
+
     describe('selectAccountUnspendableUtxos', () => {
       it('returns empty object when there are no unspendable utxos for any account', () => {
         const state: CardanoContextSliceState = {
@@ -2653,248 +3058,25 @@ describe('cardanoContext slice', () => {
       });
     });
 
-    describe('selectCollateralOwnershipUtxos', () => {
-      const settledAccountId = AccountId('settled-acc');
-      const pendingOnlyAccountId = AccountId('pending-only-acc');
-      const ownAddress =
-        'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
-      const foreignAddress =
-        'addr_test1qpuzeec0zqcm6lrdygkkvvd8e6qactnsl5zzeujsdpkpc939l2f2vykk0ctwq4ys6w3jg8pm0kknmy8m5pml8f9cauzq2zuc95';
-      const settledTx = Cardano.TransactionId('a'.repeat(64));
-      const pendingTx = Cardano.TransactionId('b'.repeat(64));
-      const laterTx = Cardano.TransactionId('c'.repeat(64));
-
-      const utxoAt = (
-        txId: Cardano.TransactionId,
-        index: number,
-        address: string,
-      ): Cardano.Utxo => [
-        { address: Cardano.PaymentAddress(address), txId, index },
-        {
-          address: Cardano.PaymentAddress(address),
-          value: { coins: 5_000_000n },
-        },
-      ];
-
-      const pending = ({
-        accountId,
-        activityId,
-        timestamp,
-        ...metadata
-      }: {
-        accountId: AccountId;
-        activityId: string;
-        timestamp: number;
-        consumedInputs: { txId: Cardano.TransactionId; index: number }[];
-        producedOutputs: Cardano.Utxo[];
-      }): Activity => ({
-        accountId,
-        activityId,
-        timestamp: Timestamp(timestamp),
-        tokenBalanceChanges: [],
-        type: ActivityType.Pending,
-        blockchainSpecific: Serializable.to({ Cardano: metadata }) as unknown,
-      });
-
-      const authorityFor = (
-        accountId: AccountId,
-        {
-          settled = [],
-          unspendable = [],
-          activities = {},
-        }: {
-          settled?: Cardano.Utxo[];
-          unspendable?: Cardano.Utxo[];
-          activities?: Record<string, Activity[]>;
-        },
-      ) => {
-        let cardanoContext = reducers.cardanoContext(
-          initialState,
-          actions.cardanoContext.setAccountUtxos({
-            accountId: settledAccountId,
-            utxos: settled,
-          }),
-        );
-        if (unspendable.length > 0) {
-          cardanoContext = reducers.cardanoContext(
-            cardanoContext,
-            actions.cardanoContext.setAccountUnspendableUtxos({
-              accountId: settledAccountId,
-              utxos: unspendable,
-            }),
-          );
-        }
-        const state = {
-          cardanoContext,
-          activities: {
-            activities,
-            desiredLoadedActivitiesCountPerAccount: {},
-            hasLoadedOldestEntry: {},
-          },
-          addresses: {
-            addresses: [
-              {
-                name: 'test',
-                address: ownAddress,
-                blockchainName: 'Cardano',
-                accountId: settledAccountId,
-              },
-              {
-                name: 'test',
-                address: ownAddress,
-                blockchainName: 'Cardano',
-                accountId: pendingOnlyAccountId,
-              },
-            ],
-          },
-        } as unknown as Parameters<
-          typeof selectors.cardanoContext.selectCollateralOwnershipUtxos
-        >[0];
-        return (
-          selectors.cardanoContext.selectCollateralOwnershipUtxos(state)[
-            accountId
-          ] ?? []
-        );
-      };
-
-      const outpoints = (utxos: Cardano.Utxo[]) =>
-        utxos.map(([txIn]) => `${txIn.txId}#${txIn.index}`).sort();
-
-      it('includes an own pending output the settled set does not have yet', () => {
-        const authority = authorityFor(settledAccountId, {
-          settled: [utxoAt(settledTx, 0, ownAddress)],
-          activities: {
-            [settledAccountId]: [
-              pending({
-                accountId: settledAccountId,
-                activityId: 'p1',
-                timestamp: 0,
-                consumedInputs: [],
-                producedOutputs: [utxoAt(pendingTx, 0, ownAddress)],
-              }),
-            ],
-          },
-        });
-
-        expect(outpoints(authority)).toEqual(
-          outpoints([
-            utxoAt(settledTx, 0, ownAddress),
-            utxoAt(pendingTx, 0, ownAddress),
-          ]),
-        );
-      });
-
-      it('covers an account whose ONLY funds are pending, with no settled entry at all', () => {
-        const authority = authorityFor(pendingOnlyAccountId, {
-          settled: [utxoAt(settledTx, 0, ownAddress)],
-          activities: {
-            [pendingOnlyAccountId]: [
-              pending({
-                accountId: pendingOnlyAccountId,
-                activityId: 'p1',
-                timestamp: 0,
-                consumedInputs: [],
-                producedOutputs: [utxoAt(pendingTx, 0, ownAddress)],
-              }),
-            ],
-          },
-        });
-
-        expect(outpoints(authority)).toEqual([`${pendingTx}#0`]);
-      });
-
-      it('keeps a collateral-reserved settled output that the spendable view filters out', () => {
-        const reserved = utxoAt(settledTx, 1, ownAddress);
-        const authority = authorityFor(settledAccountId, {
-          settled: [utxoAt(settledTx, 0, ownAddress), reserved],
-          unspendable: [reserved],
-        });
-
-        expect(outpoints(authority)).toContain(`${settledTx}#1`);
-      });
-
-      it('keeps a settled input a pending transaction consumes -- it still exists on chain', () => {
-        const authority = authorityFor(settledAccountId, {
-          settled: [utxoAt(settledTx, 0, ownAddress)],
-          activities: {
-            [settledAccountId]: [
-              pending({
-                accountId: settledAccountId,
-                activityId: 'p1',
-                timestamp: 0,
-                consumedInputs: [{ txId: settledTx, index: 0 }],
-                producedOutputs: [],
-              }),
-            ],
-          },
-        });
-
-        expect(outpoints(authority)).toContain(`${settledTx}#0`);
-      });
-
-      it('keeps a pending output a LATER pending transaction consumes', () => {
-        const authority = authorityFor(settledAccountId, {
-          settled: [],
-          activities: {
-            [settledAccountId]: [
-              pending({
-                accountId: settledAccountId,
-                activityId: 'p1',
-                timestamp: 0,
-                consumedInputs: [],
-                producedOutputs: [utxoAt(pendingTx, 0, ownAddress)],
-              }),
-              pending({
-                accountId: settledAccountId,
-                activityId: 'p2',
-                timestamp: 1,
-                consumedInputs: [{ txId: pendingTx, index: 0 }],
-                producedOutputs: [utxoAt(laterTx, 0, ownAddress)],
-              }),
-            ],
-          },
-        });
-
-        expect(outpoints(authority)).toEqual(
-          outpoints([
-            utxoAt(pendingTx, 0, ownAddress),
-            utxoAt(laterTx, 0, ownAddress),
-          ]),
-        );
-      });
-
-      it('excludes a pending output paying an address the account does not own', () => {
-        const authority = authorityFor(settledAccountId, {
-          settled: [],
-          activities: {
-            [settledAccountId]: [
-              pending({
-                accountId: settledAccountId,
-                activityId: 'p1',
-                timestamp: 0,
-                consumedInputs: [],
-                producedOutputs: [utxoAt(pendingTx, 0, foreignAddress)],
-              }),
-            ],
-          },
-        });
-
-        expect(authority).toEqual([]);
-      });
-    });
-
-    describe('selectAccountUtxosWithInFlight', () => {
+    describe('in-flight views', () => {
       const sourceAccountId = AccountId('source-acc');
       const destinationAccountId = AccountId('dest-acc');
+      // The source's keys on Preview: same address, another network (ADR 11).
+      const previewAccountId = AccountId('source-acc-preview');
       const sourceAddress =
         'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
       const destinationAddress =
         'addr_test1qpuzeec0zqcm6lrdygkkvvd8e6qactnsl5zzeujsdpkpc939l2f2vykk0ctwq4ys6w3jg8pm0kknmy8m5pml8f9cauzq2zuc95';
+      const foreignAddress =
+        'addr_test1qqt3r9kd56aq9ajynjkz8hdfw3kc0pcv3tpzug8azxls62tvvz7nw9gmznn65g4ksrrfvyzhz52knc3mqxdyya47gz2qmcjmcq';
       const settledTxId = Cardano.TransactionId(
         '39a7a284c2a0948189dc45dec670211cd4d72f7b66c5726c08d9b3df11e44d58',
       );
       const sweepTxId = Cardano.TransactionId(
         '4c4e67bafa15e742c13c592b65c8f74c769cd7d9af04c848099672d1ba391b49',
+      );
+      const childTxId = Cardano.TransactionId(
+        'a8c5b55caa9d716c3d98df7df19b33b66b1d5d5b4a894aa8f53adcdfb9e66ae9',
       );
 
       const makeUtxo = (address: string, coins: bigint): Cardano.Utxo => [
@@ -2905,21 +3087,23 @@ describe('cardanoContext slice', () => {
         },
         { address: Cardano.PaymentAddress(address), value: { coins } },
       ];
+      const settledUtxo = makeUtxo(sourceAddress, 10_000_000n);
+      const spendOfSettledUtxo = [{ txId: settledTxId, index: 0 }];
+      /* eslint-disable max-params */
+      const outputOf = (
+        txId: Cardano.TransactionId,
+        index: number,
+        address: string,
+        coins: bigint,
+      ): Cardano.Utxo => [
+        { txId, index, address: Cardano.PaymentAddress(address) },
+        { address: Cardano.PaymentAddress(address), value: { coins } },
+      ];
+      /* eslint-enable max-params */
+      const sweepOutput = (index: number, address: string, coins: bigint) =>
+        outputOf(sweepTxId, index, address, coins);
 
-      const pendingActivity = (
-        accountId: AccountId,
-        metadata: {
-          consumedInputs: { txId: Cardano.TransactionId; index: number }[];
-          producedOutputs: Cardano.Utxo[];
-        },
-      ): Activity => ({
-        accountId,
-        activityId: String(sweepTxId),
-        timestamp: Timestamp(0),
-        tokenBalanceChanges: [],
-        type: ActivityType.Pending,
-        blockchainSpecific: Serializable.to({ Cardano: metadata }) as unknown,
-      });
+      type InFlightEntry = Parameters<typeof recordInFlight>[1];
 
       const addressEntry = (accountId: AccountId, address: string) => ({
         name: 'test',
@@ -2928,18 +3112,63 @@ describe('cardanoContext slice', () => {
         accountId,
       });
 
-      const buildState = (activitiesByAccount: Record<string, Activity[]>) => {
-        const cardanoContext = reducers.cardanoContext(
+      const cardanoAccount = (
+        accountId: AccountId,
+        networkMagic: Cardano.NetworkMagic,
+      ) => ({
+        accountId,
+        walletId: 'wallet',
+        accountType: 'InMemory',
+        blockchainName: 'Cardano',
+        blockchainNetworkId: CardanoNetworkId(networkMagic),
+      });
+
+      const buildState = (
+        inFlight: InFlightEntry[],
+        {
+          settled = [settledUtxo],
+          previewSettled,
+          reserved = [],
+          activities = {},
+        }: {
+          settled?: Cardano.Utxo[];
+          previewSettled?: Cardano.Utxo[];
+          reserved?: Cardano.Utxo[];
+          activities?: Record<string, Activity[]>;
+        } = {},
+      ) => {
+        let cardanoContext = reducers.cardanoContext(
           initialState,
           actions.cardanoContext.setAccountUtxos({
             accountId: sourceAccountId,
-            utxos: [makeUtxo(sourceAddress, 10_000_000n)],
+            utxos: settled,
           }),
         );
+        if (previewSettled) {
+          cardanoContext = reducers.cardanoContext(
+            cardanoContext,
+            actions.cardanoContext.setAccountUtxos({
+              accountId: previewAccountId,
+              utxos: previewSettled,
+            }),
+          );
+        }
+        if (reserved.length > 0) {
+          cardanoContext = reducers.cardanoContext(
+            cardanoContext,
+            actions.cardanoContext.setAccountUnspendableUtxos({
+              accountId: sourceAccountId,
+              utxos: reserved,
+            }),
+          );
+        }
+        for (const entry of inFlight) {
+          cardanoContext = recordInFlight(cardanoContext, entry);
+        }
         return {
           cardanoContext,
           activities: {
-            activities: activitiesByAccount,
+            activities,
             desiredLoadedActivitiesCountPerAccount: {},
             hasLoadedOldestEntry: {},
           },
@@ -2947,96 +3176,739 @@ describe('cardanoContext slice', () => {
             addresses: [
               addressEntry(sourceAccountId, sourceAddress),
               addressEntry(destinationAccountId, destinationAddress),
+              addressEntry(previewAccountId, sourceAddress),
             ],
           },
+          wallets: {
+            ids: ['wallet'],
+            entities: {
+              wallet: {
+                walletId: 'wallet',
+                type: WalletType.InMemory,
+                metadata: { name: 'wallet', order: 0 },
+                blockchainSpecific: {},
+                accounts: [
+                  cardanoAccount(
+                    sourceAccountId,
+                    Cardano.NetworkMagics.Preprod,
+                  ),
+                  cardanoAccount(
+                    destinationAccountId,
+                    Cardano.NetworkMagics.Preprod,
+                  ),
+                  cardanoAccount(
+                    previewAccountId,
+                    Cardano.NetworkMagics.Preview,
+                  ),
+                ],
+              },
+            },
+          },
         } as unknown as Parameters<
-          typeof selectors.cardanoContext.selectAccountUtxosWithInFlight
+          typeof selectors.cardanoContext.selectAvailableAccountUtxos
         >[0];
       };
 
-      it('subtracts a pending spend from the source and credits the destination it pays, before either settles', () => {
-        const state = buildState({
-          [sourceAccountId]: [
-            pendingActivity(sourceAccountId, {
-              consumedInputs: [{ txId: settledTxId, index: 0 }],
-              producedOutputs: [],
-            }),
+      const outpoints = (utxos: Cardano.Utxo[] = []) =>
+        utxos.map(([txIn]) => `${txIn.txId}#${txIn.index}`).sort();
+
+      it('does not offer spent change when parent acceptance arrives after child reconciliation with the same confirmed activities', () => {
+        const parentChange = sweepOutput(0, sourceAddress, 9_800_000n);
+        const unspentChange = sweepOutput(1, sourceAddress, 100_000n);
+        const childChange = outputOf(childTxId, 0, sourceAddress, 9_500_000n);
+        const confirmed = (
+          activityId: Cardano.TransactionId,
+          consumedInputs: Cardano.TxIn[],
+        ): Activity => ({
+          accountId: sourceAccountId,
+          activityId,
+          timestamp: Timestamp(1_000),
+          tokenBalanceChanges: [],
+          type: ActivityType.Send,
+          blockchainSpecific: { Cardano: { consumedInputs } },
+        });
+        const state = buildState(
+          [
+            {
+              txId: childTxId,
+              consumedInputs: [parentChange[0]],
+              producedOutputs: [childChange],
+            },
           ],
-          // The destination has no settled UTxO entry yet — the credit must
-          // appear anyway (union of raw and pending key sets).
-          [destinationAccountId]: [
-            pendingActivity(destinationAccountId, {
+          {
+            activities: {
+              [sourceAccountId]: [
+                confirmed(sweepTxId, spendOfSettledUtxo),
+                confirmed(childTxId, [parentChange[0]]),
+              ],
+            },
+          },
+        );
+        const reconciled = {
+          ...state,
+          cardanoContext: reducers.cardanoContext(
+            state.cardanoContext,
+            actions.cardanoContext.removeInFlightTransactions({
+              keys: [`${testNetwork}:${childTxId}`],
+            }),
+          ),
+        };
+        const delayedAcceptance = {
+          ...reconciled,
+          cardanoContext: recordInFlight(reconciled.cardanoContext, {
+            txId: sweepTxId,
+            consumedInputs: spendOfSettledUtxo,
+            producedOutputs: [parentChange, unspentChange],
+          }),
+        };
+
+        expect(delayedAcceptance.activities).toBe(state.activities);
+        for (const select of [
+          selectors.cardanoContext.selectAvailableAccountUtxos,
+          selectors.cardanoContext.selectAccountUtxosWithInFlight,
+        ]) {
+          expect(outpoints(select(delayedAcceptance)[sourceAccountId])).toEqual(
+            outpoints([unspentChange]),
+          );
+        }
+        expect(
+          selectors.cardanoContext.selectAvailableAccountUtxos(reconciled)[
+            sourceAccountId
+          ],
+        ).toEqual([]);
+        expect(
+          selectors.cardanoContext.selectSettledAvailableAccountUtxos(
+            delayedAcceptance,
+          )[sourceAccountId],
+        ).toEqual([]);
+      });
+
+      it('applies confirmed spends across accounts only on their network, including reserved collateral', () => {
+        const state = buildState([], {
+          previewSettled: [settledUtxo],
+          reserved: [settledUtxo],
+          activities: {
+            [destinationAccountId]: [
+              {
+                accountId: destinationAccountId,
+                activityId: sweepTxId,
+                timestamp: Timestamp(0),
+                tokenBalanceChanges: [],
+                type: ActivityType.Receive,
+                blockchainSpecific: {
+                  Cardano: { consumedInputs: spendOfSettledUtxo },
+                },
+              },
+            ],
+          },
+        });
+
+        for (const select of [
+          selectors.cardanoContext.selectAvailableAccountUtxos,
+          selectors.cardanoContext.selectAccountUtxosWithInFlight,
+          selectors.cardanoContext.selectSettledAvailableAccountUtxos,
+        ]) {
+          const result = select(state);
+          expect(result[sourceAccountId]).toEqual([]);
+          expect(result[previewAccountId]).toEqual([settledUtxo]);
+        }
+        expect(
+          selectors.cardanoContext.selectSettledAccountUnspendableUtxos(state)[
+            sourceAccountId
+          ],
+        ).toEqual([]);
+        expect(
+          selectors.cardanoContext.selectAccountUtxosWithInFlight(state),
+        ).toBe(selectors.cardanoContext.selectAccountUtxosWithInFlight(state));
+      });
+
+      it('retains confirmed spent-input evidence as the tip advances until a re-sync clears the activity', () => {
+        const state = buildState([], {
+          activities: {
+            [sourceAccountId]: [
+              {
+                accountId: sourceAccountId,
+                activityId: sweepTxId,
+                timestamp: Timestamp(0),
+                tokenBalanceChanges: [],
+                type: ActivityType.Send,
+                blockchainSpecific: {
+                  Cardano: { consumedInputs: spendOfSettledUtxo },
+                },
+              },
+            ],
+          },
+        });
+        const advanced = {
+          ...state,
+          cardanoContext: reducers.cardanoContext(
+            state.cardanoContext,
+            actions.cardanoContext.setTip({
+              network: testNetwork,
+              tip: { ...tip1, slot: Cardano.Slot(1_000_000) },
+            }),
+          ),
+        };
+        const reset = {
+          ...advanced,
+          activities: { ...advanced.activities, activities: {} },
+        };
+        for (const select of [
+          selectors.cardanoContext.selectAvailableAccountUtxos,
+          selectors.cardanoContext.selectAccountUtxosWithInFlight,
+        ]) {
+          expect(select(advanced)[sourceAccountId]).toEqual([]);
+          expect(select(reset)[sourceAccountId]).toEqual([settledUtxo]);
+        }
+      });
+
+      describe('selectCollateralOwnershipUtxos', () => {
+        const authorityFor = (
+          accountId: AccountId,
+          ...args: Parameters<typeof buildState>
+        ) =>
+          selectors.cardanoContext.selectCollateralOwnershipUtxos(
+            buildState(...args),
+          )[accountId];
+
+        it('includes an own in-flight output the settled set does not have yet', () => {
+          const change = sweepOutput(1, sourceAddress, 4_800_000n);
+          const authority = authorityFor(sourceAccountId, [
+            { txId: sweepTxId, producedOutputs: [change] },
+          ]);
+
+          expect(outpoints(authority)).toEqual(
+            outpoints([settledUtxo, change]),
+          );
+        });
+
+        it('covers an account whose ONLY funds are in flight, with no settled entry at all', () => {
+          const credit = sweepOutput(0, destinationAddress, 9_800_000n);
+          const authority = authorityFor(destinationAccountId, [
+            { txId: sweepTxId, producedOutputs: [credit] },
+          ]);
+
+          expect(outpoints(authority)).toEqual(outpoints([credit]));
+        });
+
+        it('leaves out an account with no settled entry that no in-flight transaction credits', () => {
+          const authority = authorityFor(destinationAccountId, [
+            { txId: sweepTxId, consumedInputs: spendOfSettledUtxo },
+          ]);
+
+          expect(authority).toBeUndefined();
+        });
+
+        it('keeps a collateral-reserved settled output that the spendable view filters out', () => {
+          const authority = authorityFor(sourceAccountId, [], {
+            reserved: [settledUtxo],
+          });
+
+          expect(outpoints(authority)).toEqual(outpoints([settledUtxo]));
+        });
+
+        it('keeps a settled input an in-flight transaction consumes -- it still exists on chain', () => {
+          const authority = authorityFor(sourceAccountId, [
+            { txId: sweepTxId, consumedInputs: spendOfSettledUtxo },
+          ]);
+
+          expect(outpoints(authority)).toEqual(outpoints([settledUtxo]));
+        });
+
+        it('keeps an own in-flight output another in-flight transaction consumes', () => {
+          const change = sweepOutput(0, sourceAddress, 4_800_000n);
+          const childChange = outputOf(childTxId, 0, sourceAddress, 4_600_000n);
+          const authority = authorityFor(sourceAccountId, [
+            {
+              txId: childTxId,
+              consumedInputs: [{ txId: sweepTxId, index: 0 }],
+              producedOutputs: [childChange],
+            },
+            { txId: sweepTxId, producedOutputs: [change] },
+          ]);
+
+          expect(outpoints(authority)).toEqual(
+            outpoints([settledUtxo, change, childChange]),
+          );
+        });
+
+        it('excludes an in-flight output paying an address the account does not own', () => {
+          const authority = authorityFor(sourceAccountId, [
+            {
+              txId: sweepTxId,
+              producedOutputs: [sweepOutput(0, foreignAddress, 3_000_000n)],
+            },
+          ]);
+
+          expect(outpoints(authority)).toEqual(outpoints([settledUtxo]));
+        });
+      });
+
+      describe('selectAccountUtxosWithInFlight', () => {
+        it('subtracts an in-flight spend from the source and credits the destination it pays, before either settles', () => {
+          const state = buildState([
+            {
+              txId: sweepTxId,
+              consumedInputs: spendOfSettledUtxo,
+              // The destination has no settled UTxO entry yet: the credit
+              // appears anyway.
+              producedOutputs: [sweepOutput(0, destinationAddress, 9_800_000n)],
+            },
+          ]);
+
+          const result =
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
+
+          expect(result[sourceAccountId]).toEqual([]);
+          expect(result[destinationAccountId]).toHaveLength(1);
+          expect(result[destinationAccountId]?.[0]?.[1].value.coins).toBe(
+            9_800_000n,
+          );
+        });
+
+        it('returns the settled sets untouched when nothing is in flight', () => {
+          const state = buildState([]);
+          const result =
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
+
+          expect(result[sourceAccountId]).toHaveLength(1);
+          expect(result[destinationAccountId]).toBeUndefined();
+        });
+
+        it('leaves out an account with no settled entry that no in-flight transaction credits', () => {
+          const state = buildState([
+            { txId: sweepTxId, consumedInputs: spendOfSettledUtxo },
+          ]);
+
+          expect(
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state)[
+              destinationAccountId
+            ],
+          ).toBeUndefined();
+        });
+
+        it('keeps collateral (unspendable) UTxOs in the balance view', () => {
+          // The balance view answers "what does the account hold", so the
+          // collateral stays counted; only selectAvailableAccountUtxos ("what
+          // can a transaction spend") filters it.
+          const state = buildState([], { reserved: [settledUtxo] });
+
+          const result =
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
+
+          expect(result[sourceAccountId]).toHaveLength(1);
+        });
+
+        it('returns the same reference for the same state (input stability)', () => {
+          const state = buildState([]);
+          const first =
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
+          const second =
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
+
+          expect(second).toBe(first);
+        });
+
+        it('keeps its result while a wallet changes but none of its accounts', () => {
+          const state = buildState([
+            { txId: sweepTxId, consumedInputs: spendOfSettledUtxo },
+          ]);
+          const first =
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
+          const { wallets } = state as unknown as {
+            wallets: { entities: Record<string, WalletEntity> };
+          };
+          const renamed = {
+            ...state,
+            wallets: {
+              ...wallets,
+              entities: {
+                wallet: {
+                  ...wallets.entities.wallet,
+                  metadata: { name: 'renamed', order: 0 },
+                },
+              },
+            },
+          } as unknown as typeof state;
+
+          expect(
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(renamed),
+          ).toBe(first);
+        });
+      });
+
+      describe('selectSettledAvailableAccountUtxos with transactions in flight', () => {
+        const otherSettledUtxo = outputOf(
+          settledTxId,
+          1,
+          sourceAddress,
+          4_000_000n,
+        );
+        const settledAvailable = (state: ReturnType<typeof buildState>) =>
+          selectors.cardanoContext.selectSettledAvailableAccountUtxos(state)[
+            sourceAccountId
+          ];
+
+        it('leaves out a settled UTxO an in-flight transaction spends', () => {
+          const state = buildState(
+            [{ txId: sweepTxId, consumedInputs: spendOfSettledUtxo }],
+            { settled: [settledUtxo, otherSettledUtxo] },
+          );
+
+          expect(settledAvailable(state)).toEqual([otherSettledUtxo]);
+        });
+
+        it('leaves out an output known only from an in-flight transaction', () => {
+          const state = buildState([
+            {
+              txId: sweepTxId,
               consumedInputs: [],
+              producedOutputs: [sweepOutput(0, sourceAddress, 3_000_000n)],
+            },
+          ]);
+
+          expect(settledAvailable(state)).toEqual([settledUtxo]);
+        });
+
+        it('keeps a settled output an in-flight transaction also produces as the settled tuple', () => {
+          const settledOutput = sweepOutput(0, sourceAddress, 3_000_000n);
+          const state = buildState(
+            [
+              {
+                txId: sweepTxId,
+                consumedInputs: spendOfSettledUtxo,
+                producedOutputs: [sweepOutput(0, sourceAddress, 3_000_000n)],
+              },
+            ],
+            { settled: [settledUtxo, settledOutput] },
+          );
+
+          const [kept] = settledAvailable(state);
+          expect(settledAvailable(state)).toHaveLength(1);
+          expect(kept).toBe(
+            selectors.cardanoContext.selectAccountUtxos(state)[
+              sourceAccountId
+            ][1],
+          );
+        });
+
+        it('ignores an in-flight transaction of another network', () => {
+          const state = buildState([
+            {
+              txId: sweepTxId,
+              chainId: Cardano.ChainIds.Preview,
+              consumedInputs: spendOfSettledUtxo,
+            },
+          ]);
+
+          expect(settledAvailable(state)).toBe(
+            selectors.cardanoContext.selectAccountUtxos(state)[sourceAccountId],
+          );
+        });
+      });
+
+      describe('selectAvailableAccountUtxos', () => {
+        it('returns the settled set itself when nothing is reserved or in flight', () => {
+          const state = buildState([]);
+
+          const result =
+            selectors.cardanoContext.selectAvailableAccountUtxos(state);
+
+          expect(result[sourceAccountId]).toBe(
+            selectors.cardanoContext.selectAccountUtxos(state)[sourceAccountId],
+          );
+        });
+
+        it('returns the settled set itself while only another network has transactions in flight', () => {
+          const state = buildState([
+            {
+              txId: sweepTxId,
+              chainId: Cardano.ChainIds.Preview,
+              consumedInputs: spendOfSettledUtxo,
+            },
+          ]);
+
+          expect(
+            selectors.cardanoContext.selectAvailableAccountUtxos(state)[
+              sourceAccountId
+            ],
+          ).toBe(
+            selectors.cardanoContext.selectAccountUtxos(state)[sourceAccountId],
+          );
+        });
+
+        it('leaves out a settled UTxO an in-flight transaction spends', () => {
+          const state = buildState([
+            { txId: sweepTxId, consumedInputs: spendOfSettledUtxo },
+          ]);
+
+          const result =
+            selectors.cardanoContext.selectAvailableAccountUtxos(state);
+
+          expect(result[sourceAccountId]).toEqual([]);
+        });
+
+        it('offers the outputs an in-flight transaction pays to an own address, and no others', () => {
+          const change = sweepOutput(1, sourceAddress, 6_800_000n);
+          const state = buildState([
+            {
+              txId: sweepTxId,
+              consumedInputs: spendOfSettledUtxo,
               producedOutputs: [
+                sweepOutput(0, foreignAddress, 3_000_000n),
+                change,
+              ],
+            },
+          ]);
+
+          const result =
+            selectors.cardanoContext.selectAvailableAccountUtxos(state);
+
+          expect(result[sourceAccountId]).toEqual([change]);
+        });
+
+        it.each([
+          ['a confirmed activity', ActivityType.Send, []],
+          ['a Pending activity', ActivityType.Pending, [settledUtxo]],
+        ])(
+          'uses only confirmed spent-input evidence from %s, never its outputs',
+          (_, type, expected) => {
+            const state = buildState([], {
+              activities: {
+                [sourceAccountId]: [
+                  {
+                    accountId: sourceAccountId,
+                    activityId: String(sweepTxId),
+                    timestamp: Timestamp(0),
+                    tokenBalanceChanges: [],
+                    type,
+                    blockchainSpecific: Serializable.to({
+                      Cardano: {
+                        consumedInputs: spendOfSettledUtxo,
+                        producedOutputs: [
+                          sweepOutput(0, sourceAddress, 9_800_000n),
+                        ],
+                      },
+                    }) as unknown,
+                  },
+                ],
+              },
+            });
+
+            const result =
+              selectors.cardanoContext.selectAvailableAccountUtxos(state);
+
+            expect(result[sourceAccountId]).toEqual(expected);
+          },
+        );
+
+        it('applies an in-flight transaction on every account of its network and on no account of another', () => {
+          // The same outpoint settled on both networks, under the same keys.
+          const change = sweepOutput(1, sourceAddress, 6_800_000n);
+          const credit = sweepOutput(0, destinationAddress, 3_000_000n);
+          const state = buildState(
+            [
+              {
+                txId: sweepTxId,
+                consumedInputs: spendOfSettledUtxo,
+                producedOutputs: [credit, change],
+              },
+            ],
+            { previewSettled: [settledUtxo] },
+          );
+
+          const available =
+            selectors.cardanoContext.selectAvailableAccountUtxos(state);
+          const held =
+            selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
+
+          expect(available[sourceAccountId]).toEqual([change]);
+          expect(held[destinationAccountId]).toEqual([credit]);
+          expect(available[previewAccountId]).toEqual([settledUtxo]);
+          expect(held[previewAccountId]).toEqual([settledUtxo]);
+        });
+
+        it.each(['parent first', 'child first'])(
+          'keeps the change a child spends out whichever is recorded first (%s)',
+          order => {
+            const change = sweepOutput(0, sourceAddress, 9_800_000n);
+            const childChange = outputOf(
+              childTxId,
+              0,
+              sourceAddress,
+              9_600_000n,
+            );
+            const parent = {
+              txId: sweepTxId,
+              consumedInputs: spendOfSettledUtxo,
+              producedOutputs: [change],
+            };
+            const child = {
+              txId: childTxId,
+              consumedInputs: [{ txId: sweepTxId, index: 0 }],
+              producedOutputs: [childChange],
+            };
+            const state = buildState(
+              order === 'parent first' ? [parent, child] : [child, parent],
+            );
+
+            expect(
+              selectors.cardanoContext.selectAvailableAccountUtxos(state)[
+                sourceAccountId
+              ],
+            ).toEqual([childChange]);
+          },
+        );
+
+        describe('with reserved collateral', () => {
+          const collateral = sweepOutput(0, sourceAddress, 5_000_000n);
+          // The sweep's collateral output has settled and the collateral flow
+          // has reserved it, while the sweep is still in flight.
+          const settledCollateralState = () =>
+            buildState(
+              [
+                {
+                  txId: sweepTxId,
+                  consumedInputs: spendOfSettledUtxo,
+                  producedOutputs: [collateral],
+                },
+              ],
+              { settled: [collateral], reserved: [collateral] },
+            );
+
+          it('leaves out a reserved UTxO that an in-flight transaction produces', () => {
+            const result = selectors.cardanoContext.selectAvailableAccountUtxos(
+              settledCollateralState(),
+            );
+
+            expect(result[sourceAccountId]).toEqual([]);
+          });
+
+          it('leaves out a reserved outpoint known only as an in-flight output', () => {
+            const change = sweepOutput(1, sourceAddress, 4_800_000n);
+            const state = buildState(
+              [
+                {
+                  txId: sweepTxId,
+                  consumedInputs: spendOfSettledUtxo,
+                  producedOutputs: [collateral, change],
+                },
+              ],
+              { reserved: [collateral] },
+            );
+
+            const result =
+              selectors.cardanoContext.selectAvailableAccountUtxos(state);
+
+            expect(result[sourceAccountId]).toEqual([change]);
+          });
+
+          it('still counts the reserved UTxO in the balance view', () => {
+            const result =
+              selectors.cardanoContext.selectAccountUtxosWithInFlight(
+                settledCollateralState(),
+              );
+
+            expect(result[sourceAccountId]).toEqual([collateral]);
+          });
+
+          it('keeps a reserved settled output that an in-flight transaction produces out of the settled available set', () => {
+            const result =
+              selectors.cardanoContext.selectSettledAvailableAccountUtxos(
+                settledCollateralState(),
+              );
+
+            expect(result[sourceAccountId]).toEqual([]);
+          });
+
+          describe('selectSettledAccountUnspendableUtxos', () => {
+            const settledCollateral = outputOf(
+              settledTxId,
+              1,
+              sourceAddress,
+              5_000_000n,
+            );
+            const spendOfSettledCollateral = [{ txId: settledTxId, index: 1 }];
+            const nameableFor = (...args: Parameters<typeof buildState>) => {
+              const state = buildState(...args);
+              return {
+                nameable:
+                  selectors.cardanoContext.selectSettledAccountUnspendableUtxos(
+                    state,
+                  ),
+                reserved:
+                  selectors.cardanoContext.selectAccountUnspendableUtxos(state),
+              };
+            };
+
+            it('returns the reserved array itself when every reserved UTxO is settled and no in-flight transaction spends it', () => {
+              const { nameable, reserved } = nameableFor(
+                [{ txId: sweepTxId, consumedInputs: spendOfSettledUtxo }],
+                {
+                  settled: [settledUtxo, settledCollateral],
+                  reserved: [settledCollateral],
+                },
+              );
+
+              expect(nameable[sourceAccountId]).toBe(reserved[sourceAccountId]);
+            });
+
+            it('leaves out a reserved outpoint known only as an in-flight output', () => {
+              const { nameable } = nameableFor(
                 [
                   {
                     txId: sweepTxId,
-                    index: 0,
-                    address: Cardano.PaymentAddress(destinationAddress),
-                  },
-                  {
-                    address: Cardano.PaymentAddress(destinationAddress),
-                    value: { coins: 9_800_000n },
+                    consumedInputs: spendOfSettledUtxo,
+                    producedOutputs: [collateral],
                   },
                 ],
-              ],
-            }),
-          ],
+                { reserved: [collateral] },
+              );
+
+              expect(nameable[sourceAccountId]).toEqual([]);
+            });
+
+            it('leaves out a reserved settled UTxO that an in-flight transaction spends', () => {
+              const { nameable } = nameableFor(
+                [{ txId: sweepTxId, consumedInputs: spendOfSettledCollateral }],
+                {
+                  settled: [settledUtxo, settledCollateral],
+                  reserved: [settledCollateral],
+                },
+              );
+
+              expect(nameable[sourceAccountId]).toEqual([]);
+            });
+
+            it('ignores an in-flight transaction of another network that spends the reserved UTxO', () => {
+              const { nameable, reserved } = nameableFor(
+                [
+                  {
+                    txId: sweepTxId,
+                    chainId: Cardano.ChainIds.Preview,
+                    consumedInputs: spendOfSettledCollateral,
+                  },
+                ],
+                {
+                  settled: [settledUtxo, settledCollateral],
+                  reserved: [settledCollateral],
+                },
+              );
+
+              expect(nameable[sourceAccountId]).toBe(reserved[sourceAccountId]);
+            });
+
+            it('returns one shared empty map when nothing is reserved', () => {
+              const idle = nameableFor([]).nameable;
+              const inFlight = nameableFor([
+                { txId: sweepTxId, consumedInputs: spendOfSettledUtxo },
+              ]).nameable;
+
+              expect(idle).toEqual({});
+              expect(inFlight).toBe(idle);
+            });
+          });
         });
-
-        const result =
-          selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
-
-        expect(result[sourceAccountId]).toEqual([]);
-        expect(result[destinationAccountId]).toHaveLength(1);
-        expect(result[destinationAccountId]?.[0]?.[1].value.coins).toBe(
-          9_800_000n,
-        );
-      });
-
-      it('returns the settled sets untouched when nothing is in flight', () => {
-        const state = buildState({});
-        const result =
-          selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
-
-        expect(result[sourceAccountId]).toHaveLength(1);
-        expect(result[destinationAccountId]).toBeUndefined();
-      });
-
-      it('keeps collateral (unspendable) UTxOs in the balance view', () => {
-        const state = buildState({});
-        // Mark the source's only UTxO unspendable (collateral). The balance
-        // view answers "what does the account hold", so it must stay counted —
-        // only selectAvailableAccountUtxos ("what can a transaction spend")
-        // filters it.
-        const withCollateral = {
-          ...state,
-          cardanoContext: reducers.cardanoContext(
-            (state as { cardanoContext: CardanoContextSliceState })
-              .cardanoContext,
-            actions.cardanoContext.setAccountUnspendableUtxos({
-              accountId: sourceAccountId,
-              utxos: [makeUtxo(sourceAddress, 10_000_000n)],
-            }),
-          ),
-        } as typeof state;
-
-        const result =
-          selectors.cardanoContext.selectAccountUtxosWithInFlight(
-            withCollateral,
-          );
-
-        expect(result[sourceAccountId]).toHaveLength(1);
-      });
-
-      it('returns the same reference for the same state (input stability)', () => {
-        const state = buildState({});
-        const first =
-          selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
-        const second =
-          selectors.cardanoContext.selectAccountUtxosWithInFlight(state);
-
-        expect(second).toBe(first);
       });
     });
 

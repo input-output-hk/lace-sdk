@@ -30,6 +30,7 @@ import {
   grantedControl,
   issueGrantShape,
   liveControl,
+  PREPROD,
   record,
 } from './custody-fixtures';
 import { NOW } from './custody-sponsor-fake';
@@ -69,6 +70,7 @@ const setup = async () => {
   const submit = async (reference?: string) =>
     submitCardanoCustodyTransaction(test.wallet, {
       signedTransaction: HexBytes(transaction),
+      chainId: PREPROD,
       accountId,
       address: record.address,
       resolvedInputs,

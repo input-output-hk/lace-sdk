@@ -1,10 +1,9 @@
-import { activitiesActions, ActivityType } from '@lace-contract/activities';
 import {
   composerFlowActions,
   LOVELACE_TOKEN_ID,
 } from '@lace-contract/cardano-context';
 import { AccountId } from '@lace-contract/wallet-repo';
-import { BigNumber, Timestamp } from '@lace-lib/util';
+import { BigNumber } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -204,13 +203,11 @@ describe('composer-flow tx side-effects', () => {
   });
 
   describe('makeComposerProcessing', () => {
-    it('dispatches upsertActivities + processingResulted on submission success', () => {
+    it('dispatches only processingResulted on submission success, without a pending activity', () => {
       const submitResult: TxSubmissionResult = {
         success: true,
         txId: testTxId,
       };
-      const mockTimestamp = 1_700_000_000_000;
-      vi.spyOn(Date, 'now').mockReturnValue(mockTimestamp);
 
       testSideEffect(
         {
@@ -224,112 +221,16 @@ describe('composer-flow tx side-effects', () => {
           stateObservables: {
             composerFlow: { selectState$: cold('a', { a: processingState }) },
           },
-          dependencies: {
-            actions: { ...composerFlowActions, ...activitiesActions },
-          },
+          dependencies: { actions: composerFlowActions },
           assertion: sideEffect$ => {
-            expectObservable(sideEffect$).toBe('(ab)', {
-              a: activitiesActions.activities.upsertActivities({
-                accountId: testAccountId,
-                activities: [
-                  {
-                    accountId: testAccountId,
-                    activityId: testTxId,
-                    timestamp: Timestamp(mockTimestamp),
-                    tokenBalanceChanges: [
-                      {
-                        tokenId: LOVELACE_TOKEN_ID,
-                        amount: BigNumber(-200_000n),
-                      },
-                    ],
-                    type: ActivityType.Pending,
-                    // No operation metadata: the composer is generic, so
-                    // the on-chain classifier reconciles the type later.
-                    blockchainSpecific: {
-                      Cardano: {
-                        consumedInputs: [],
-                        producedOutputs: [],
-                      },
-                    },
-                  },
-                ],
-              }),
-              b: composerFlowActions.composerFlow.processingResulted({
+            expectObservable(sideEffect$).toBe('a', {
+              a: composerFlowActions.composerFlow.processingResulted({
                 result: submitResult,
               }),
             });
           },
         }),
       );
-
-      vi.restoreAllMocks();
-    });
-
-    it('passes the upstream consumed inputs, produced outputs and withdrawals through', () => {
-      const consumedInputs = [{ txId: 'aa', index: 0 }];
-      const producedOutputs = [{ address: 'addr', value: { coins: '1' } }];
-      // Without them the balance would count withdrawn rewards twice.
-      const withdrawals = [{ stakeAddress: 'stake_test1', quantity: 5n }];
-      const submitResult = {
-        success: true,
-        txId: testTxId,
-        blockchainSpecificActivityMetadata: {
-          Cardano: { consumedInputs, producedOutputs, withdrawals },
-        },
-      } as unknown as TxSubmissionResult;
-      const mockTimestamp = 1_700_000_000_000;
-      vi.spyOn(Date, 'now').mockReturnValue(mockTimestamp);
-
-      testSideEffect(
-        {
-          build: ({ cold }) =>
-            makeComposerProcessing({
-              submitTx: (_, mapResult) =>
-                cold('a', { a: mapResult(submitResult) }),
-            }),
-        },
-        ({ cold, expectObservable }) => ({
-          stateObservables: {
-            composerFlow: { selectState$: cold('a', { a: processingState }) },
-          },
-          dependencies: {
-            actions: { ...composerFlowActions, ...activitiesActions },
-          },
-          assertion: sideEffect$ => {
-            expectObservable(sideEffect$).toBe('(ab)', {
-              a: activitiesActions.activities.upsertActivities({
-                accountId: testAccountId,
-                activities: [
-                  {
-                    accountId: testAccountId,
-                    activityId: testTxId,
-                    timestamp: Timestamp(mockTimestamp),
-                    tokenBalanceChanges: [
-                      {
-                        tokenId: LOVELACE_TOKEN_ID,
-                        amount: BigNumber(-200_000n),
-                      },
-                    ],
-                    type: ActivityType.Pending,
-                    blockchainSpecific: {
-                      Cardano: {
-                        consumedInputs,
-                        producedOutputs,
-                        withdrawals,
-                      },
-                    },
-                  },
-                ],
-              }),
-              b: composerFlowActions.composerFlow.processingResulted({
-                result: submitResult,
-              }),
-            });
-          },
-        }),
-      );
-
-      vi.restoreAllMocks();
     });
 
     it('dispatches only processingResulted when the submission fails', () => {
@@ -351,9 +252,7 @@ describe('composer-flow tx side-effects', () => {
           stateObservables: {
             composerFlow: { selectState$: cold('a', { a: processingState }) },
           },
-          dependencies: {
-            actions: { ...composerFlowActions, ...activitiesActions },
-          },
+          dependencies: { actions: composerFlowActions },
           assertion: sideEffect$ => {
             expectObservable(sideEffect$).toBe('a', {
               a: composerFlowActions.composerFlow.processingResulted({
@@ -381,9 +280,7 @@ describe('composer-flow tx side-effects', () => {
           stateObservables: {
             composerFlow: { selectState$: cold('a', { a: processingState }) },
           },
-          dependencies: {
-            actions: { ...composerFlowActions, ...activitiesActions },
-          },
+          dependencies: { actions: composerFlowActions },
           assertion: sideEffect$ => {
             expectObservable(sideEffect$).toBe('a', { a: intermediate });
           },

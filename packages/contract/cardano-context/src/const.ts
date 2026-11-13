@@ -74,6 +74,15 @@ export const CARDANO_TOKEN_METADATA_SCHEMA_VERSION = 2;
 export const UTXO_SYNC_CONFIRMATION_DEPTH = 60;
 
 /**
+ * Slots past the network tip at which the wallet stops expecting an in-flight
+ * transaction whose body sets no upper validity bound to settle: about two
+ * hours at one-second slots. `setTip` applies it to every such entry of its
+ * network, from the first tip the wallet receives after the entry was
+ * recorded.
+ */
+export const UNBOUNDED_IN_FLIGHT_SLOTS = 7200;
+
+/**
  * Slot distance past a top non-Pending activity's slot at which we treat an
  * unchanged `getRewardAccountInfo` fetch as authoritative. Mirrors
  * `UTXO_SYNC_CONFIRMATION_DEPTH` but kept as a separate constant so per-

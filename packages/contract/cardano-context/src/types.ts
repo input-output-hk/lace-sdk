@@ -1,3 +1,4 @@
+import type { PendingRewardWithdrawals } from './apply-in-flight-utxo-adjustments';
 import type { CARDANO_TOKEN_METADATA_SCHEMA_VERSION } from './const';
 import type {
   ExtensionAccountProps,
@@ -366,6 +367,22 @@ export type GetAddressTransactionHistoryProps = GetNextTxHistoryPageParams & {
   numberOfItems: number;
 };
 
+/** Where the chain included a transaction, as the provider reports it. */
+export type CardanoTransactionInclusion = {
+  /** The block that holds the transaction. */
+  blockHash: Cardano.BlockId;
+  blockHeight: Cardano.BlockNo;
+  /** The slot of that block. */
+  slot: Cardano.Slot;
+  /** The transaction's position in the block. */
+  txIndex: Cardano.TxIndex;
+  /**
+   * Whether the chain applied the body's effects: `false` for a transaction
+   * whose scripts failed, which spent its collateral instead.
+   */
+  isValid: boolean;
+};
+
 export interface CardanoProvider {
   /***
    * @returns Observable that emits once and completes
@@ -489,6 +506,21 @@ export interface CardanoProvider {
     txId: Cardano.TransactionId,
     context: CardanoProviderContext,
   ) => Observable<Result<ExtendedTxDetails, ProviderError>>;
+
+  /**
+   * Asks whether the provider's chain index holds a transaction, in one light
+   * request. The mempool is not covered: a transaction the provider accepted
+   * but no block includes yet, or one it dropped from its mempool, is not
+   * held.
+   *
+   * @returns Observable that emits once and completes: `Ok` with where the
+   * chain included the transaction, `Ok(null)` when the provider does not hold
+   * it, and `Err` when the provider could not answer
+   */
+  checkTransaction: (
+    txId: Cardano.TransactionId,
+    context: CardanoProviderContext,
+  ) => Observable<Result<CardanoTransactionInclusion | null, ProviderError>>;
 
   /**
    * @returns Observable that emits a Result with latest Cardano protocol parameters once and completes
@@ -650,11 +682,25 @@ export type CardanoSideEffectsDependencies = {
       RequiredProtocolParameters | undefined
     >;
     cardanoNetworkMagic$: Observable<Cardano.NetworkMagic | undefined>;
-    cardanoAccountUtxos$: Observable<AccountUtxoMap>;
-    cardanoAccountUnspendableUtxos$: Observable<AccountUtxoMap>;
+    /**
+     * The settled UTxOs a transaction of the account may spend: on chain,
+     * spent by no in-flight transaction, not reserved as collateral; accounts
+     * excluded from spending are absent.
+     */
+    cardanoSettledAvailableAccountUtxos$: Observable<AccountUtxoMap>;
+    /**
+     * The reserved collateral a transaction can name: settled and spent by no
+     * in-flight transaction.
+     */
+    cardanoSettledAccountUnspendableUtxos$: Observable<AccountUtxoMap>;
     cardanoAddresses$: Observable<AnyAddress[]>;
     cardanoChainId$: Observable<Cardano.ChainId | undefined>;
     cardanoRewardAccountDetails$: Observable<AccountRewardAccountDetailsMap>;
+    /**
+     * The rewards in-flight transactions withdraw, keyed by
+     * `pendingRewardWithdrawalKey`.
+     */
+    cardanoPendingRewardWithdrawals$: Observable<PendingRewardWithdrawals>;
   };
 };
 
@@ -681,6 +727,23 @@ export type RequiredProtocolParameters = Pick<
 export type AccountUtxoMap = Record<AccountId, Cardano.Utxo[]>;
 
 export type AccountUnspendableUtxoMap = Record<AccountId, Cardano.Utxo[]>;
+
+/**
+ * What an accepted transaction spends and pays if it lands, which the
+ * in-flight views apply: the body's inputs, outputs and withdrawals, or, for a
+ * transaction flagged `isValid` false, its collateral inputs and its
+ * collateral return. Read from the transaction alone with no ownership
+ * resolution; each view intersects them with an account's own UTxOs and
+ * addresses when it reads them.
+ */
+export type CardanoInFlightEffects = {
+  /** Every input the transaction spends, own or not. */
+  consumedInputs: Cardano.TxIn[];
+  /** Every output the transaction pays, as UTxOs under its transaction id, own or not. */
+  producedOutputs: Cardano.Utxo[];
+  /** Every reward withdrawal the transaction makes, own or not; absent when it makes none. */
+  withdrawals?: Cardano.Withdrawal[];
+};
 
 export type CardanoBlockchainSpecificTxData = {
   memo: string;
@@ -844,7 +907,11 @@ export type BuildDeregistrationTxResult =
       fees: FeeEntry[];
       /** Deposit return in lovelace as string (positive value) */
       depositReturn: string;
-      /** Staking rewards withdrawn in lovelace as string (positive value, '0' when no rewards) */
+      /**
+       * Staking rewards withdrawn in lovelace as string (positive value, '0'
+       * when no rewards, or when an in-flight transaction already withdraws
+       * them)
+       */
       withdrawalAmount: string;
     };
 

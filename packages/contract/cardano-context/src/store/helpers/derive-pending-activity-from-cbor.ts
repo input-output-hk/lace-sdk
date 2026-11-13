@@ -1,19 +1,12 @@
-import { ActivityType } from '@lace-contract/activities';
-import { BigNumber, Timestamp } from '@lace-lib/util';
+import { Timestamp } from '@lace-lib/util';
 
-import {
-  isOwnAccountToken,
-  pendingActivityExtensionMetadata,
-} from '../../extensions';
 import { inspectCardanoTxEffects } from '../../inspect-cardano-tx-effects';
 
-import type { CardanoActivityBlockchainSpecific } from '../../augmentations';
+import { inFlightEffectsOf, pendingActivityOf } from './in-flight-transaction';
+
 import type { PendingActivityExtensionProps } from '../../extensions';
 import type { CardanoPaymentAddress } from '../../types';
-import type {
-  Activity,
-  BlockchainSpecificActivityMetadata,
-} from '@lace-contract/activities';
+import type { Activity } from '@lace-contract/activities';
 import type { AccountId } from '@lace-contract/wallet-repo';
 import type { Cardano } from '@lace-lib/cardano-core';
 import type { HexBytes } from '@lace-lib/util';
@@ -25,53 +18,27 @@ type DerivePendingActivityFromCborParams = PendingActivityExtensionProps & {
   accountUtxos: readonly Cardano.Utxo[];
 };
 
+/**
+ * The Pending display row of a signed transaction for one account, stamped
+ * with the current time: {@link pendingActivityOf} over the effects of the
+ * decoded body. The row carries no in-flight effects; record those with
+ * `recordInFlightTransaction(inFlightTransactionOf(...))`.
+ *
+ * Throws when the CBOR is not a transaction.
+ */
 export const derivePendingActivityFromCbor = ({
   serializedTx,
-  accountId,
-  accountAddresses,
-  accountUtxos,
-  ...extension
+  ...params
 }: DerivePendingActivityFromCborParams): Activity | undefined => {
   const effects = inspectCardanoTxEffects({
-    accountAddresses,
-    accountUtxos,
+    accountAddresses: [],
+    accountUtxos: [],
     serializedTx,
   });
-
-  const isAccountTouched =
-    effects.ownInputs.length > 0 ||
-    effects.outputs.some(output => output.isOwn);
-  if (!isAccountTouched) return undefined;
-
-  const isAccountToken = isOwnAccountToken(accountAddresses);
-  const tokenBalanceChanges: Activity['tokenBalanceChanges'] = [
-    ...effects.netByTokenId,
-  ]
-    .filter(([tokenId]) => !isAccountToken(tokenId))
-    .map(([tokenId, netAmount]) => ({
-      amount: BigNumber(netAmount),
-      tokenId,
-    }));
-
-  const cardanoInFlight: CardanoActivityBlockchainSpecific = {
-    consumedInputs: [...effects.consumedInputs],
-    producedOutputs: [...effects.producedOutputs],
-    ...(effects.withdrawals.length > 0 && {
-      withdrawals: [...effects.withdrawals],
-    }),
-    ...pendingActivityExtensionMetadata(extension),
-  };
-
-  const blockchainSpecific: BlockchainSpecificActivityMetadata = {
-    Cardano: cardanoInFlight,
-  };
-
-  return {
-    accountId,
-    activityId: String(effects.txId),
-    blockchainSpecific,
+  return pendingActivityOf({
+    ...params,
+    effects: inFlightEffectsOf(effects),
     timestamp: Timestamp(Date.now()),
-    tokenBalanceChanges,
-    type: ActivityType.Pending,
-  };
+    txId: effects.txId,
+  });
 };

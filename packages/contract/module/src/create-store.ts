@@ -335,8 +335,8 @@ export const createStore = async <
             'accountManagement/attemptAddAccount',
             'accountManagement/attemptAddInMemoryWalletAccount',
             'txExecutor/tx-phase-completed',
-            // Carries the submit result's blockchainSpecificActivityMetadata, whose
-            // Cardano produced-output coin/asset quantities are BigInt.
+            // Carries the submit result, whose serialized provider error can
+            // hold BigInt data, such as the coins of a value-not-conserved refusal.
             'sendFlow/processingResulted',
             'cardanoContext/setProtocolParameters',
             'cardanoContext/setEraSummaries',

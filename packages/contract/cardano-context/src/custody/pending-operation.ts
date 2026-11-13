@@ -11,8 +11,8 @@ export type CardanoCustodyOperationKind =
   | CardanoCustodyCreateOperation['type'];
 
 /**
- * What the pending activity of a submitted custody operation carries beside
- * its UTxO metadata. Only custody submissions set it.
+ * What the pending activity of a submitted custody operation carries. Only
+ * custody submissions set it.
  */
 export type CardanoCustodyActivityMetadata = {
   /**

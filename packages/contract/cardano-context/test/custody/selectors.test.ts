@@ -1,9 +1,8 @@
-import { ActivityType } from '@lace-contract/activities';
+import { activitiesReducers } from '@lace-contract/activities/src/store/slice';
 import { WalletType } from '@lace-contract/wallet-repo';
 import { Cardano } from '@lace-lib/cardano-core';
 import { HexBlob } from '@lace-lib/cardano-util';
-import { BigNumber, Timestamp } from '@lace-lib/util';
-import { Serializable } from '@lace-lib/util-store';
+import { BigNumber } from '@lace-lib/util';
 import { describe, expect, it } from 'vitest';
 
 import { CardanoNetworkId } from '../../src';
@@ -23,6 +22,7 @@ import {
   foreignPaymentAddress,
   otherDeviceKeyHash,
 } from '../custody-mocks';
+import { recordInFlight } from '../in-flight-mocks';
 import {
   cardanoAccount0Addr,
   threeAccountCardanoWallet,
@@ -34,7 +34,6 @@ import type {
   CardanoContextSliceState,
   RequiredProtocolParameters,
 } from '../../src';
-import type { Activity } from '@lace-contract/activities';
 import type { WalletEntity } from '@lace-contract/wallet-repo';
 
 type RootState = Parameters<
@@ -53,6 +52,7 @@ const custodyWallet = {
 } as unknown as WalletEntity;
 
 const emptyCardanoContext: CardanoContextSliceState = {
+  inFlightTransactions: {},
   accountTransactionHistory: {},
   accountRewardsHistory: {},
   networkInfo: {},
@@ -69,16 +69,14 @@ const emptyCardanoContext: CardanoContextSliceState = {
 
 const fund = custodyUtxo(10, { coins: 5_000_000n });
 
-const pendingActivity = (metadata: {
+/** A custody operation in flight, on the custody account's network. */
+const pendingOperation = (effects: {
   consumedInputs: Cardano.TxIn[];
   producedOutputs: Cardano.Utxo[];
-}): Activity => ({
-  accountId: custodyAccountId,
-  activityId: 'pending-custody-operation',
-  timestamp: Timestamp(0),
-  tokenBalanceChanges: [],
-  type: ActivityType.Pending,
-  blockchainSpecific: Serializable.to({ Cardano: metadata }) as unknown,
+}) => ({
+  txId: Cardano.TransactionId('ce'.repeat(32)),
+  chainId: cardanoCustodyAccount.blockchainSpecific.chainId,
+  ...effects,
 });
 
 const buildState = ({
@@ -86,14 +84,14 @@ const buildState = ({
   custodyUtxos,
   keyUtxos = [utxo1],
   withdrawable,
-  activities = {},
+  inFlight = [],
   protocolParametersNetwork = Cardano.NetworkMagics.Preprod,
 }: {
   wallets?: WalletEntity[];
   custodyUtxos?: Cardano.Utxo[];
   keyUtxos?: Cardano.Utxo[];
   withdrawable?: bigint;
-  activities?: Record<string, Activity[]>;
+  inFlight?: ReturnType<typeof pendingOperation>[];
   /** The network whose protocol parameters are known; `null` for none. */
   protocolParametersNetwork?: Cardano.NetworkMagics | null;
 } = {}): RootState => {
@@ -140,13 +138,12 @@ const buildState = ({
       }),
     );
   }
+  for (const operation of inFlight) {
+    cardanoContext = recordInFlight(cardanoContext, operation);
+  }
   return {
     cardanoContext,
-    activities: {
-      activities,
-      desiredLoadedActivitiesCountPerAccount: {},
-      hasLoadedOldestEntry: {},
-    },
+    activities: activitiesReducers.activities(undefined, { type: 'init' }),
     addresses: {
       addresses: [
         cardanoAccount0Addr,
@@ -275,14 +272,12 @@ describe('custody selectors', () => {
       const next = controlUtxo(2, nextState);
       const state = buildState({
         custodyUtxos: [spent, fund],
-        activities: {
-          [custodyAccountId]: [
-            pendingActivity({
-              consumedInputs: [spent[0]],
-              producedOutputs: [next],
-            }),
-          ],
-        },
+        inFlight: [
+          pendingOperation({
+            consumedInputs: [spent[0]],
+            producedOutputs: [next],
+          }),
+        ],
       });
 
       expect(
@@ -298,11 +293,9 @@ describe('custody selectors', () => {
     it('reports a creation that is pending, before any UTxO fetch, as live', () => {
       const created = controlUtxo(1);
       const state = buildState({
-        activities: {
-          [custodyAccountId]: [
-            pendingActivity({ consumedInputs: [], producedOutputs: [created] }),
-          ],
-        },
+        inFlight: [
+          pendingOperation({ consumedInputs: [], producedOutputs: [created] }),
+        ],
       });
 
       expect(
@@ -345,14 +338,12 @@ describe('custody selectors', () => {
       const state = buildState({
         custodyUtxos: [control, fund],
         withdrawable: 7_000n,
-        activities: {
-          [custodyAccountId]: [
-            pendingActivity({
-              consumedInputs: [control[0], fund[0]],
-              producedOutputs: [next],
-            }),
-          ],
-        },
+        inFlight: [
+          pendingOperation({
+            consumedInputs: [control[0], fund[0]],
+            producedOutputs: [next],
+          }),
+        ],
       });
       expect(
         selectSettledCardanoCustodyAccountState(state, custodyAccountId),
@@ -377,14 +368,12 @@ describe('custody selectors', () => {
 
     it('does not treat a pending creation as confirmed before the first fetch', () => {
       const state = buildState({
-        activities: {
-          [custodyAccountId]: [
-            pendingActivity({
-              consumedInputs: [],
-              producedOutputs: [controlUtxo(1)],
-            }),
-          ],
-        },
+        inFlight: [
+          pendingOperation({
+            consumedInputs: [],
+            producedOutputs: [controlUtxo(1)],
+          }),
+        ],
       });
       expect(
         selectSettledCardanoCustodyAccountState(state, custodyAccountId),
@@ -414,7 +403,7 @@ describe('custody selectors', () => {
       }
     });
 
-    it('keeps its result when only pending activities change', () => {
+    it('keeps its result when only the in-flight transactions change', () => {
       const state = buildState({ custodyUtxos: [controlUtxo(1), fund] });
       const first = selectSettledCardanoCustodyAccountState(
         state,
@@ -422,18 +411,12 @@ describe('custody selectors', () => {
       );
       const changed = {
         ...state,
-        activities: {
-          ...state.activities,
-          activities: {
-            [custodyAccountId]: [
-              pendingActivity({
-                consumedInputs: [fund[0]],
-                producedOutputs: [],
-              }),
-            ],
-          },
-        },
-      };
+        cardanoContext: recordInFlight(
+          (state as { cardanoContext: CardanoContextSliceState })
+            .cardanoContext,
+          pendingOperation({ consumedInputs: [fund[0]], producedOutputs: [] }),
+        ),
+      } as RootState;
       expect(
         selectSettledCardanoCustodyAccountState(changed, custodyAccountId),
       ).toBe(first);

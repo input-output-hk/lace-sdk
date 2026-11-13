@@ -1,9 +1,7 @@
-import { ActivityType } from '@lace-contract/activities';
+import { activitiesReducers } from '@lace-contract/activities/src/store/slice';
 import { WalletType } from '@lace-contract/wallet-repo';
 import { Cardano, Milliseconds } from '@lace-lib/cardano-core';
 import { classifyCustodyAccountUtxos } from '@lace-lib/cardano-custody';
-import { Timestamp } from '@lace-lib/util';
-import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';
 
 import { CardanoNetworkId } from '../../src';
@@ -22,12 +20,12 @@ import {
   custodyUtxo,
   grantUtxo,
 } from '../custody-mocks';
+import { recordInFlight } from '../in-flight-mocks';
 
 import type {
   CardanoContextSliceState,
   RequiredProtocolParameters,
 } from '../../src';
-import type { Activity } from '@lace-contract/activities';
 import type { WalletEntity } from '@lace-contract/wallet-repo';
 import type { EraSummary } from '@lace-lib/cardano-core';
 import type {
@@ -79,6 +77,7 @@ const listed = (utxo: Cardano.Utxo) =>
     .grants[0];
 
 const emptyCardanoContext: CardanoContextSliceState = {
+  inFlightTransactions: {},
   accountTransactionHistory: {},
   accountRewardsHistory: {},
   networkInfo: {},
@@ -93,21 +92,12 @@ const emptyCardanoContext: CardanoContextSliceState = {
   securityRescanDismissedByAccount: {},
 };
 
-const pendingOperation = (
-  spent: Cardano.Utxo[],
-  produced: Cardano.Utxo[],
-): Activity => ({
-  accountId,
-  activityId: produced[0][0].txId,
-  timestamp: Timestamp(0),
-  tokenBalanceChanges: [],
-  type: ActivityType.Pending,
-  blockchainSpecific: Serializable.to({
-    Cardano: {
-      consumedInputs: spent.map(([input]) => input),
-      producedOutputs: produced,
-    },
-  }) as unknown,
+/** A custody operation in flight that spends `spent` and produces `produced`. */
+const pendingOperation = (spent: Cardano.Utxo[], produced: Cardano.Utxo[]) => ({
+  txId: produced[0][0].txId,
+  chainId: cardanoCustodyAccount.blockchainSpecific.chainId,
+  consumedInputs: spent.map(([input]) => input),
+  producedOutputs: produced,
 });
 
 const buildState = ({
@@ -118,7 +108,7 @@ const buildState = ({
   hasProtocolParameters = true,
 }: {
   settled?: Cardano.Utxo[];
-  pending?: Activity[];
+  pending?: ReturnType<typeof pendingOperation>[];
   /** `null` while no tip is known. */
   tip?: Cardano.Tip | null;
   /** `null` while no era history is known. */
@@ -161,13 +151,12 @@ const buildState = ({
     blockchainSpecific: {},
     accounts: [cardanoCustodyAccount],
   } as unknown as WalletEntity;
+  for (const operation of pending) {
+    cardanoContext = recordInFlight(cardanoContext, operation);
+  }
   return {
     cardanoContext,
-    activities: {
-      activities: { [accountId]: pending },
-      desiredLoadedActivitiesCountPerAccount: {},
-      hasLoadedOldestEntry: {},
-    },
+    activities: activitiesReducers.activities(undefined, { type: 'init' }),
     addresses: {
       addresses: [
         {

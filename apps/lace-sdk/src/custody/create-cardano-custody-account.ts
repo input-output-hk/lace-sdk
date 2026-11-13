@@ -254,6 +254,7 @@ const signAndSubmitCreation = async (
       witnesses: [sponsorWitness, deviceWitness],
       resolvedInputs: result.resolvedInputs,
     }),
+    chainId,
     accountId: account.accountId,
     address: result.accountRecord.address,
     resolvedInputs: result.resolvedInputs,

@@ -1,9 +1,7 @@
 import {
   CardanoRewardAccount,
   LOVELACE_TOKEN_ID,
-  filterSpendableUtxos,
   getEligibleCollateralUtxo,
-  utxoKey,
 } from '@lace-contract/cardano-context';
 import { Cardano } from '@lace-lib/cardano-core';
 import { InputSelectionError } from '@lace-lib/cardano-tx-builder';
@@ -72,9 +70,11 @@ import type { TxErrorTranslationKeys } from '@lace-contract/tx-executor';
 // Added to the tip SLOT (1 slot = 1s on Cardano), so this is a ~2h TTL buffer.
 export const TTL_BUFFER_SLOTS = 7200;
 
-// Nothing clears a pending row for a tx that never lands — no reaper, no TTL
-// sweep, no Cardano `Failed` transition — so without a cut-off this gate would
-// refuse the account forever. Removable once pending rows expire platform-side.
+// The in-flight store expires a designate that never lands, and removes its
+// pending row, only once the provider, asked after the tip passed the body's
+// validity bound, does not hold it. This gate keeps its own window, the TTL
+// buffer plus indexing slack, so it stops refusing the account on time even
+// while that answer is late.
 const PENDING_INDEXING_SLACK_MS = 600_000;
 export const LIVE_PENDING_WINDOW_MS =
   TTL_BUFFER_SLOTS * 1000 + PENDING_INDEXING_SLACK_MS;
@@ -270,11 +270,11 @@ const buildDesignation = async (
     const { accountId } = state;
     const cardano = dependencies.txExecutorCardano;
 
-    const [chainId, allAccountUtxos, unspendableUtxos, cardanoAddresses] =
+    const [chainId, accountUtxos, reservedUtxos, cardanoAddresses] =
       await Promise.all([
         firstValueFrom(cardano.cardanoChainId$),
-        firstValueFrom(cardano.cardanoAccountUtxos$),
-        firstValueFrom(cardano.cardanoAccountUnspendableUtxos$),
+        firstValueFrom(cardano.cardanoSettledAvailableAccountUtxos$),
+        firstValueFrom(cardano.cardanoSettledAccountUnspendableUtxos$),
         firstValueFrom(cardano.cardanoAddresses$),
       ]);
 
@@ -301,9 +301,7 @@ const buildDesignation = async (
     const { primaryAddress, paymentKeyHash, stakeKeyHash } =
       resolveAccountKeyHashes(cardanoAddresses, accountId);
 
-    const accountUtxos = allAccountUtxos[accountId] ?? [];
-    const reservedUtxos = unspendableUtxos[accountId] ?? [];
-    const spendable = filterSpendableUtxos(accountUtxos, reservedUtxos);
+    const spendable = accountUtxos[accountId] ?? [];
     const cnightAssetId = getCnightAssetId(network);
     const cnightUtxos = spendable.filter(([, out]) =>
       out.value.assets?.has(cnightAssetId),
@@ -313,17 +311,11 @@ const buildDesignation = async (
       ([, out]) => !out.value.assets?.has(cnightAssetId),
     );
 
-    // Matched against the settled account UTxOs rather than the reserved list
-    // itself: that list is pruned by a side-effect reacting to UTxO changes, so
-    // until it fires it can still name a spent UTxO.
-    const reservedKeys = new Set(reservedUtxos.map(utxoKey));
     const reservedCollateral = getEligibleCollateralUtxo(
-      accountUtxos.filter(
-        utxo =>
-          reservedKeys.has(utxoKey(utxo)) &&
-          // Keep the reservation on the payment key this builder already
-          // requires, independently of the signer's collateral resolver.
-          utxo[1].address === primaryAddress,
+      (reservedUtxos[accountId] ?? []).filter(
+        // Keep the reservation on the payment key this builder already
+        // requires, independently of the signer's collateral resolver.
+        utxo => utxo[1].address === primaryAddress,
       ),
     );
 

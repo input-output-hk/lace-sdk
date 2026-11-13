@@ -1,10 +1,11 @@
 // The stable SDK build resolves this file in place of account-extensions.ts:
 // the stable SDK holds no account kind the canary features add, so every
-// account syncs as a key or multi-signature account and no side effect is
-// added.
+// account syncs as a key or multi-signature account, and no pending activity
+// records a feature's validity bound.
 import { EMPTY } from 'rxjs';
 
-import type { CardanoSyncAction, SideEffect } from '../../module';
+import type { CardanoSyncAction } from '../../module';
+import type { Activity } from '@lace-contract/activities';
 import type { AnyAccount } from '@lace-contract/wallet-repo';
 import type { Cardano } from '@lace-lib/cardano-core';
 import type { Observable } from 'rxjs';
@@ -23,5 +24,7 @@ export const extensionAccountUtxos = (
   _params: Record<string, unknown> & { account: never },
 ): Observable<Cardano.Utxo[]> => EMPTY;
 
-/** The sync side effects the features add: none. */
-export const extensionSyncSideEffects: SideEffect[] = [];
+/** The validity bound a feature's pending activity records: none exists. */
+export const extensionActivityValidityBound = (
+  _activity: Activity,
+): Cardano.Slot | undefined => undefined;

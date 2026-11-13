@@ -14,7 +14,7 @@ const pendingWith = (custody: unknown): Activity => ({
   tokenBalanceChanges: [],
   type: ActivityType.Pending,
   blockchainSpecific: {
-    Cardano: { consumedInputs: [], producedOutputs: [], custody },
+    Cardano: { custody },
   } as Activity['blockchainSpecific'],
 });
 

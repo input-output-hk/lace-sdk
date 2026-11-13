@@ -1,4 +1,4 @@
-import { activitiesSelectors } from '@lace-contract/activities';
+import { activitiesSelectors, ActivityType } from '@lace-contract/activities';
 import { addressesSelectors } from '@lace-contract/addresses';
 import { failuresSelectors } from '@lace-contract/failures';
 import { markParameterizedSelector } from '@lace-contract/module';
@@ -10,6 +10,7 @@ import {
   walletsActions,
   walletsSelectors,
 } from '@lace-contract/wallet-repo';
+import { Cardano } from '@lace-lib/cardano-core';
 import { Serializable } from '@lace-lib/util-store';
 import { createAction, createSelector, createSlice } from '@reduxjs/toolkit';
 import BigNumber from 'bignumber.js';
@@ -23,6 +24,7 @@ import {
   ownPendingOutputs,
   pendingRewardWithdrawals,
 } from '../apply-in-flight-utxo-adjustments';
+import { UNBOUNDED_IN_FLIGHT_SLOTS } from '../const';
 import {
   extensionActions,
   extensionReducers,
@@ -33,6 +35,7 @@ import { EXPLOIT_DESCRIPTORS } from '../security/exploit-descriptors';
 import {
   filterSpendableUtxos,
   getEligibleCollateralUtxo,
+  outpointKey,
   utxoKey,
   isCardanoAccount,
 } from '../util';
@@ -62,9 +65,11 @@ import type {
   CardanoAccountToRewardAccountsMap,
   CardanoAccountToRewardsMap,
   CardanoAccountTransactionsHistoryMap,
+  CardanoInFlightEffects,
   CardanoRewardAccount,
   CardanoRewardAccountToRewardMap,
   CardanoTransactionHistoryItem,
+  CardanoTransactionInclusion,
   RequiredProtocolParameters,
   Reward,
   RewardAccountDetails,
@@ -90,8 +95,8 @@ import type {
 import type { TranslationKey } from '@lace-contract/i18n';
 import type { TokenId } from '@lace-contract/tokens';
 import type { AnyAccount } from '@lace-contract/wallet-repo';
-import type { Cardano, EraSummary } from '@lace-lib/cardano-core';
-import type { HexBytes } from '@lace-lib/util';
+import type { EraSummary } from '@lace-lib/cardano-core';
+import type { HexBytes, Timestamp } from '@lace-lib/util';
 import type {
   PayloadAction,
   StateFromReducersMapObject,
@@ -116,7 +121,72 @@ export type AccountUtxoEntry = {
   cacheKey?: UtxoCacheKey;
 };
 
+/**
+ * Identifies an in-flight transaction on one Cardano network:
+ * `${CardanoNetworkId}:${txId}`. Preview and Preprod share address encodings,
+ * so the same body can be valid on both, and each network keeps its own entry
+ * (ADR 11).
+ */
+export type InFlightTransactionKey = `${CardanoNetworkId}:${string}`;
+
+/**
+ * A Cardano transaction a provider accepted that has not settled or expired
+ * yet. It names no account: every UTxO, balance, collateral-ownership and
+ * reward-withdrawal view applies the entries of the account's network and
+ * resolves at read time which effects are the account's own.
+ */
+export type InFlightTransaction = {
+  /** The network the transaction was submitted to. */
+  chainId: Cardano.ChainId;
+  txId: CardanoTxId;
+  effects: Serializable<CardanoInFlightEffects>;
+  /**
+   * Slot past which the transaction can no longer be included: the body's
+   * upper validity bound, else the first network tip the wallet receives
+   * after the entry was recorded plus `UNBOUNDED_IN_FLIGHT_SLOTS`. Absent
+   * only for a body without a bound until that tip arrives.
+   */
+  invalidHereafter?: Cardano.Slot;
+  /** Epoch milliseconds when the provider accepted the transaction. */
+  submittedAt: Timestamp;
+  /**
+   * The provider's answer whether the chain holds the transaction, asked
+   * once its network's stored tip is past `invalidHereafter` by
+   * `UTXO_SYNC_CONFIRMATION_DEPTH`. The reconcile reads it as proof that the
+   * transaction landed or can no longer settle.
+   */
+  lookup?: InFlightTransactionLookup;
+};
+
+/** What the provider answered about an in-flight transaction. */
+export type InFlightTransactionLookup = {
+  /**
+   * The stored tip slot of the transaction's network, read before the
+   * request, so the provider answered from an index that had reached it, less
+   * the lag the wallet allows its provider.
+   */
+  tipSlot: Cardano.Slot;
+  /** Where the chain included the transaction, `null` when it does not hold it. */
+  inclusion: CardanoTransactionInclusion | null;
+};
+
+/** An {@link InFlightTransaction} with its effects decoded. */
+export type DecodedInFlightTransaction = Omit<
+  InFlightTransaction,
+  'effects'
+> & {
+  effects: CardanoInFlightEffects;
+};
+
 export type CardanoContextSliceState = {
+  /**
+   * Every accepted Cardano transaction that has not settled or expired yet
+   * (persisted): the one record of an in-flight spend. Pending activities are
+   * display rows; no in-flight view reads a row's metadata.
+   */
+  inFlightTransactions: Partial<
+    Record<InFlightTransactionKey, InFlightTransaction>
+  >;
   accountTransactionHistory: CardanoAccountAddressHistoryMap;
   accountRewardsHistory: CardanoAccountToRewardAccountsMap;
   accountDelegationsHistory: CardanoAccountToDelegationAccountsMap;
@@ -166,6 +236,7 @@ export type CardanoContextSliceState = {
 };
 
 export const initialState: CardanoContextSliceState = {
+  inFlightTransactions: {},
   accountTransactionHistory: {},
   accountRewardsHistory: {},
   networkInfo: {},
@@ -184,6 +255,19 @@ export const initialState: CardanoContextSliceState = {
 const EMPTY_DELEGATION_ACTIVITIES =
   {} as CardanoContextSliceState['delegationActivities'];
 const EMPTY_REWARDS: Reward[] = [];
+const EMPTY_IN_FLIGHT_TRANSACTIONS: Readonly<
+  Record<InFlightTransactionKey, DecodedInFlightTransaction>
+> = {};
+const EMPTY_IN_FLIGHT_EFFECTS: readonly CardanoInFlightEffects[] = [];
+const EMPTY_IN_FLIGHT_EFFECTS_BY_ACCOUNT: Partial<
+  Record<AccountId, readonly CardanoInFlightEffects[]>
+> = {};
+
+const inFlightTransactionKey = (
+  chainId: Cardano.ChainId,
+  txId: CardanoTxId,
+): InFlightTransactionKey =>
+  `${CardanoNetworkId(chainId.networkMagic)}:${txId}`;
 
 /**
  * Returns the timestamp of a history item.
@@ -207,6 +291,55 @@ const slice = createSlice({
   name: 'cardanoContext',
   initialState,
   reducers: {
+    /**
+     * Records a transaction a provider accepted, so every in-flight view
+     * applies its effects until it settles or can no longer settle. Dispatch
+     * it only after the provider accepted the bytes, with
+     * `inFlightTransactionOf`.
+     *
+     * Keeps the entry the store already holds for the transaction on that
+     * network unchanged: a repeated acceptance or record never extends its
+     * bound or moves `submittedAt`. A body without an upper validity bound is
+     * stored without one; `setTip` gives it its cut-off, whoever recorded it.
+     *
+     * What every writer records, the readers and when an entry goes:
+     * `packages/module/cardano-sync/docs/in-flight-transactions.md`.
+     */
+    recordInFlightTransaction: {
+      reducer: (state, { payload }: PayloadAction<InFlightTransaction>) => {
+        const key = inFlightTransactionKey(payload.chainId, payload.txId);
+        if (state.inFlightTransactions[key]) return;
+        state.inFlightTransactions[key] = payload;
+      },
+      prepare: ({ effects, ...entry }: DecodedInFlightTransaction) => ({
+        payload: { ...entry, effects: Serializable.to(effects) },
+      }),
+    },
+    /** Removes the entries of transactions that settled or can no longer settle. */
+    removeInFlightTransactions: (
+      state,
+      { payload: { keys } }: PayloadAction<{ keys: InFlightTransactionKey[] }>,
+    ) => {
+      for (const key of keys) delete state.inFlightTransactions[key];
+    },
+    /**
+     * Records the provider's answer whether the chain holds an in-flight
+     * transaction on the entry of `key`. Changes no other field of the entry,
+     * and nothing when the store holds no entry for the key, such as one
+     * removed while the provider answered.
+     */
+    recordInFlightTransactionLookup: (
+      state,
+      {
+        payload: { key, lookup },
+      }: PayloadAction<{
+        key: InFlightTransactionKey;
+        lookup: InFlightTransactionLookup;
+      }>,
+    ) => {
+      const entry = state.inFlightTransactions[key];
+      if (entry) entry.lookup = lookup;
+    },
     /**
      * Rebuild one Cardano account's chain-derived state without removing credentials or collateral.
      * Requires the cardano-sync module's thorough discovery, chained transaction polling,
@@ -245,6 +378,13 @@ const slice = createSlice({
       delete state.accountDelegationsHistory[accountId];
       delete state.delegationActivities[accountId];
     },
+    /**
+     * Stores a tip the provider reported for the network. Every in-flight
+     * entry of that network without an upper validity bound gets the cut-off
+     * of this tip plus `UNBOUNDED_IN_FLIGHT_SLOTS`, so a transaction recorded
+     * before any tip, or after a tip restored from storage, is bounded from
+     * the first fresh tip after it. A bound once set never moves.
+     */
     setTip: (
       state,
       {
@@ -253,6 +393,17 @@ const slice = createSlice({
     ) => {
       state.networkInfo[network] ||= {};
       state.networkInfo[network].tip = tip;
+      for (const entry of Object.values(state.inFlightTransactions)) {
+        if (
+          entry &&
+          entry.invalidHereafter === undefined &&
+          CardanoNetworkId(entry.chainId.networkMagic) === network
+        ) {
+          entry.invalidHereafter = Cardano.Slot(
+            tip.slot + UNBOUNDED_IN_FLIGHT_SLOTS,
+          );
+        }
+      }
     },
     setProtocolParameters: (
       state,
@@ -746,6 +897,8 @@ const slice = createSlice({
         return accountRewardsHistory;
       },
     ),
+    selectInFlightTransactionsRaw: ({ inFlightTransactions }) =>
+      inFlightTransactions,
     selectAllNetworkInfo: state => state.networkInfo,
     selectAccountUtxosRaw: ({ accountUtxos }) => accountUtxos,
     selectAccountUnspendableUtxosRaw: ({ accountUnspendableUtxos }) =>
@@ -982,22 +1135,178 @@ const selectRewardAccountDetails = createSelector(
   },
 );
 
-const { selectPendingActivitiesByAccount } = activitiesSelectors.activities;
+const decodedInFlightTransactions = new WeakMap<
+  InFlightTransaction,
+  DecodedInFlightTransaction
+>();
+
+const decodeInFlightTransaction = (
+  entry: InFlightTransaction,
+): DecodedInFlightTransaction => {
+  let decoded = decodedInFlightTransactions.get(entry);
+  if (!decoded) {
+    decoded = {
+      ...entry,
+      effects: Serializable.fromCached<CardanoInFlightEffects>(entry.effects),
+    };
+    decodedInFlightTransactions.set(entry, decoded);
+  }
+  return decoded;
+};
 
 /**
- * Rewards each reward account has withdrawn in not-yet-settled transactions.
- * A builder reads this to avoid withdrawing the same rewards twice; it must
- * not derive a withdrawal amount from it.
+ * Every in-flight Cardano transaction with its effects decoded, by
+ * {@link InFlightTransactionKey}, across all networks. A stored entry that
+ * did not change decodes to the same object on every emission, and with no
+ * entry the result is one stable empty object.
  */
-const selectPendingRewardWithdrawals = createSelector(
-  selectPendingActivitiesByAccount,
-  addressesSelectors.addresses.selectAllAddresses,
-  pendingRewardWithdrawals,
+const selectInFlightTransactions = createSelector(
+  slice.selectors.selectInFlightTransactionsRaw,
+  (
+    raw,
+  ): Readonly<Record<InFlightTransactionKey, DecodedInFlightTransaction>> => {
+    const keys = Object.keys(raw) as InFlightTransactionKey[];
+    if (keys.length === 0) return EMPTY_IN_FLIGHT_TRANSACTIONS;
+    const result: Record<InFlightTransactionKey, DecodedInFlightTransaction> =
+      {};
+    for (const key of keys) {
+      const entry = raw[key];
+      if (entry) result[key] = decodeInFlightTransaction(entry);
+    }
+    return result;
+  },
+);
+
+/** The decoded effects of every in-flight transaction, by network. */
+const selectInFlightEffectsByNetwork = createSelector(
+  selectInFlightTransactions,
+  (inFlight): Partial<Record<CardanoNetworkId, CardanoInFlightEffects[]>> => {
+    const result: Partial<Record<CardanoNetworkId, CardanoInFlightEffects[]>> =
+      {};
+    for (const { chainId, effects } of Object.values(inFlight)) {
+      (result[CardanoNetworkId(chainId.networkMagic)] ??= []).push(effects);
+    }
+    return result;
+  },
+);
+
+const haveSameNetworks = (
+  a: Partial<Record<AccountId, CardanoNetworkId>>,
+  b: Partial<Record<AccountId, CardanoNetworkId>>,
+): boolean => {
+  const accountIds = Object.keys(a) as AccountId[];
+  return (
+    accountIds.length === Object.keys(b).length &&
+    accountIds.every(accountId => a[accountId] === b[accountId])
+  );
+};
+
+/**
+ * The network of every Cardano account of every wallet. Keeps its reference
+ * until a Cardano account is added or removed, so the in-flight views do not
+ * recompute on unrelated wallet updates.
+ */
+const selectCardanoNetworkByAccount = createSelector(
+  walletsSelectors.wallets.selectAll,
+  (wallets): Partial<Record<AccountId, CardanoNetworkId>> => {
+    const result: Partial<Record<AccountId, CardanoNetworkId>> = {};
+    for (const { accounts } of wallets) {
+      for (const account of accounts) {
+        if (isCardanoAccount(account)) {
+          result[account.accountId] =
+            account.blockchainNetworkId as CardanoNetworkId;
+        }
+      }
+    }
+    return result;
+  },
+  { memoizeOptions: { resultEqualityCheck: haveSameNetworks } },
 );
 
 /**
- * The BALANCE view of the reward details: withdrawable rewards minus those a
- * pending transaction already moved into its outputs (see
+ * The in-flight effects each Cardano account applies: those of every entry of
+ * the account's network, whatever recorded it. Only the accounts of a network
+ * that has entries appear.
+ */
+const selectInFlightEffectsByAccount = createSelector(
+  selectInFlightEffectsByNetwork,
+  selectCardanoNetworkByAccount,
+  (
+    inFlightByNetwork,
+    networkByAccount,
+  ): Partial<Record<AccountId, readonly CardanoInFlightEffects[]>> => {
+    if (Object.keys(inFlightByNetwork).length === 0)
+      return EMPTY_IN_FLIGHT_EFFECTS_BY_ACCOUNT;
+    const result: Partial<
+      Record<AccountId, readonly CardanoInFlightEffects[]>
+    > = {};
+    for (const [accountId, networkId] of Object.entries(networkByAccount)) {
+      const inFlight = networkId && inFlightByNetwork[networkId];
+      if (inFlight) result[AccountId(accountId)] = inFlight;
+    }
+    return result;
+  },
+);
+
+/**
+ * Spend and balance adjustments, including confirmed spends after their
+ * in-flight entries leave. A delayed parent acceptance must not offer change
+ * a reconciled child already spent, even with an unchanged synced snapshot.
+ */
+const selectUtxoAdjustmentEffectsByAccount = createSelector(
+  selectInFlightEffectsByAccount,
+  activitiesSelectors.activities.selectAllMap,
+  selectCardanoNetworkByAccount,
+  (inFlightByAccount, activitiesByAccount, networkByAccount) => {
+    const confirmedByNetwork = new Map<
+      CardanoNetworkId,
+      CardanoInFlightEffects[]
+    >();
+    for (const [accountId, activities] of Object.entries(activitiesByAccount)) {
+      const networkId = networkByAccount[AccountId(accountId)];
+      if (!networkId) continue;
+      for (const activity of activities) {
+        if (activity.type === ActivityType.Pending) continue;
+        const consumedInputs = (
+          activity.blockchainSpecific as
+            | BlockchainSpecificActivityMetadata
+            | undefined
+        )?.Cardano?.consumedInputs;
+        if (!consumedInputs?.length) continue;
+        const effects = confirmedByNetwork.get(networkId) ?? [];
+        effects.push({ consumedInputs, producedOutputs: [] });
+        confirmedByNetwork.set(networkId, effects);
+      }
+    }
+    if (confirmedByNetwork.size === 0) return inFlightByAccount;
+    const result = { ...inFlightByAccount };
+    for (const [accountId, networkId] of Object.entries(networkByAccount)) {
+      const confirmed = networkId && confirmedByNetwork.get(networkId);
+      if (confirmed) {
+        result[AccountId(accountId)] = [
+          ...(inFlightByAccount[AccountId(accountId)] ??
+            EMPTY_IN_FLIGHT_EFFECTS),
+          ...confirmed,
+        ];
+      }
+    }
+    return result;
+  },
+);
+
+/**
+ * Rewards each reward account has withdrawn in in-flight transactions, on
+ * the network of each transaction. A builder reads this to avoid withdrawing
+ * the same rewards twice; it must not derive a withdrawal amount from it.
+ */
+const selectPendingRewardWithdrawals = createSelector(
+  selectInFlightTransactions,
+  inFlight => pendingRewardWithdrawals(Object.values(inFlight)),
+);
+
+/**
+ * The BALANCE view of the reward details: withdrawable rewards minus those an
+ * in-flight transaction already moved into its outputs (see
  * `applyPendingRewardWithdrawals`). For balance accounting only; screens and
  * builders that need what the chain reports read
  * {@link selectRewardAccountDetails}.
@@ -1030,42 +1339,48 @@ const selectCardanoAddressesByAccount = createSelector(
  * collateral-return rule must treat as this account's.
  *
  * The full settled set — collateral-reserved UTxOs INCLUDED — unioned with the
- * account's own outputs of transactions it has submitted but not yet seen
- * settle. Built only by union: a UTxO missing here is one the guard will let a
- * dApp send to a foreign collateral return.
+ * outputs the in-flight transactions of the account's network pay to its
+ * addresses. Built only by union: a UTxO missing here is one the guard will
+ * let a dApp send to a foreign collateral return.
  *
  * NOT {@link selectAvailableAccountUtxos}, which subtracts the reserved set,
  * and NOT {@link selectAccountUtxosWithInFlight}, which also drops the inputs
- * our own pending transactions consume — those still exist on chain until the
- * spend confirms, so someone else can still name them as collateral.
+ * in-flight transactions consume — those still exist on chain until the spend
+ * confirms, so someone else can still name them as collateral.
  *
- * An ordinary Send is why the pending half matters: its change reaches this
- * account through the pending activity, `getUtxos` serves it to the dApp, and
+ * An ordinary Send is why the in-flight half matters: its change reaches this
+ * account through the in-flight store, `getUtxos` serves it to the dApp, and
  * it is absent from the settled set until the provider catches up.
  */
 const selectCollateralOwnershipUtxos = createSelector(
   selectAccountUtxos,
-  selectPendingActivitiesByAccount,
+  selectInFlightEffectsByAccount,
   selectCardanoAddressesByAccount,
-  (accountUtxos, pendingActivitiesByAccount, addressesByAccount) => {
+  (accountUtxos, inFlightByAccount, addressesByAccount) => {
     const result: AccountUtxoMap = {};
 
     // Union of both key sets, as `selectAccountUtxosWithInFlight` does: a
-    // freshly funded account can hold a pending credit before its first
+    // freshly funded account can hold an in-flight credit before its first
     // settled fetch lands, and iterating settled alone would omit the account
     // entirely — every collateral input it holds would then read as foreign.
     const accountIds = new Set([
       ...Object.keys(accountUtxos),
-      ...Object.keys(pendingActivitiesByAccount),
+      ...Object.keys(inFlightByAccount),
     ]);
     for (const accountId of accountIds) {
-      const settled = accountUtxos[AccountId(accountId)] ?? EMPTY_UTXOS;
+      const settled = accountUtxos[AccountId(accountId)];
       const pending = ownPendingOutputs(
-        pendingActivitiesByAccount[AccountId(accountId)] ?? [],
+        inFlightByAccount[AccountId(accountId)] ?? EMPTY_IN_FLIGHT_EFFECTS,
         addressesByAccount[AccountId(accountId)] ?? EMPTY_CARDANO_ADDRESSES,
       );
+      // Without a settled set an account appears only once an entry credits
+      // it: absent still means nothing is known of its UTxOs.
+      if (!settled && pending.length === 0) continue;
       const byOutpoint = new Map(
-        [...settled, ...pending].map(utxo => [utxoKey(utxo), utxo]),
+        [...(settled ?? EMPTY_UTXOS), ...pending].map(utxo => [
+          utxoKey(utxo),
+          utxo,
+        ]),
       );
       result[AccountId(accountId)] = [...byOutpoint.values()];
     }
@@ -1075,8 +1390,15 @@ const selectCollateralOwnershipUtxos = createSelector(
 );
 
 /**
- * What each account's transactions can spend: the settled set minus the
- * reserved collateral, with in-flight adjustments applied.
+ * What each account's transactions can spend: the settled set with the
+ * in-flight transactions of the account's network applied, minus confirmed
+ * spent inputs and the reserved collateral.
+ *
+ * The reserved set is subtracted last, by outpoint, so a reserved output stays
+ * out even when an in-flight transaction produces it: the chain refresh can
+ * settle that output, and the collateral flow reserve it, while the
+ * transaction is still in flight. A reserved outpoint known only as an
+ * in-flight output stays out the same way.
  *
  * Accounts whose UTxOs a script locks are left out (see
  * `selectAccountIdsExcludedFromSpending`): only their own builders may spend
@@ -1087,13 +1409,13 @@ const selectCollateralOwnershipUtxos = createSelector(
 const selectAvailableAccountUtxos = createSelector(
   selectAccountUtxos,
   selectAccountUnspendableUtxos,
-  selectPendingActivitiesByAccount,
+  selectUtxoAdjustmentEffectsByAccount,
   selectCardanoAddressesByAccount,
   selectAccountIdsExcludedFromSpending,
   (
     accountUtxos,
     accountUnspendableUtxos,
-    pendingActivitiesByAccount,
+    inFlightByAccount,
     addressesByAccount,
     excludedAccountIds,
   ): AccountUtxoMap => {
@@ -1101,14 +1423,14 @@ const selectAvailableAccountUtxos = createSelector(
 
     for (const [accountId, utxos] of Object.entries(accountUtxos)) {
       if (excludedAccountIds.has(accountId)) continue;
-      const spendable = filterSpendableUtxos(
+      const withInFlight = applyInFlightUtxoAdjustments(
         utxos,
-        accountUnspendableUtxos[AccountId(accountId)] ?? [],
-      );
-      result[AccountId(accountId)] = applyInFlightUtxoAdjustments(
-        spendable,
         addressesByAccount[AccountId(accountId)] ?? EMPTY_CARDANO_ADDRESSES,
-        pendingActivitiesByAccount[AccountId(accountId)] ?? [],
+        inFlightByAccount[AccountId(accountId)] ?? EMPTY_IN_FLIGHT_EFFECTS,
+      );
+      result[AccountId(accountId)] = filterSpendableUtxos(
+        withInFlight,
+        accountUnspendableUtxos[AccountId(accountId)] ?? EMPTY_UTXOS,
       );
     }
 
@@ -1118,11 +1440,13 @@ const selectAvailableAccountUtxos = createSelector(
 /* eslint-enable max-params */
 
 /**
- * The BALANCE view of each account's UTxOs: the settled set with in-flight
- * adjustments applied — a submitted transaction's consumed inputs leave the
- * spending account and its outputs credit the receiving account immediately,
- * so value in flight between own accounts (a migration sweep) is counted
- * exactly once instead of twice while providers catch up.
+ * The BALANCE view of each account's UTxOs: the settled set with the
+ * in-flight transactions of the account's network applied — a submitted
+ * transaction's consumed inputs leave the spending account and its outputs
+ * credit the receiving account immediately, so value in flight between own
+ * accounts (a migration sweep) is counted exactly once instead of twice while
+ * providers catch up. Confirmed spent inputs remain excluded after their
+ * in-flight entries leave.
  *
  * Differs from {@link selectAvailableAccountUtxos} by NOT filtering the
  * unspendable (collateral) set: that answers "what can a transaction spend",
@@ -1130,30 +1454,113 @@ const selectAvailableAccountUtxos = createSelector(
  */
 const selectAccountUtxosWithInFlight = createSelector(
   selectAccountUtxos,
-  selectPendingActivitiesByAccount,
+  selectUtxoAdjustmentEffectsByAccount,
   selectCardanoAddressesByAccount,
-  (
-    accountUtxos,
-    pendingActivitiesByAccount,
-    addressesByAccount,
-  ): AccountUtxoMap => {
+  (accountUtxos, inFlightByAccount, addressesByAccount): AccountUtxoMap => {
     const result: AccountUtxoMap = {};
 
     // Union of both key sets: a freshly created receiving account can hold an
     // in-flight credit before its first settled UTxO fetch lands.
     const accountIds = new Set([
       ...Object.keys(accountUtxos),
-      ...Object.keys(pendingActivitiesByAccount),
+      ...Object.keys(inFlightByAccount),
     ]);
     for (const accountId of accountIds) {
-      result[AccountId(accountId)] = applyInFlightUtxoAdjustments(
-        accountUtxos[AccountId(accountId)] ?? EMPTY_UTXOS,
+      const settled = accountUtxos[AccountId(accountId)];
+      const withInFlight = applyInFlightUtxoAdjustments(
+        settled ?? EMPTY_UTXOS,
         addressesByAccount[AccountId(accountId)] ?? EMPTY_CARDANO_ADDRESSES,
-        pendingActivitiesByAccount[AccountId(accountId)] ?? [],
+        inFlightByAccount[AccountId(accountId)] ?? EMPTY_IN_FLIGHT_EFFECTS,
+      );
+      // Without a settled set an account appears only once an entry credits
+      // it: absent still means nothing is known of its UTxOs.
+      if (settled || withInFlight.length > 0) {
+        result[AccountId(accountId)] = withInFlight;
+      }
+    }
+
+    return result;
+  },
+);
+
+/**
+ * The settled UTxOs that {@link selectAvailableAccountUtxos} also lists, as
+ * the settled tuples: on chain and spendable now. A pick that must already
+ * exist on chain, such as a new collateral reservation, reads this.
+ *
+ * Holds only the accounts {@link selectAvailableAccountUtxos} holds. Returns
+ * an account's settled array itself when the two agree.
+ */
+const selectSettledAvailableAccountUtxos = createSelector(
+  selectAccountUtxos,
+  selectAvailableAccountUtxos,
+  (accountUtxos, availableAccountUtxos): AccountUtxoMap => {
+    const result: AccountUtxoMap = {};
+
+    for (const [accountId, available] of Object.entries(
+      availableAccountUtxos,
+    )) {
+      const settled = accountUtxos[AccountId(accountId)] ?? EMPTY_UTXOS;
+      if (available === settled) {
+        result[AccountId(accountId)] = settled;
+        continue;
+      }
+      const availableKeys = new Set(available.map(utxoKey));
+      result[AccountId(accountId)] = settled.filter(utxo =>
+        availableKeys.has(utxoKey(utxo)),
       );
     }
 
     return result;
+  },
+);
+
+const EMPTY_ACCOUNT_UNSPENDABLE_UTXOS: AccountUnspendableUtxoMap = {};
+
+/**
+ * The reserved collateral a transaction can name now: settled, with no known
+ * in-flight or confirmed spend. {@link selectAccountUnspendableUtxos} is the whole
+ * reservation, which the collateral screens show and the collateral flow
+ * keeps, and which can hold an output the flow reserved while its transaction
+ * was still in flight.
+ *
+ * Holds only the accounts with a reservation. Returns an account's reserved
+ * array itself when none of it is left out, and one shared empty map when
+ * nothing is reserved.
+ */
+const selectSettledAccountUnspendableUtxos = createSelector(
+  selectAccountUnspendableUtxos,
+  selectAccountUtxos,
+  selectUtxoAdjustmentEffectsByAccount,
+  (
+    accountUnspendableUtxos,
+    accountUtxos,
+    inFlightByAccount,
+  ): AccountUnspendableUtxoMap => {
+    const result: AccountUnspendableUtxoMap = {};
+    let hasReservation = false;
+
+    for (const [accountId, reserved] of Object.entries(
+      accountUnspendableUtxos,
+    )) {
+      if (reserved.length === 0) continue;
+      hasReservation = true;
+      const settledKeys = new Set(
+        (accountUtxos[AccountId(accountId)] ?? EMPTY_UTXOS).map(utxoKey),
+      );
+      const spentKeys = new Set(
+        (
+          inFlightByAccount[AccountId(accountId)] ?? EMPTY_IN_FLIGHT_EFFECTS
+        ).flatMap(({ consumedInputs }) => consumedInputs.map(outpointKey)),
+      );
+      const nameable = reserved.filter(
+        utxo => settledKeys.has(utxoKey(utxo)) && !spentKeys.has(utxoKey(utxo)),
+      );
+      result[AccountId(accountId)] =
+        nameable.length === reserved.length ? reserved : nameable;
+    }
+
+    return hasReservation ? result : EMPTY_ACCOUNT_UNSPENDABLE_UTXOS;
   },
 );
 
@@ -1688,7 +2095,10 @@ export const cardanoContextSelectors = {
     selectRewardAccountDetails,
     selectRewardAccountDetailsWithInFlight,
     selectPendingRewardWithdrawals,
+    selectInFlightTransactions,
     selectAvailableAccountUtxos,
+    selectSettledAvailableAccountUtxos,
+    selectSettledAccountUnspendableUtxos,
     selectAvailableAccountUtxosWithEligibleCollateral,
     selectCombinedTransactionHistory,
     selectStakingStatus,

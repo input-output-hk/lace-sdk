@@ -113,8 +113,7 @@ const makeDependencies = (
     txExecutorCardano: {
       cardanoNetworkMagic$: of(networkMagic),
       cardanoProtocolParameters$: of(protocolParameters),
-      cardanoAccountUtxos$: of({ [testAccountId]: utxos }),
-      cardanoAccountUnspendableUtxos$: of({}),
+      cardanoSettledAvailableAccountUtxos$: of({ [testAccountId]: utxos }),
       cardanoAddresses$: of(addresses),
       cardanoRewardAccountDetails$: of(details),
     },

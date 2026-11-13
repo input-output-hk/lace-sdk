@@ -196,7 +196,6 @@ export const mapTransactionToActivity = ({
         blockchainSpecific: {
           Cardano: {
             consumedInputs: spentOutpoints,
-            producedOutputs: [],
             producedOwnOutpoints,
             slot: txDetails.blockHeader.slot,
             ...extensionActivity?.metadata,

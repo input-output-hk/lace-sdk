@@ -20,6 +20,28 @@ export type RewardWithdrawal = {
 };
 
 /**
+ * Whether an in-flight transaction already withdraws the rewards of
+ * `rewardAccount` on the network. Until it settles, the fetched balance is
+ * stale and the on-chain one unknown, and the ledger only accepts the whole
+ * balance, so no withdrawal amount a builder could name would be valid.
+ */
+export const isRewardWithdrawalPending = ({
+  pendingRewardWithdrawals,
+  networkMagic,
+  rewardAccount,
+}: {
+  pendingRewardWithdrawals: PendingRewardWithdrawals;
+  /** The network the transaction is built for. */
+  networkMagic: Cardano.NetworkMagic;
+  rewardAccount: Cardano.RewardAccount;
+}): boolean => {
+  const pending = pendingRewardWithdrawals.get(
+    pendingRewardWithdrawalKey(networkMagic, rewardAccount),
+  );
+  return pending !== undefined && pending > 0n;
+};
+
+/**
  * The reward balance an ordinary send may withdraw, or `undefined` when the
  * ledger would refuse the withdrawal and the send must stay UTxO-funded.
  *
@@ -47,13 +69,14 @@ export const resolveRewardWithdrawal = ({
   );
   if (!info || !stakeKey) return undefined;
 
-  // A pending transaction already withdraws these rewards. Until it settles,
-  // the fetched balance is stale and the on-chain one unknown, and the ledger
-  // only accepts the whole balance, so no amount here would be valid.
-  const pending = pendingRewardWithdrawals.get(
-    pendingRewardWithdrawalKey(networkMagic, Cardano.RewardAccount(stakeKey)),
-  );
-  if (pending !== undefined && pending > 0n) return undefined;
+  if (
+    isRewardWithdrawalPending({
+      pendingRewardWithdrawals,
+      networkMagic,
+      rewardAccount: Cardano.RewardAccount(stakeKey),
+    })
+  )
+    return undefined;
 
   const amount = BigNumber.valueOf(info.withdrawableAmount);
   // Conway refuses a withdrawal from an unregistered stake key, and from one

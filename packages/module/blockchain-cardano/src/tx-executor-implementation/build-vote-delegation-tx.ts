@@ -1,7 +1,4 @@
-import {
-  LOVELACE_TOKEN_ID,
-  filterSpendableUtxos,
-} from '@lace-contract/cardano-context';
+import { LOVELACE_TOKEN_ID } from '@lace-contract/cardano-context';
 import { Cardano } from '@lace-lib/cardano-core';
 import { TransactionBuilder } from '@lace-lib/cardano-tx-builder';
 import { BigNumber } from '@lace-lib/util';
@@ -62,8 +59,7 @@ export const makeBuildVoteDelegationTx =
       const [
         networkMagic,
         protocolParameters,
-        allAccountUtxos,
-        unspendableAccountUtxos,
+        accountUtxos,
         cardanoAddresses,
         rewardAccountDetails,
       ] = await Promise.all([
@@ -71,9 +67,8 @@ export const makeBuildVoteDelegationTx =
         firstValueFrom(
           dependencies.txExecutorCardano.cardanoProtocolParameters$,
         ),
-        firstValueFrom(dependencies.txExecutorCardano.cardanoAccountUtxos$),
         firstValueFrom(
-          dependencies.txExecutorCardano.cardanoAccountUnspendableUtxos$,
+          dependencies.txExecutorCardano.cardanoSettledAvailableAccountUtxos$,
         ),
         firstValueFrom(dependencies.txExecutorCardano.cardanoAddresses$),
         firstValueFrom(
@@ -97,10 +92,7 @@ export const makeBuildVoteDelegationTx =
 
       refuseExtensionAccount(accountId, cardanoAddresses);
 
-      const availableUtxo = filterSpendableUtxos(
-        allAccountUtxos[accountId] ?? [],
-        unspendableAccountUtxos[accountId] ?? [],
-      );
+      const availableUtxo = accountUtxos[accountId] ?? [];
 
       const accountAddresses: AnyAddress[] = cardanoAddresses.filter(
         (addr): addr is AnyAddress =>

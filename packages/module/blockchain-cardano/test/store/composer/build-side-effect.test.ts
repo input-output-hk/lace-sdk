@@ -76,15 +76,6 @@ const spendableUtxo: Cardano.Utxo = [
   { address: ownAddress, value: { coins: 100_000_000n } },
 ];
 
-const unspendableUtxo: Cardano.Utxo = [
-  {
-    txId: '22'.repeat(32) as Cardano.TransactionId,
-    index: 0,
-    address: ownAddress,
-  },
-  { address: ownAddress, value: { coins: 90_000_000n } },
-];
-
 const request: ComposerRequest = {
   outputs: [
     {
@@ -100,7 +91,6 @@ type Overrides = {
   tip?: Cardano.Tip | undefined;
   eraSummaries?: EraSummary[] | undefined;
   accountUtxos?: Record<string, Cardano.Utxo[]>;
-  unspendableUtxos?: Record<string, Cardano.Utxo[]>;
   addresses?: unknown[];
   logger?: unknown;
 };
@@ -171,10 +161,9 @@ const run = async (
           ? overrides.networkMagic
           : Cardano.NetworkMagics.Preview,
       ),
-      cardanoAccountUtxos$: of(
+      cardanoSettledAvailableAccountUtxos$: of(
         overrides.accountUtxos ?? { [accountId]: [spendableUtxo] },
       ),
-      cardanoAccountUnspendableUtxos$: of(overrides.unspendableUtxos ?? {}),
       cardanoAddresses$: of(overrides.addresses ?? [cardanoAddress]),
     },
     cardanoProvider: providerSpies,
@@ -252,19 +241,6 @@ describe('makeComposerBuilding', () => {
     );
 
     expect(action.payload.result.success).toBe(true);
-  });
-
-  it('excludes unspendable UTxOs from the funding pool', async () => {
-    const action = await run(building(), {
-      accountUtxos: { [accountId]: [unspendableUtxo] },
-      unspendableUtxos: { [accountId]: [unspendableUtxo] },
-    });
-
-    expect(action.payload.result.success).toBe(false);
-    expect(action.payload.result.errorTranslationKeys).toEqual({
-      title: 'v2.composer.build.error.no-utxos.title',
-      subtitle: 'v2.composer.build.error.no-utxos.subtitle',
-    });
   });
 
   it('honours a change address override from the request', async () => {
@@ -422,8 +398,9 @@ describe('makeComposerBuilding', () => {
       {
         txExecutorCardano: {
           cardanoNetworkMagic$: of(Cardano.NetworkMagics.Preview),
-          cardanoAccountUtxos$: of({ [accountId]: [spendableUtxo] }),
-          cardanoAccountUnspendableUtxos$: of({}),
+          cardanoSettledAvailableAccountUtxos$: of({
+            [accountId]: [spendableUtxo],
+          }),
           cardanoAddresses$: of([cardanoAddress]),
         },
         actions: { composerFlow: { buildCompleted } },
@@ -478,8 +455,9 @@ describe('makeComposerBuilding', () => {
       {
         txExecutorCardano: {
           cardanoNetworkMagic$: of(Cardano.NetworkMagics.Preview),
-          cardanoAccountUtxos$: of({ [accountId]: [spendableUtxo] }),
-          cardanoAccountUnspendableUtxos$: of({}),
+          cardanoSettledAvailableAccountUtxos$: of({
+            [accountId]: [spendableUtxo],
+          }),
           cardanoAddresses$: of([cardanoAddress]),
         },
         actions: { composerFlow: { buildCompleted } },

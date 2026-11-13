@@ -121,8 +121,7 @@ const makeDependencies = (
     txExecutorCardano: {
       cardanoNetworkMagic$: of(networkMagic),
       cardanoProtocolParameters$: of(protocolParameters),
-      cardanoAccountUtxos$: of({ [testAccountId]: utxos }),
-      cardanoAccountUnspendableUtxos$: of({}),
+      cardanoSettledAvailableAccountUtxos$: of({ [testAccountId]: utxos }),
       cardanoAddresses$: of(addresses),
       cardanoRewardAccountDetails$: of(rewardAccountDetails),
     },
@@ -338,46 +337,6 @@ describe('makeBuildVoteDelegationTx', () => {
     }
 
     vi.restoreAllMocks();
-  });
-
-  it('excludes unspendable UTxOs from transaction inputs', async () => {
-    const collateralUtxo: Cardano.Utxo = [
-      {
-        address: Cardano.PaymentAddress(testAddress),
-        txId: Cardano.TransactionId(
-          '0000000000000000000000000000000000000000000000000000000000000099',
-        ),
-        index: 0,
-      },
-      {
-        address: Cardano.PaymentAddress(testAddress),
-        value: { coins: 5_000_000n },
-      },
-    ];
-
-    const dependencies = {
-      txExecutorCardano: {
-        cardanoNetworkMagic$: of(764824073 as Cardano.NetworkMagic),
-        cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({
-          [testAccountId]: [mockUtxo, collateralUtxo],
-        }),
-        cardanoAccountUnspendableUtxos$: of({
-          [testAccountId]: [collateralUtxo],
-        }),
-        cardanoAddresses$: of([mockAddress]),
-        cardanoRewardAccountDetails$: of(unregisteredRewardAccountDetails),
-      },
-    } as unknown as SideEffectDependencies;
-
-    const result = await firstValueFrom(
-      makeBuildVoteDelegationTx(dependencies)({
-        accountId: testAccountId,
-        dRep: { type: 'alwaysAbstain' },
-      }),
-    );
-
-    expect(result.success).toBe(true);
   });
 
   it('refuses a Cardano custody account before building', async () => {

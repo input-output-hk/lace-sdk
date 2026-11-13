@@ -1,6 +1,4 @@
 import {
-  applyInFlightUtxoAdjustments,
-  CardanoPaymentAddress,
   isCardanoCustodyAccount,
   utxoKey,
 } from '@lace-contract/cardano-context';
@@ -26,6 +24,7 @@ import type {
   CardanoCustodyAccountState,
   CardanoCustodyBuildRequest,
   CardanoCustodyCreatorIndexProbeRequest,
+  DecodedInFlightTransaction,
   cardanoContextActions,
   cardanoCustodyActions,
   cardanoCustodySelectors,
@@ -83,7 +82,7 @@ export type WalletsObservables = StateObservables<
 
 /**
  * The wallet's activities as observables: `wallet.stateObservables.activities`.
- * Custody helpers read the transactions in flight from it.
+ * Custody helpers read the custody operations that have not settled from it.
  */
 export type ActivitiesObservables = StateObservables<
   typeof activitiesSelectors
@@ -91,9 +90,9 @@ export type ActivitiesObservables = StateObservables<
 
 /**
  * The actions custody helpers dispatch on a wallet: custody builds and
- * creator-index probes, transaction submission, the activities a submission
- * records, and the wallet entities of custody accounts. A `LaceWallet`'s
- * `dispatch` with the Cardano modules loaded satisfies it.
+ * creator-index probes, transaction submission, the in-flight record and the
+ * activity a submission records, and the wallet entities of custody accounts.
+ * A `LaceWallet`'s `dispatch` with the Cardano modules loaded satisfies it.
  */
 export type CardanoCustodyDispatch = {
   (
@@ -105,6 +104,10 @@ export type CardanoCustodyDispatch = {
     request: CardanoCustodyCreatorIndexProbeRequest,
   ): void;
   (key: 'cardanoContext.submitTx', props: { serializedTx: HexBytes }): void;
+  (
+    key: 'cardanoContext.recordInFlightTransaction',
+    transaction: DecodedInFlightTransaction,
+  ): void;
   (
     key: 'activities.upsertActivities',
     props: { accountId: AccountId; activities: Activity[] },
@@ -133,6 +136,7 @@ export type WalletWithCardanoCustody = {
     cardanoContext: Pick<
       CardanoContextObservables,
       | 'selectAccountUtxos$'
+      | 'selectAccountUtxosWithInFlight$'
       | 'selectChainId$'
       | 'selectEraSummaries$'
       | 'selectTip$'
@@ -321,26 +325,18 @@ export const readSettledUtxos = async (
 
 /**
  * The outpoints, as `txId#index`, of the account's confirmed UTxOs that a
- * transaction this wallet submitted spends and that have not settled.
+ * transaction in flight on the wallet spends: those the in-flight view of the
+ * account leaves out.
  */
 export const readSpentInFlight = async (
   wallet: Pick<WalletWithCardanoCustody, 'stateObservables'>,
   account: CardanoCustodyAccount,
 ): Promise<ReadonlySet<string>> => {
   const settled = await readSettledUtxos(wallet, account.accountId);
-  const pending =
-    (
-      await firstValueFrom(
-        wallet.stateObservables.activities.selectPendingActivitiesByAccount$,
-      )
-    )[account.accountId] ?? [];
-  const unspent = new Set(
-    applyInFlightUtxoAdjustments(
-      settled,
-      [CardanoPaymentAddress(account.blockchainSpecific.address)],
-      pending,
-    ).map(utxoKey),
+  const withInFlight = await firstValueFrom(
+    wallet.stateObservables.cardanoContext.selectAccountUtxosWithInFlight$,
   );
+  const unspent = new Set((withInFlight[account.accountId] ?? []).map(utxoKey));
   return new Set(
     settled.map(utxoKey).filter(outpoint => !unspent.has(outpoint)),
   );

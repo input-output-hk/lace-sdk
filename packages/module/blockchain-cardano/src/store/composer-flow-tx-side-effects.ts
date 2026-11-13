@@ -1,12 +1,9 @@
-import { ActivityType } from '@lace-contract/activities';
-import { LOVELACE_TOKEN_ID } from '@lace-contract/cardano-context';
 import { makeConfirmTx, makeSubmitTx } from '@lace-contract/tx-executor';
-import { BigNumber, Timestamp } from '@lace-lib/util';
 import { firstStateOfStatus } from '@lace-lib/util-store';
-import { from, merge, mergeMap, of, switchMap, withLatestFrom } from 'rxjs';
+import { merge, mergeMap, of, switchMap, withLatestFrom } from 'rxjs';
 
 import type { SideEffect } from '../contracts';
-import type { ConfirmTx, FeeEntry, SubmitTx } from '@lace-contract/tx-executor';
+import type { ConfirmTx, SubmitTx } from '@lace-contract/tx-executor';
 
 // =====================================================================
 // Transaction composer — confirm + submit.
@@ -26,7 +23,7 @@ import type { ConfirmTx, FeeEntry, SubmitTx } from '@lace-contract/tx-executor';
 //
 // Wires:
 //   AwaitingConfirmation → confirmTx → confirmationCompleted
-//   Processing           → submitTx  → upsertActivities + processingResulted
+//   Processing           → submitTx  → processingResulted
 //
 // Each orchestrator is a factory taking its tx-executor dependency
 // explicitly so unit tests can substitute a mock cold observable.
@@ -70,15 +67,6 @@ export const makeComposerAwaitingConfirmation =
       }),
     );
 
-// Extracted so the mapper isn't a 5th-level nested function inside the
-// switchMap → pipe → mergeMap chain (SonarCloud S2004). Fees are
-// negative lovelace deltas on the pending activity.
-const toLovelaceFeeChanges = (fees: FeeEntry[]) =>
-  fees.map(fee => ({
-    tokenId: LOVELACE_TOKEN_ID,
-    amount: BigNumber(-BigNumber.valueOf(fee.amount)),
-  }));
-
 export const makeComposerProcessing =
   ({ submitTx }: { submitTx: SubmitTx }): SideEffect =>
   (_, stateObservables, { actions }) =>
@@ -100,52 +88,9 @@ export const makeComposerProcessing =
             if (!('success' in value)) {
               return of(value);
             }
-            if (!value.success) {
-              return of(
-                actions.composerFlow.processingResulted({ result: value }),
-              );
-            }
-            // The composer is intentionally generic, so the pending row
-            // carries no operation metadata — only the fee as a known
-            // balance change. Cardano's `mapTransactionToActivity`
-            // classifier reconciles the type and the remaining balance
-            // changes when the transaction confirms.
-            const upstreamCardano = (
-              value.blockchainSpecificActivityMetadata as
-                | {
-                    Cardano?: {
-                      consumedInputs?: unknown[];
-                      producedOutputs?: unknown[];
-                      withdrawals?: unknown[];
-                    };
-                  }
-                | undefined
-            )?.Cardano;
-            const pendingActivity = {
-              accountId: state.accountId,
-              activityId: value.txId,
-              timestamp: Timestamp(Date.now()),
-              tokenBalanceChanges: toLovelaceFeeChanges(state.fees),
-              type: ActivityType.Pending,
-              blockchainSpecific: {
-                Cardano: {
-                  consumedInputs: upstreamCardano?.consumedInputs ?? [],
-                  producedOutputs: upstreamCardano?.producedOutputs ?? [],
-                  // Kept so the balance does not count withdrawn rewards
-                  // twice while the transaction is pending.
-                  ...(upstreamCardano?.withdrawals && {
-                    withdrawals: upstreamCardano.withdrawals,
-                  }),
-                },
-              },
-            };
-            return from([
-              actions.activities.upsertActivities({
-                accountId: state.accountId,
-                activities: [pendingActivity],
-              }),
+            return of(
               actions.composerFlow.processingResulted({ result: value }),
-            ]);
+            );
           }),
         ),
       ),

@@ -1119,6 +1119,7 @@ describe('addressDiscoverySync', () => {
               getAccountWithdrawals: vi.fn(),
               getRewardAccountInfo: vi.fn(),
               getTransactionDetails: vi.fn(),
+              checkTransaction: vi.fn(),
               getProtocolParameters: vi.fn(),
               getEraSummaries: vi.fn(),
               resolveInput: vi.fn(),

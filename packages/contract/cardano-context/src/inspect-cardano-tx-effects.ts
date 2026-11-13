@@ -95,6 +95,19 @@ export type CardanoTxEffects = {
   consumedInputs: readonly Cardano.TxIn[];
   /** Every output the transaction produces, as UTxOs under this tx's id. */
   producedOutputs: readonly Cardano.Utxo[];
+  /**
+   * The transaction's `isValid` flag. `false` declares that its scripts fail:
+   * the chain then spends its collateral inputs and pays its collateral return
+   * instead of applying its inputs, outputs and withdrawals.
+   */
+  isValid: boolean;
+  /** Every collateral input, resolved or not. */
+  collateralInputs: readonly Cardano.TxIn[];
+  /**
+   * The collateral return as a UTxO under this tx's id, at the index after the
+   * last output; absent when the transaction sets none.
+   */
+  collateralReturn?: Cardano.Utxo;
 };
 
 const outpointOf = (input: Pick<Cardano.TxIn, 'index' | 'txId'>): string =>
@@ -275,11 +288,23 @@ export const inspectCardanoTxEffects = ({
 
   return {
     certificateCount: body.certificates?.length ?? 0,
+    collateralInputs: (body.collaterals ?? []).map(input => ({
+      index: input.index,
+      txId: input.txId,
+    })),
+    collateralReturn:
+      body.collateralReturn === undefined
+        ? undefined
+        : ([
+            { index: body.outputs.length, txId },
+            body.collateralReturn,
+          ] as Cardano.Utxo),
     consumedInputs: body.inputs.map(input => ({
       index: input.index,
       txId: input.txId,
     })),
     fee: body.fee,
+    isValid: transaction.isValid(),
     mint: body.mint ?? new Map<Cardano.AssetId, bigint>(),
     netByTokenId,
     proposalProcedureCount: body.proposalProcedures?.length ?? 0,

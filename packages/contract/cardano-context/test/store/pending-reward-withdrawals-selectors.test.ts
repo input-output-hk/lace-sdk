@@ -1,11 +1,9 @@
-// The pending-withdrawal selectors (LW-15725) read activities as they come
-// back from persistence: encoded by Serializable, through JSON, decoded by
-// the activities selectors. Quantities must survive exactly.
-import { ActivityType } from '@lace-contract/activities';
+// The pending-withdrawal selectors (LW-15725) read in-flight transactions as
+// they come back from persistence: encoded by Serializable, through JSON,
+// decoded by the in-flight selector. Quantities must survive exactly.
 import { AccountId } from '@lace-contract/wallet-repo';
 import { Cardano } from '@lace-lib/cardano-core';
 import { BigNumber, Timestamp } from '@lace-lib/util';
-import { Serializable } from '@lace-lib/util-store';
 import { describe, expect, it } from 'vitest';
 
 import { pendingRewardWithdrawalKey } from '../../src';
@@ -16,7 +14,8 @@ import {
   initialState,
 } from '../../src/store/slice';
 
-import type { Activity } from '@lace-contract/activities';
+import type { CardanoTxId } from '../../src';
+import type { CardanoContextSliceState } from '../../src/store/slice';
 
 type SelectorState = Parameters<
   typeof selectors.cardanoContext.selectRewardAccountDetailsWithInFlight
@@ -29,29 +28,34 @@ const REWARD_ACCOUNT = Cardano.RewardAccount(
 // Above Number.MAX_SAFE_INTEGER: a lossy number round-trip would show.
 const WITHDRAWN = 9_007_199_254_740_993n;
 
-const pendingWithdrawal = (quantity: bigint): Activity => ({
-  accountId: ACCOUNT,
-  activityId: 'tx-pending',
-  timestamp: Timestamp(0),
-  tokenBalanceChanges: [],
-  type: ActivityType.Pending,
-  blockchainSpecific: Serializable.to({
-    Cardano: {
-      consumedInputs: [],
-      producedOutputs: [],
-      withdrawals: [{ stakeAddress: REWARD_ACCOUNT, quantity }],
-    },
-  }) as unknown,
-});
+const recordWithdrawal = (
+  state: CardanoContextSliceState,
+  quantity: bigint,
+  txId = 'aa'.repeat(32),
+) =>
+  reducers.cardanoContext(
+    state,
+    actions.cardanoContext.recordInFlightTransaction({
+      chainId: Cardano.ChainIds.Preprod,
+      txId: txId as CardanoTxId,
+      effects: {
+        consumedInputs: [],
+        producedOutputs: [],
+        withdrawals: [{ stakeAddress: REWARD_ACCOUNT, quantity }],
+      },
+      submittedAt: Timestamp(0),
+    }),
+  );
 
 const stateWith = ({
   withdrawable,
-  activities,
+  withdrawals = [],
 }: {
   withdrawable: bigint;
-  activities: Activity[];
+  /** The withdrawal of each in-flight transaction, one transaction each. */
+  withdrawals?: bigint[];
 }): SelectorState => {
-  const cardanoContext = reducers.cardanoContext(
+  let cardanoContext = reducers.cardanoContext(
     initialState,
     actions.cardanoContext.setRewardAccountDetails({
       accountId: ACCOUNT,
@@ -66,13 +70,15 @@ const stateWith = ({
       },
     }),
   );
+  withdrawals.forEach((quantity, index) => {
+    cardanoContext = recordWithdrawal(
+      cardanoContext,
+      quantity,
+      String(index).padStart(64, '0'),
+    );
+  });
   const state = {
     cardanoContext,
-    activities: {
-      activities: { [ACCOUNT]: activities },
-      desiredLoadedActivitiesCountPerAccount: {},
-      hasLoadedOldestEntry: {},
-    },
     addresses: {
       addresses: [
         {
@@ -93,10 +99,10 @@ const stateWith = ({
 };
 
 describe('pending reward withdrawal selectors', () => {
-  it('reads pending withdrawals back from persisted activities exactly', () => {
+  it('reads pending withdrawals back from persisted in-flight transactions exactly', () => {
     const state = stateWith({
       withdrawable: WITHDRAWN,
-      activities: [pendingWithdrawal(WITHDRAWN)],
+      withdrawals: [WITHDRAWN],
     });
 
     expect(
@@ -117,7 +123,7 @@ describe('pending reward withdrawal selectors', () => {
   it('stops counting rewards a pending transaction already withdrew', () => {
     const state = stateWith({
       withdrawable: WITHDRAWN + 5n,
-      activities: [pendingWithdrawal(WITHDRAWN)],
+      withdrawals: [WITHDRAWN],
     });
 
     expect(
@@ -133,10 +139,41 @@ describe('pending reward withdrawal selectors', () => {
   });
 
   it('returns the raw details when nothing is pending', () => {
-    const state = stateWith({ withdrawable: 10n, activities: [] });
+    const state = stateWith({ withdrawable: 10n });
 
     expect(
       selectors.cardanoContext.selectRewardAccountDetailsWithInFlight(state),
     ).toBe(selectors.cardanoContext.selectRewardAccountDetails(state));
+  });
+
+  it('sums the withdrawals of several in-flight transactions', () => {
+    const state = stateWith({ withdrawable: 10n, withdrawals: [3n, 4n] });
+
+    expect(
+      selectors.cardanoContext.selectRewardAccountDetailsWithInFlight(state)[
+        ACCOUNT
+      ]?.rewardAccountInfo.withdrawableAmount,
+    ).toBe('3');
+  });
+
+  it('counts a transaction recorded twice once', () => {
+    const recorded = recordWithdrawal(initialState, 3n);
+    const state = {
+      cardanoContext: recordWithdrawal(recorded, 3n),
+    } as unknown as SelectorState;
+
+    expect(
+      selectors.cardanoContext.selectPendingRewardWithdrawals(state),
+    ).toEqual(
+      new Map([
+        [
+          pendingRewardWithdrawalKey(
+            Cardano.NetworkMagics.Preprod,
+            REWARD_ACCOUNT,
+          ),
+          3n,
+        ],
+      ]),
+    );
   });
 });

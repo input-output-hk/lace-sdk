@@ -27,11 +27,12 @@ import {
 } from 'rxjs';
 
 import {
-  cardanoAccountUnspendableUtxos$,
-  cardanoAccountUtxos$,
+  cardanoSettledAccountUnspendableUtxos$,
+  cardanoSettledAvailableAccountUtxos$,
   cardanoAddresses$,
   cardanoChainId$,
   cardanoNetworkMagic$,
+  cardanoPendingRewardWithdrawals$,
   cardanoProtocolParameters$,
   cardanoRewardAccountDetails$,
 } from '../cardano-observables';
@@ -311,33 +312,54 @@ export const wireNetworkMagicObservable: SideEffect = (
   );
 
 /**
- * Side effect that wires accountUtxos selector to the observable
+ * Side effect that wires the settled UTxOs a transaction of the account may
+ * spend (`selectSettledAvailableAccountUtxos`) to the observable
  */
-export const wireAccountUtxosObservable: SideEffect = (
+export const wireSettledAvailableAccountUtxosObservable: SideEffect = (
   _,
-  { cardanoContext: { selectAccountUtxos$ } },
+  { cardanoContext: { selectSettledAvailableAccountUtxos$ } },
   _dependencies,
 ) =>
-  selectAccountUtxos$.pipe(
+  selectSettledAvailableAccountUtxos$.pipe(
     distinctUntilChanged(),
-    tap(accountUtxos => {
-      cardanoAccountUtxos$.next(accountUtxos);
+    tap(settledAvailableAccountUtxos => {
+      cardanoSettledAvailableAccountUtxos$.next(settledAvailableAccountUtxos);
     }),
     switchMap(() => EMPTY),
   );
 
 /**
- * Side effect that wires unspendable accountUtxos selector to the observable
+ * Side effect that wires the rewards in-flight transactions withdraw
+ * (`selectPendingRewardWithdrawals`) to the observable
  */
-export const wireAccountUnspendableUtxosObservable: SideEffect = (
+export const wirePendingRewardWithdrawalsObservable: SideEffect = (
   _,
-  { cardanoContext: { selectAccountUnspendableUtxos$ } },
+  { cardanoContext: { selectPendingRewardWithdrawals$ } },
   _dependencies,
 ) =>
-  selectAccountUnspendableUtxos$.pipe(
+  selectPendingRewardWithdrawals$.pipe(
     distinctUntilChanged(),
-    tap(selectAccountUnspendableUtxos => {
-      cardanoAccountUnspendableUtxos$.next(selectAccountUnspendableUtxos);
+    tap(pendingRewardWithdrawals => {
+      cardanoPendingRewardWithdrawals$.next(pendingRewardWithdrawals);
+    }),
+    switchMap(() => EMPTY),
+  );
+
+/**
+ * Side effect that wires the reserved collateral a transaction can name
+ * (`selectSettledAccountUnspendableUtxos`) to the observable
+ */
+export const wireSettledAccountUnspendableUtxosObservable: SideEffect = (
+  _,
+  { cardanoContext: { selectSettledAccountUnspendableUtxos$ } },
+  _dependencies,
+) =>
+  selectSettledAccountUnspendableUtxos$.pipe(
+    distinctUntilChanged(),
+    tap(settledAccountUnspendableUtxos => {
+      cardanoSettledAccountUnspendableUtxos$.next(
+        settledAccountUnspendableUtxos,
+      );
     }),
     switchMap(() => EMPTY),
   );
@@ -477,8 +499,9 @@ export const createCardanoProviderSideEffects = (config: AppConfig) => [
   trackProtocolParameters,
   wireProtocolParametersObservable,
   wireNetworkMagicObservable,
-  wireAccountUtxosObservable,
-  wireAccountUnspendableUtxosObservable,
+  wireSettledAvailableAccountUtxosObservable,
+  wirePendingRewardWithdrawalsObservable,
+  wireSettledAccountUnspendableUtxosObservable,
   wireCardanoAddressesObservable,
   wireCardanoChainIdObservable,
   wireRewardAccountDetailsObservable,

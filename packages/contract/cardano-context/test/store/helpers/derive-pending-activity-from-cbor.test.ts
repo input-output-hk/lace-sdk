@@ -17,18 +17,7 @@ import {
   grantUtxo,
 } from '../../custody-mocks';
 
-import type { CardanoActivityUtxoMetadata } from '../../../src/augmentations';
 import type { CardanoCustodyActivityMetadata } from '../../../src/custody/pending-operation';
-import type { Activity } from '@lace-contract/activities';
-
-const getCardanoInFlight = (
-  activity: Activity | undefined,
-): CardanoActivityUtxoMetadata | undefined =>
-  (
-    activity?.blockchainSpecific as
-      | { Cardano?: CardanoActivityUtxoMetadata }
-      | undefined
-  )?.Cardano;
 
 const OWN_ADDRESS = CardanoPaymentAddress(
   'addr_test1qphhr294v0w0rzgk7kz4ynsp8hwt82ha6nsp8yk6h04fhzsuryus5g7pm3lq85msee5pdtqlnv2crdc83kk2tvhsefcsu2snle',
@@ -198,6 +187,53 @@ describe('derivePendingActivityFromCbor', () => {
     ]);
   });
 
+  it('nets only the collateral a transaction flagged isValid false forfeits', () => {
+    const bodyInput = utxo({
+      txId: PREV_TX_ID,
+      index: 0,
+      address: Cardano.PaymentAddress(OWN_ADDRESS),
+      value: { coins: 10_000_000n },
+    });
+    const collateral = utxo({
+      txId: PREV_TX_ID,
+      index: 1,
+      address: Cardano.PaymentAddress(OWN_ADDRESS),
+      value: { coins: 5_000_000n },
+    });
+
+    const core = makeCoreTx({
+      inputs: [{ txId: PREV_TX_ID, index: 0 }],
+      outputs: [
+        {
+          address: Cardano.PaymentAddress(FOREIGN_ADDRESS),
+          value: { coins: 3_000_000n },
+        },
+        {
+          address: Cardano.PaymentAddress(OWN_ADDRESS_2),
+          value: { coins: 6_800_000n },
+        },
+      ],
+      fee: 200_000n,
+      collaterals: [{ txId: PREV_TX_ID, index: 1 }],
+      collateralReturn: {
+        address: Cardano.PaymentAddress(OWN_ADDRESS),
+        value: { coins: 4_700_000n },
+      },
+    });
+
+    const activity = derivePendingActivityFromCbor({
+      serializedTx: buildTxCbor({ ...core, isValid: false }),
+      accountId: ACCOUNT_ID,
+      accountAddresses: [OWN_ADDRESS, OWN_ADDRESS_2],
+      accountUtxos: [bodyInput, collateral],
+    });
+
+    // 5 ADA of collateral spent, 4.7 ADA returned; the body input stays.
+    expect(activity!.tokenBalanceChanges).toEqual([
+      { tokenId: TokenId('lovelace'), amount: BigNumber(-300_000n) },
+    ]);
+  });
+
   it('handles multi-asset values (native tokens) correctly', () => {
     const accountUtxo = utxo({
       txId: PREV_TX_ID,
@@ -352,293 +388,64 @@ describe('derivePendingActivityFromCbor', () => {
     expect(activity!.tokenBalanceChanges[0].tokenId).toBe(TokenId('lovelace'));
   });
 
-  describe('blockchainSpecific in-flight metadata', () => {
-    it('records a custody operation bound only when asked to', () => {
-      const core = makeCoreTx({
-        inputs: [{ txId: PREV_TX_ID, index: 0 }],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS),
-            value: { coins: 6_800_000n },
-          },
-        ],
-        fee: 200_000n,
+  describe('blockchainSpecific', () => {
+    // A bound, a withdrawal, inputs and outputs: none of them reaches the row.
+    const core = makeCoreTx({
+      inputs: [{ txId: PREV_TX_ID, index: 0 }],
+      outputs: [
+        {
+          address: Cardano.PaymentAddress(OWN_ADDRESS),
+          value: { coins: 6_800_000n },
+        },
+      ],
+      fee: 200_000n,
+      validityInterval: { invalidHereafter: Cardano.Slot(118_761_883) },
+      withdrawals: [
+        {
+          stakeAddress: Cardano.RewardAccount(
+            'stake_test1up7pvfq8zn4quy45r2g572290p9vf99mr9tn7r9xrgy2l2qdsf58d',
+          ),
+          quantity: 3_000_000n,
+        },
+      ],
+    });
+    const derive = (custody?: CardanoCustodyActivityMetadata) =>
+      derivePendingActivityFromCbor({
+        serializedTx: buildTxCbor(core),
+        accountId: ACCOUNT_ID,
+        accountAddresses: [OWN_ADDRESS],
+        accountUtxos: [],
+        ...(custody && { custody }),
       });
-      const derive = (custody?: CardanoCustodyActivityMetadata) =>
-        (
-          derivePendingActivityFromCbor({
-            serializedTx: buildTxCbor(core),
-            accountId: ACCOUNT_ID,
-            accountAddresses: [OWN_ADDRESS],
-            accountUtxos: [],
-            ...(custody && { custody }),
-          })?.blockchainSpecific as
-            | { Cardano?: { custody?: unknown } }
-            | undefined
-        )?.Cardano;
 
+    it('a Pending row carries only feature metadata', () => {
       const custody: CardanoCustodyActivityMetadata = {
         invalidHereafter: Cardano.Slot(1234),
         operation: 'owner-spend',
         status: 'pending',
         reference: 'intent-1',
       };
-      expect(derive(custody)?.custody).toEqual(custody);
-      expect(derive()).not.toHaveProperty('custody');
+
+      expect(derive(custody)?.blockchainSpecific).toEqual({
+        Cardano: { custody },
+      });
     });
 
-    it('records ALL inputs (own and foreign) in consumedInputs', () => {
-      const ownUtxo = utxo({
-        txId: PREV_TX_ID,
-        index: 0,
-        address: Cardano.PaymentAddress(OWN_ADDRESS),
-        value: { coins: 10_000_000n },
-      });
-
-      const core = makeCoreTx({
-        inputs: [
-          { txId: PREV_TX_ID, index: 0 }, // ours
-          { txId: OTHER_TX_ID, index: 1 }, // not ours
-        ],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(FOREIGN_ADDRESS),
-            value: { coins: 3_000_000n },
-          },
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS),
-            value: { coins: 6_800_000n },
-          },
-        ],
-        fee: 200_000n,
-      });
-      const serializedTx = buildTxCbor(core);
-
-      const activity = derivePendingActivityFromCbor({
-        serializedTx,
-        accountId: ACCOUNT_ID,
-        accountAddresses: [OWN_ADDRESS],
-        accountUtxos: [ownUtxo],
-      });
-
-      const cardano = getCardanoInFlight(activity);
-      expect(cardano).toBeDefined();
-      expect(cardano!.consumedInputs).toEqual([
-        { txId: PREV_TX_ID, index: 0 },
-        { txId: OTHER_TX_ID, index: 1 },
-      ]);
+    it('is absent when the row has no feature metadata', () => {
+      expect(derive()).toBeDefined();
+      expect(derive()).not.toHaveProperty('blockchainSpecific');
     });
+  });
 
-    it('records ALL outputs (own and foreign) in producedOutputs with new txId outpoints', () => {
-      const core = makeCoreTx({
-        inputs: [{ txId: PREV_TX_ID, index: 0 }],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(FOREIGN_ADDRESS),
-            value: { coins: 3_000_000n },
-          },
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS_2),
-            value: { coins: 6_800_000n },
-          },
-        ],
-        fee: 200_000n,
-      });
-      const serializedTx = buildTxCbor(core);
-
-      const expectedTxId = Serialization.Transaction.fromCbor(
-        Serialization.TxCBOR(serializedTx),
-      ).getId();
-
-      const activity = derivePendingActivityFromCbor({
-        serializedTx,
-        accountId: ACCOUNT_ID,
-        accountAddresses: [OWN_ADDRESS, OWN_ADDRESS_2],
-        accountUtxos: [],
-      });
-
-      const cardano = getCardanoInFlight(activity);
-      expect(cardano!.producedOutputs).toHaveLength(2);
-      expect(cardano!.producedOutputs[0][0]).toEqual({
-        txId: expectedTxId,
-        index: 0,
-      });
-      expect(cardano!.producedOutputs[0][1].address).toBe(
-        Cardano.PaymentAddress(FOREIGN_ADDRESS),
-      );
-      expect(cardano!.producedOutputs[0][1].value.coins).toBe(3_000_000n);
-      expect(cardano!.producedOutputs[1][0]).toEqual({
-        txId: expectedTxId,
-        index: 1,
-      });
-      expect(cardano!.producedOutputs[1][1].address).toBe(
-        Cardano.PaymentAddress(OWN_ADDRESS_2),
-      );
-      expect(cardano!.producedOutputs[1][1].value.coins).toBe(6_800_000n);
-    });
-
-    it('captures ALL outputs of a DApp-style multi-output tx regardless of ownership', () => {
-      const core = makeCoreTx({
-        inputs: [{ txId: PREV_TX_ID, index: 0 }],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS),
-            value: { coins: 1_000_000n },
-          },
-          {
-            address: Cardano.PaymentAddress(FOREIGN_ADDRESS),
-            value: { coins: 2_000_000n },
-          },
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS_2),
-            value: { coins: 5_000_000n },
-          },
-        ],
-        fee: 200_000n,
-      });
-      const serializedTx = buildTxCbor(core);
-
-      const activity = derivePendingActivityFromCbor({
-        serializedTx,
-        accountId: ACCOUNT_ID,
-        accountAddresses: [OWN_ADDRESS, OWN_ADDRESS_2],
-        accountUtxos: [],
-      });
-
-      const cardano = getCardanoInFlight(activity);
-      expect(cardano!.producedOutputs).toHaveLength(3);
-      expect(
-        cardano!.producedOutputs.map(([outpoint]) => outpoint.index),
-      ).toEqual([0, 1, 2]);
-      expect(cardano!.producedOutputs[1][1].address).toBe(
-        Cardano.PaymentAddress(FOREIGN_ADDRESS),
-      );
-    });
-
-    it('records consumedInputs and producedOutputs even when tx has no own outputs', () => {
-      const accountUtxo = utxo({
-        txId: PREV_TX_ID,
-        index: 0,
-        address: Cardano.PaymentAddress(OWN_ADDRESS),
-        value: { coins: 10_000_000n },
-      });
-
-      const core = makeCoreTx({
-        inputs: [{ txId: PREV_TX_ID, index: 0 }],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(FOREIGN_ADDRESS),
-            value: { coins: 9_800_000n },
-          },
-        ],
-        fee: 200_000n,
-      });
-      const serializedTx = buildTxCbor(core);
-
-      const activity = derivePendingActivityFromCbor({
-        serializedTx,
-        accountId: ACCOUNT_ID,
-        accountAddresses: [OWN_ADDRESS],
-        accountUtxos: [accountUtxo],
-      });
-
-      const cardano = getCardanoInFlight(activity);
-      expect(cardano).toBeDefined();
-      expect(cardano!.consumedInputs).toEqual([{ txId: PREV_TX_ID, index: 0 }]);
-      expect(cardano!.producedOutputs).toHaveLength(1);
-      expect(cardano!.producedOutputs[0][1].address).toBe(
-        Cardano.PaymentAddress(FOREIGN_ADDRESS),
-      );
-    });
-
-    it('captures the sole own output for a receive-only tx', () => {
-      const core = makeCoreTx({
-        inputs: [{ txId: PREV_TX_ID, index: 0 }],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS),
-            value: { coins: 5_000_000n },
-          },
-        ],
-        fee: 200_000n,
-      });
-      const serializedTx = buildTxCbor(core);
-
-      const activity = derivePendingActivityFromCbor({
-        serializedTx,
+  it('throws when the CBOR is not a transaction', () => {
+    expect(() =>
+      derivePendingActivityFromCbor({
+        serializedTx: HexBytes('deadbeef'),
         accountId: ACCOUNT_ID,
         accountAddresses: [OWN_ADDRESS],
         accountUtxos: [],
-      });
-
-      const cardano = getCardanoInFlight(activity);
-      expect(cardano!.consumedInputs).toEqual([{ txId: PREV_TX_ID, index: 0 }]);
-      expect(cardano!.producedOutputs).toHaveLength(1);
-      expect(cardano!.producedOutputs[0][1].address).toBe(
-        Cardano.PaymentAddress(OWN_ADDRESS),
-      );
-      expect(cardano!.producedOutputs[0][1].value.coins).toBe(5_000_000n);
-    });
-
-    it('records every body withdrawal, own or not, with exact quantities', () => {
-      const ownRewardAccount = Cardano.RewardAccount(
-        'stake_test1up7pvfq8zn4quy45r2g572290p9vf99mr9tn7r9xrgy2l2qdsf58d',
-      );
-      const otherRewardAccount = Cardano.RewardAccount(
-        'stake_test1upjghly04re6yrr3nh3ntp9en3p5flnxh2yf6camc3vfhwg6dhc5w',
-      );
-      const core = makeCoreTx({
-        inputs: [{ txId: PREV_TX_ID, index: 0 }],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS),
-            value: { coins: 5_000_000n },
-          },
-        ],
-        fee: 200_000n,
-        withdrawals: [
-          { stakeAddress: ownRewardAccount, quantity: 9_007_199_254_740_993n },
-          { stakeAddress: otherRewardAccount, quantity: 1_000_000n },
-        ],
-      });
-
-      const activity = derivePendingActivityFromCbor({
-        serializedTx: buildTxCbor(core),
-        accountId: ACCOUNT_ID,
-        accountAddresses: [OWN_ADDRESS],
-        accountUtxos: [],
-      });
-
-      expect(getCardanoInFlight(activity)?.withdrawals).toEqual(
-        expect.arrayContaining([
-          { stakeAddress: ownRewardAccount, quantity: 9_007_199_254_740_993n },
-          { stakeAddress: otherRewardAccount, quantity: 1_000_000n },
-        ]),
-      );
-      expect(getCardanoInFlight(activity)?.withdrawals).toHaveLength(2);
-    });
-
-    it('leaves withdrawals out when the body has none', () => {
-      const core = makeCoreTx({
-        inputs: [{ txId: PREV_TX_ID, index: 0 }],
-        outputs: [
-          {
-            address: Cardano.PaymentAddress(OWN_ADDRESS),
-            value: { coins: 5_000_000n },
-          },
-        ],
-        fee: 200_000n,
-      });
-
-      const activity = derivePendingActivityFromCbor({
-        serializedTx: buildTxCbor(core),
-        accountId: ACCOUNT_ID,
-        accountAddresses: [OWN_ADDRESS],
-        accountUtxos: [],
-      });
-
-      expect(getCardanoInFlight(activity)).not.toHaveProperty('withdrawals');
-    });
+      }),
+    ).toThrow();
   });
 
   describe('custody accounts', () => {
@@ -668,9 +475,6 @@ describe('derivePendingActivityFromCbor', () => {
       expect(activity!.tokenBalanceChanges).toEqual([
         { tokenId: TokenId('lovelace'), amount: BigNumber(1_500_000n) },
       ]);
-      expect(getCardanoInFlight(activity)!.producedOutputs[0][1].address).toBe(
-        custodyAddress,
-      );
     });
 
     it('leaves the grant token an issue mints out of the balance changes', () => {
@@ -735,10 +539,6 @@ describe('derivePendingActivityFromCbor', () => {
 
       expect(activity!.tokenBalanceChanges).toEqual([
         { tokenId: TokenId('lovelace'), amount: BigNumber(-3_200_000n) },
-      ]);
-      expect(getCardanoInFlight(activity)!.consumedInputs).toEqual([
-        { txId: control[0].txId, index: 0 },
-        { txId: fund[0].txId, index: 0 },
       ]);
     });
 

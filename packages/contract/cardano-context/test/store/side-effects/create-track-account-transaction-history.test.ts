@@ -206,6 +206,7 @@ describe('cardano-context side effects', () => {
               getUtxosAtAddress: vi.fn(),
               getRewardAccountInfo: vi.fn(),
               getTransactionDetails: vi.fn(),
+              checkTransaction: vi.fn(),
               getProtocolParameters: vi.fn(),
               getEraSummaries: vi.fn(),
               resolveInput: vi.fn(),

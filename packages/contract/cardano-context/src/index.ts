@@ -1,7 +1,11 @@
 import './augmentations';
 
 export { cardanoContextActions, cardanoContextSelectors } from './store';
-export { derivePendingActivityFromCbor } from './store/helpers';
+export {
+  derivePendingActivityFromCbor,
+  inFlightTransactionOf,
+  pendingActivityOf,
+} from './store/helpers';
 export { extractUniqueStakeKeys } from './store/helpers/extract-unique-stake-keys';
 export { getEpochFirstSlot } from './store/helpers/get-epoch-first-slot';
 export {
@@ -23,8 +27,6 @@ export {
   parseTipHashFromOperationId,
 } from './store/side-effects/sync-operation-utils';
 export {
-  applyInFlightUtxoAdjustments,
-  ownPendingOutputs,
   pendingRewardWithdrawalKey,
   type PendingRewardWithdrawals,
 } from './apply-in-flight-utxo-adjustments';

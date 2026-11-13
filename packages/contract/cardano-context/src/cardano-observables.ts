@@ -1,5 +1,6 @@
 import { BehaviorSubject } from 'rxjs';
 
+import type { PendingRewardWithdrawals } from './apply-in-flight-utxo-adjustments';
 import type {
   AccountRewardAccountDetailsMap,
   AccountUtxoMap,
@@ -25,16 +26,22 @@ export const cardanoNetworkMagic$ = new BehaviorSubject<
 >(undefined);
 
 /**
- * Observable for Cardano account UTXOs.
- * Updated by side effects that subscribe to the accountUtxos selector.
+ * Observable for the settled UTxOs a transaction of the account may spend: on
+ * chain, spent by no in-flight transaction, not reserved as collateral;
+ * accounts excluded from spending are absent.
+ * Updated by side effects that subscribe to the
+ * `selectSettledAvailableAccountUtxos` selector.
  */
-export const cardanoAccountUtxos$ = new BehaviorSubject<AccountUtxoMap>({});
+export const cardanoSettledAvailableAccountUtxos$ =
+  new BehaviorSubject<AccountUtxoMap>({});
 
 /**
- * Observable for Cardano unspendable account UTXOs.
- * Updated by side effects that subscribe to the accountUtxos selector.
+ * Observable for the reserved collateral a transaction can name: settled and
+ * spent by no in-flight transaction.
+ * Updated by side effects that subscribe to the
+ * `selectSettledAccountUnspendableUtxos` selector.
  */
-export const cardanoAccountUnspendableUtxos$ =
+export const cardanoSettledAccountUnspendableUtxos$ =
   new BehaviorSubject<AccountUtxoMap>({});
 
 /**
@@ -57,3 +64,12 @@ export const cardanoChainId$ = new BehaviorSubject<Cardano.ChainId | undefined>(
  */
 export const cardanoRewardAccountDetails$ =
   new BehaviorSubject<AccountRewardAccountDetailsMap>({});
+
+/**
+ * Observable for the rewards in-flight transactions withdraw, keyed by
+ * `pendingRewardWithdrawalKey`.
+ * Updated by side effects that subscribe to the
+ * `selectPendingRewardWithdrawals` selector.
+ */
+export const cardanoPendingRewardWithdrawals$ =
+  new BehaviorSubject<PendingRewardWithdrawals>(new Map());

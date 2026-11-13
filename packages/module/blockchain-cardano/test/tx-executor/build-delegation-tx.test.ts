@@ -77,8 +77,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(null),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([mockAddress]),
         cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
       },
@@ -101,8 +102,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(null),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([mockAddress]),
         cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
       },
@@ -125,8 +127,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([]),
         cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
       },
@@ -151,8 +154,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([mockAddress]),
         cardanoRewardAccountDetails$: of({}),
       },
@@ -177,8 +181,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([mockAddress]),
         cardanoRewardAccountDetails$: of({
           [testAccountId]: {
@@ -207,8 +212,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([mockAddress]),
         cardanoRewardAccountDetails$: of({
           [testAccountId]: {
@@ -239,8 +245,7 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({ [testAccountId]: [] }),
         cardanoAddresses$: of([mockAddress]),
         cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
       },
@@ -260,45 +265,6 @@ describe('makeBuildDelegationTx', () => {
     vi.restoreAllMocks();
   });
 
-  it('excludes unspendable UTXOs from transaction inputs', async () => {
-    const collateralUtxo: Cardano.Utxo = [
-      {
-        address: Cardano.PaymentAddress(testAddress),
-        txId: Cardano.TransactionId(
-          '0000000000000000000000000000000000000000000000000000000000000099',
-        ),
-        index: 0,
-      },
-      {
-        address: Cardano.PaymentAddress(testAddress),
-        value: { coins: 5_000_000n },
-      },
-    ];
-
-    const dependencies = {
-      txExecutorCardano: {
-        cardanoNetworkMagic$: of(764824073),
-        cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({
-          [testAccountId]: [mockUtxo, collateralUtxo],
-        }),
-        cardanoAccountUnspendableUtxos$: of({
-          [testAccountId]: [collateralUtxo],
-        }),
-        cardanoAddresses$: of([mockAddress]),
-        cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
-      },
-    } as unknown as SideEffectDependencies;
-
-    const buildDelegationTx = makeBuildDelegationTx(dependencies);
-
-    const result = await firstValueFrom(
-      buildDelegationTx({ accountId: testAccountId, poolId: testPoolId }),
-    );
-
-    expect(result.success).toBe(true);
-  });
-
   it('hands the dependency logger to the transaction builder', async () => {
     const logger = { ...dummyLogger };
     const setLogger = vi.spyOn(TransactionBuilder.prototype, 'setLogger');
@@ -307,8 +273,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([mockAddress]),
         cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
       },
@@ -330,8 +297,9 @@ describe('makeBuildDelegationTx', () => {
       txExecutorCardano: {
         cardanoNetworkMagic$: of(764824073),
         cardanoProtocolParameters$: of(mockProtocolParameters),
-        cardanoAccountUtxos$: of({ [testAccountId]: [mockUtxo] }),
-        cardanoAccountUnspendableUtxos$: of({}),
+        cardanoSettledAvailableAccountUtxos$: of({
+          [testAccountId]: [mockUtxo],
+        }),
         cardanoAddresses$: of([custodyAddressEntry(testAccountId)]),
         cardanoRewardAccountDetails$: of(defaultRewardAccountDetails),
       },

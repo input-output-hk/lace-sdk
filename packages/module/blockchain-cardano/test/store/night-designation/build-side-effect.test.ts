@@ -251,10 +251,12 @@ const makeDependencies = (overrides: Overrides) => ({
     // 'chainId' in overrides preserves an explicit `undefined` (the
     // missing-chain-id case) rather than falling back to the default.
     cardanoChainId$: of('chainId' in overrides ? overrides.chainId : chainId),
-    cardanoAccountUtxos$: of({
+    cardanoSettledAvailableAccountUtxos$: of({
       [accountId]: overrides.accountUtxos ?? [...cnightUtxos, adaUtxo],
     }),
-    cardanoAccountUnspendableUtxos$: of(overrides.unspendableUtxos ?? {}),
+    cardanoSettledAccountUnspendableUtxos$: of(
+      overrides.unspendableUtxos ?? {},
+    ),
     cardanoAddresses$: of(overrides.addresses ?? [cardanoAddress]),
   },
   cardanoProvider: {
@@ -387,10 +389,11 @@ describe('makeNightDesignationBuilding', () => {
     expect(action.payload.result.fees?.length).toBe(1);
   });
 
+  // The spendable set never lists a reservation, so the builder names it from
+  // the reserved set alone.
   it('backs collateral with the reserved collateral UTxO and returns the rest to the account', async () => {
     const reserved = reservedCollateral();
     const action = await run(building(), {
-      accountUtxos: [...cnightUtxos, adaUtxo, reserved],
       unspendableUtxos: { [accountId]: [reserved] },
     });
 
@@ -410,7 +413,6 @@ describe('makeNightDesignationBuilding', () => {
   it('ignores a reserved collateral UTxO held at another owned address', async () => {
     const elsewhere = reservedCollateral(otherOwnedAddress);
     const action = await run(building(), {
-      accountUtxos: [...cnightUtxos, adaUtxo, elsewhere],
       unspendableUtxos: { [accountId]: [elsewhere] },
     });
 
@@ -444,7 +446,6 @@ describe('makeNightDesignationBuilding', () => {
       ];
 
       const action = await run(building(), {
-        accountUtxos: [...cnightUtxos, adaUtxo, ineligible],
         unspendableUtxos: { [accountId]: [ineligible] },
       });
 
@@ -462,7 +463,6 @@ describe('makeNightDesignationBuilding', () => {
     const action = await run(
       building({ action: 'deregister', dustPubkeyHex: undefined }),
       {
-        accountUtxos: [...cnightUtxos, adaUtxo, reserved],
         unspendableUtxos: { [accountId]: [reserved] },
         scriptUtxos: [registrationUtxo],
       },
@@ -472,18 +472,6 @@ describe('makeNightDesignationBuilding', () => {
     const collaterals = shippedBody(action).collaterals ?? [];
     expect(collaterals).toHaveLength(1);
     expect(collaterals[0].txId).toBe(reserved[0].txId);
-  });
-
-  it('ignores a reserved collateral UTxO the account no longer holds', async () => {
-    const action = await run(building(), {
-      accountUtxos: [...cnightUtxos, adaUtxo],
-      unspendableUtxos: { [accountId]: [reservedCollateral()] },
-    });
-
-    expect(action.payload.result.success).toBe(true);
-    const collaterals = shippedBody(action).collaterals ?? [];
-    expect(collaterals).toHaveLength(1);
-    expect(collaterals[0].txId).toBe(adaUtxo[0].txId);
   });
 
   it('maps a missing chain id to the generic build-error keys', async () => {

@@ -1,19 +1,14 @@
-import { ActivityType } from '@lace-contract/activities';
 import { BigNumber } from '@lace-lib/util';
 
 import { extractUniqueStakeKeys } from './store/helpers/extract-unique-stake-keys';
 import { isCardanoAddress } from './util';
 
-import type { CardanoActivityUtxoMetadata } from './augmentations';
 import type {
   AccountRewardAccountDetailsMap,
+  CardanoInFlightEffects,
   CardanoPaymentAddress,
   CardanoRewardAccount,
 } from './types';
-import type {
-  Activity,
-  BlockchainSpecificActivityMetadata,
-} from '@lace-contract/activities';
 import type { AnyAddress } from '@lace-contract/addresses';
 import type { AccountId } from '@lace-contract/wallet-repo';
 import type { Cardano } from '@lace-lib/cardano-core';
@@ -21,40 +16,22 @@ import type { Cardano } from '@lace-lib/cardano-core';
 const outpointKey = (ref: { txId: Cardano.TransactionId; index: number }) =>
   `${ref.txId}#${ref.index}`;
 
-const getCardanoInFlight = (
-  activity: Activity,
-): CardanoActivityUtxoMetadata | undefined => {
-  if (activity.type !== ActivityType.Pending) return undefined;
-  const blockchainSpecific = activity.blockchainSpecific as
-    | BlockchainSpecificActivityMetadata
-    | undefined;
-  return blockchainSpecific?.Cardano;
-};
-
 /**
- * Every own output of the account's not-yet-settled transactions, deduped by
- * outpoint. Additive only: unlike {@link applyInFlightUtxoAdjustments} it does
- * NOT drop outputs a later pending transaction consumes, because an outpoint
- * our own pending transaction spends still exists on chain and can still be
- * named as collateral by someone else.
- *
- * Deliberately not reused by `applyInFlightUtxoAdjustments`: spendability and
- * ownership answer different questions, so that function must drop an output
- * a later pending transaction consumes while this one must keep it. Reworking
- * its event ordering to share this code would change the spendable view for no
- * gain here.
+ * Every output the in-flight transactions pay to the account's addresses,
+ * deduped by outpoint. Additive only: unlike
+ * {@link applyInFlightUtxoAdjustments} it keeps an output another in-flight
+ * transaction spends, because an outpoint an own in-flight transaction spends
+ * still exists on chain and can still be named as collateral by someone else.
  */
 export const ownPendingOutputs = (
-  pendingActivities: readonly Activity[],
+  inFlight: readonly CardanoInFlightEffects[],
   accountAddresses: readonly CardanoPaymentAddress[],
 ): Cardano.Utxo[] => {
   const ownAddresses = new Set<string>(accountAddresses);
   const byOutpoint = new Map<string, Cardano.Utxo>();
 
-  for (const activity of pendingActivities) {
-    const inFlight = getCardanoInFlight(activity);
-    if (!inFlight) continue;
-    for (const utxo of inFlight.producedOutputs) {
+  for (const { producedOutputs } of inFlight) {
+    for (const utxo of producedOutputs) {
       if (ownAddresses.has(utxo[1].address)) {
         byOutpoint.set(outpointKey(utxo[0]), utxo);
       }
@@ -64,66 +41,50 @@ export const ownPendingOutputs = (
   return [...byOutpoint.values()];
 };
 
+/**
+ * The account's UTxOs with the in-flight transactions of its network applied:
+ * every outpoint any of them spends leaves, and every output any of them pays
+ * to the account's addresses joins unless the set already holds its outpoint.
+ *
+ * Order-free set algebra: the UTxOs no entry spends, plus the own outputs no
+ * entry spends that the UTxOs do not hold yet. A transaction recorded before
+ * the parent whose change it spends therefore still reserves that change.
+ * Returns `utxos` itself when no entry changes it.
+ */
 export const applyInFlightUtxoAdjustments = (
-  availableUtxo: Cardano.Utxo[],
+  utxos: Cardano.Utxo[],
   accountAddresses: readonly CardanoPaymentAddress[],
-  pendingActivities: readonly Activity[],
+  inFlight: readonly CardanoInFlightEffects[],
 ): Cardano.Utxo[] => {
-  let hasAnyEffect = false;
-  for (const activity of pendingActivities) {
-    const inFlight = getCardanoInFlight(activity);
-    if (
-      inFlight &&
-      (inFlight.consumedInputs.length > 0 ||
-        inFlight.producedOutputs.length > 0)
-    ) {
-      hasAnyEffect = true;
-      break;
-    }
-  }
-  if (!hasAnyEffect) return availableUtxo;
+  if (
+    !inFlight.some(
+      ({ consumedInputs, producedOutputs }) =>
+        consumedInputs.length > 0 || producedOutputs.length > 0,
+    )
+  )
+    return utxos;
 
   const ownAddresses = new Set<string>(accountAddresses);
-  const chronological = [...pendingActivities].sort(
-    (a, b) => a.timestamp - b.timestamp,
-  );
+  const byOutpoint = new Map(utxos.map(utxo => [outpointKey(utxo[0]), utxo]));
+  const spent = new Set<string>();
+  let isChanged = false;
 
-  let result: Cardano.Utxo[] = [...availableUtxo];
-
-  for (const activity of chronological) {
-    const inFlight = getCardanoInFlight(activity);
-    if (!inFlight) continue;
-
-    if (inFlight.consumedInputs.length > 0) {
-      const spent = new Set(inFlight.consumedInputs.map(outpointKey));
-      if (spent.size > 0) {
-        result = result.filter(([utxoIn]) => !spent.has(outpointKey(utxoIn)));
-      }
-    }
-
-    if (inFlight.producedOutputs.length > 0) {
-      // Dedupe against existing UTxOs: between the chain refresh that adds the
-      // newly-confirmed outputs and the activity poll that flips Pending→Send/Receive,
-      // the same outpoint can already be present in `result`. Without this guard
-      // we'd append a second copy and inflate the available set.
-      const existingOutpoints = new Set(
-        result.map(([utxoIn]) => outpointKey(utxoIn)),
-      );
-      const ownProduced = inFlight.producedOutputs.filter(
-        ([utxoIn, txOut]) =>
-          ownAddresses.has(txOut.address) &&
-          !existingOutpoints.has(outpointKey(utxoIn)),
-      );
-      if (ownProduced.length > 0) {
-        result = [...result, ...ownProduced];
+  for (const { consumedInputs, producedOutputs } of inFlight) {
+    for (const input of consumedInputs) spent.add(outpointKey(input));
+    for (const utxo of producedOutputs) {
+      const key = outpointKey(utxo[0]);
+      if (ownAddresses.has(utxo[1].address) && !byOutpoint.has(key)) {
+        byOutpoint.set(key, utxo);
+        isChanged = true;
       }
     }
   }
 
-  return result;
+  for (const key of spent) isChanged = byOutpoint.delete(key) || isChanged;
+  return isChanged ? [...byOutpoint.values()] : utxos;
 };
 
-/** Rewards pending transactions withdraw, keyed by
+/** Rewards in-flight transactions withdraw, keyed by
  * {@link pendingRewardWithdrawalKey}. */
 export type PendingRewardWithdrawals = ReadonlyMap<string, bigint>;
 
@@ -152,36 +113,29 @@ const networkMagicByAccount = (
 };
 
 /**
- * Rewards withdrawn by not-yet-settled transactions, keyed by
- * {@link pendingRewardWithdrawalKey}.
+ * Rewards withdrawn by in-flight transactions, keyed by
+ * {@link pendingRewardWithdrawalKey} with each transaction's own network.
  *
- * Read across every account's pending activities, not only the reward
- * owner's: a transaction recorded for one account can withdraw another own
- * account's rewards (a migration's destination row, a dApp transaction funded
- * by another account). A transaction recorded for several accounts counts
- * once. An account whose network is unknown is skipped rather than guessed.
+ * Read across every in-flight transaction, whichever account pays for it: a
+ * transaction can withdraw another own account's rewards (a migration's
+ * destination, a dApp transaction funded by another account). Each
+ * transaction counts once, because the store holds one entry per transaction
+ * per network.
  */
 export const pendingRewardWithdrawals = (
-  pendingActivitiesByAccount: Readonly<Record<string, readonly Activity[]>>,
-  allAddresses: readonly AnyAddress[],
+  inFlight: readonly {
+    chainId: Cardano.ChainId;
+    effects: CardanoInFlightEffects;
+  }[],
 ): PendingRewardWithdrawals => {
-  const networks = networkMagicByAccount(allAddresses);
-  const counted = new Set<string>();
   const totals = new Map<string, bigint>();
-  for (const [accountId, activities] of Object.entries(
-    pendingActivitiesByAccount,
-  )) {
-    const networkMagic = networks.get(accountId);
-    if (networkMagic === undefined) continue;
-    for (const activity of activities) {
-      const withdrawals = getCardanoInFlight(activity)?.withdrawals;
-      const transactionKey = `${networkMagic}:${activity.activityId}`;
-      if (!withdrawals?.length || counted.has(transactionKey)) continue;
-      counted.add(transactionKey);
-      for (const { stakeAddress, quantity } of withdrawals) {
-        const key = pendingRewardWithdrawalKey(networkMagic, stakeAddress);
-        totals.set(key, (totals.get(key) ?? 0n) + quantity);
-      }
+  for (const {
+    chainId: { networkMagic },
+    effects: { withdrawals = [] },
+  } of inFlight) {
+    for (const { stakeAddress, quantity } of withdrawals) {
+      const key = pendingRewardWithdrawalKey(networkMagic, stakeAddress);
+      totals.set(key, (totals.get(key) ?? 0n) + quantity);
     }
   }
   return totals;
@@ -189,10 +143,11 @@ export const pendingRewardWithdrawals = (
 
 /**
  * The BALANCE view of each account's reward details: the withdrawable amount
- * minus the rewards pending transactions already moved into their outputs, so
- * the ADA balance counts them once. Only the withdrawable amount changes, and
- * never below zero. Never use the result as a withdrawal amount: the ledger
- * only accepts the whole on-chain balance, which a subtracted residual is not.
+ * minus the rewards in-flight transactions already moved into their outputs,
+ * so the ADA balance counts them once. Only the withdrawable amount changes,
+ * and never below zero. Never use the result as a withdrawal amount: the
+ * ledger only accepts the whole on-chain balance, which a subtracted residual
+ * is not.
  *
  * The reward account is the account's first stake key, the one its reward
  * details were fetched for, on the account's own network. Returns `details`

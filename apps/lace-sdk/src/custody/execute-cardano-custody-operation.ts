@@ -300,6 +300,7 @@ const buildSignAndSubmit = async (
       witnesses: [sponsorWitness, deviceWitness],
       resolvedInputs: result.resolvedInputs,
     }),
+    chainId,
     accountId,
     address,
     resolvedInputs: result.resolvedInputs,

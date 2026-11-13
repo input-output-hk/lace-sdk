@@ -61,8 +61,8 @@ output the anchor paid us can be missing because a _newer_ transaction spent it
 spend. Absence is therefore not evidence on its own, and the proof compensates
 in two ways:
 
-1. It subtracts outpoints consumed by any **loaded** activity, pending included,
-   before arming (`unspentAnchorOutpoints`).
+1. It subtracts outpoints consumed by any **loaded** activity before arming
+   (`unspentAnchorOutpoints`).
 2. Its predicate is **ALL** remaining outpoints absent, never _any_ missing —
    one present output proves the provider applied the transaction, so a
    partially-served multi-stake-key fetch cannot read as staleness.
@@ -83,13 +83,20 @@ The subtraction in property 2 is evidence-based, so it **under**-subtracts —
 which is the safe direction, but it means the receive proof can withhold against
 a correct provider until the spending transaction reaches the activity feed:
 
-- A pending activity written without Cardano metadata reports nothing spent, so
-  it cannot disarm the proof until its confirmed counterpart maps.
+- A Pending activity reports nothing spent, since the in-flight store, not the
+  row, holds a submitted transaction's spend
+  ([in-flight-transactions.md](in-flight-transactions.md)). It cannot disarm the
+  proof until its confirmed counterpart maps.
 - Rolled-back activities are never pruned, so a reorged anchor keeps its proof
   armed indefinitely. This affects **both** proofs, but the receive proof more
   widely: the spend proof clears once the chain applies the anchor, while the
   receive proof clears only when the _spending_ transaction is mapped.
-- Pending activity rows never expire.
+
+The in-flight store leans on the same gate. A settled transaction's in-flight
+entry goes only once a fetch stops listing what it spends, so a key advanced on
+a set that still lists them keeps the entry, and its reservation of those
+inputs, until a later fetch drops them. A latched key defers that fetch to the
+account's next transaction.
 
 Separately, both proofs are **armed from the anchor alone**, and that scope is
 its own exposure. A chained spend hides its evidence from rule 1: with `A`
@@ -101,9 +108,9 @@ and control falls to the depth rule, which advances on a set the loaded history
 already contradicts. Pinned by
 `it('advances the cache key on a chained spend, though loaded history shows the
 set is pre-chain')`; widening the arming scope to the union of all non-Pending
-activities is the open decision in LW-15466. A Pending-inclusive union must be
-avoided: `derive-pending-activity-from-cbor.ts` records every `body.inputs` of
-a submitted transaction, so it would arm on every ordinary outgoing payment.
+activities is the open decision in LW-15466. Arming from in-flight transactions
+must be avoided: an in-flight entry holds every `body.inputs` of its
+transaction, so it would arm on every ordinary outgoing payment.
 
 ## Pipeline note
 

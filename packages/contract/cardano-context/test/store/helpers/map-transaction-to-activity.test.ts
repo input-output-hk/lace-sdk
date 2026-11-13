@@ -495,7 +495,6 @@ describe('mapTransactionToActivity', () => {
           blockchainSpecific: {
             Cardano: {
               consumedInputs: [],
-              producedOutputs: [],
               producedOwnOutpoints: [{ txId: mockTxDetails.id, index: 0 }],
               slot: mockTxDetails.blockHeader.slot,
               security: {
@@ -600,7 +599,6 @@ describe('mapTransactionToActivity', () => {
           blockchainSpecific: {
             Cardano: {
               consumedInputs: [],
-              producedOutputs: [],
               producedOwnOutpoints: [{ txId: mockTxDetails.id, index: 0 }],
               slot: mockTxDetails.blockHeader.slot,
               security: {
@@ -653,7 +651,6 @@ describe('mapTransactionToActivity', () => {
           blockchainSpecific: {
             Cardano: {
               consumedInputs: [],
-              producedOutputs: [],
               producedOwnOutpoints: [{ txId: mockTxDetails.id, index: 0 }],
               slot: mockTxDetails.blockHeader.slot,
               security: {
@@ -1265,7 +1262,6 @@ describe('mapTransactionToActivity', () => {
           blockchainSpecific: {
             Cardano: {
               consumedInputs: [{ txId: ownInput.txId, index: ownInput.index }],
-              producedOutputs: [],
               producedOwnOutpoints: [{ txId: mockTxDetails.id, index: 1 }],
               slot: mockTxDetails.blockHeader.slot,
               security: { exploits: { deterministicNonce202606: false } },

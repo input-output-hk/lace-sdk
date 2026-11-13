@@ -414,6 +414,69 @@ describe('inspectCardanoTxEffects', () => {
     expect(effects.ownCollateral.returnedCoin).toBe(0n);
   });
 
+  it('reports every collateral input, own or not, and the collateral return as a UTxO after the last output', () => {
+    const ownCollateral = utxo({
+      address: OWN_ADDRESS,
+      index: 1,
+      txId: PREV_TX_ID,
+      value: { coins: 5_000_000n },
+    });
+    const foreignCollateral = { index: 9, txId: FOREIGN_TX_ID };
+    const collateralReturn = {
+      address: FOREIGN_ADDRESS,
+      value: { coins: 4_000_000n },
+    };
+
+    const effects = inspect(
+      {
+        collateralReturn,
+        collaterals: [ownCollateral[0], foreignCollateral],
+        fee: 0n,
+        inputs: [],
+        outputs: [
+          { address: OWN_ADDRESS, value: { coins: 1_000_000n } },
+          { address: FOREIGN_ADDRESS, value: { coins: 2_000_000n } },
+        ],
+      },
+      [ownCollateral],
+    );
+
+    expect(effects.collateralInputs).toEqual([
+      { index: 1, txId: PREV_TX_ID },
+      foreignCollateral,
+    ]);
+    expect(effects.collateralReturn).toEqual([
+      { index: 2, txId: effects.txId },
+      collateralReturn,
+    ]);
+  });
+
+  it('reports no collateral when the transaction sets none', () => {
+    const effects = inspect({ fee: 0n, inputs: [], outputs: [] }, []);
+
+    expect(effects.collateralInputs).toEqual([]);
+    expect(effects.collateralReturn).toBeUndefined();
+  });
+
+  it.each([false, true])('reports the isValid flag %s', isValid => {
+    const serializedTx = HexBytes(
+      Serialization.Transaction.fromCore({
+        body: { fee: 0n, inputs: [], outputs: [] },
+        id: Cardano.TransactionId('0'.repeat(64)),
+        isValid,
+        witness: { signatures: new Map() },
+      }).toCbor(),
+    );
+
+    expect(
+      inspectCardanoTxEffects({
+        accountAddresses: [OWN_ACCOUNT_ADDRESS],
+        accountUtxos: [],
+        serializedTx,
+      }).isValid,
+    ).toBe(isValid);
+  });
+
   it('omits a token whose net change is zero', () => {
     const ownUtxo = utxo({
       address: OWN_ADDRESS,

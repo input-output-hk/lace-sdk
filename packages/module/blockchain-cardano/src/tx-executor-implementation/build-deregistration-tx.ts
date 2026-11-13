@@ -1,6 +1,5 @@
 import {
   LOVELACE_TOKEN_ID,
-  filterSpendableUtxos,
   type AccountRewardAccountDetailsMap,
 } from '@lace-contract/cardano-context';
 import { Cardano } from '@lace-lib/cardano-core';
@@ -10,6 +9,8 @@ import { defer, firstValueFrom, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
 import { refuseExtensionAccount } from '../store/account-guards';
+
+import { isRewardWithdrawalPending } from './reward-withdrawal';
 
 import type { AnyAddress } from '@lace-contract/addresses';
 import type {
@@ -84,22 +85,24 @@ export const makeBuildDeregistrationTx =
       const [
         networkMagic,
         protocolParameters,
-        allAccountUtxos,
-        unspendableAccountUtxos,
+        accountUtxos,
         cardanoAddresses,
         rewardAccountDetails,
+        pendingRewardWithdrawals,
       ] = await Promise.all([
         firstValueFrom(dependencies.txExecutorCardano.cardanoNetworkMagic$),
         firstValueFrom(
           dependencies.txExecutorCardano.cardanoProtocolParameters$,
         ),
-        firstValueFrom(dependencies.txExecutorCardano.cardanoAccountUtxos$),
         firstValueFrom(
-          dependencies.txExecutorCardano.cardanoAccountUnspendableUtxos$,
+          dependencies.txExecutorCardano.cardanoSettledAvailableAccountUtxos$,
         ),
         firstValueFrom(dependencies.txExecutorCardano.cardanoAddresses$),
         firstValueFrom(
           dependencies.txExecutorCardano.cardanoRewardAccountDetails$,
+        ),
+        firstValueFrom(
+          dependencies.txExecutorCardano.cardanoPendingRewardWithdrawals$,
         ),
       ]);
 
@@ -119,10 +122,7 @@ export const makeBuildDeregistrationTx =
 
       refuseExtensionAccount(accountId, cardanoAddresses);
 
-      const availableUtxo = filterSpendableUtxos(
-        allAccountUtxos[accountId] ?? [],
-        unspendableAccountUtxos[accountId] ?? [],
-      );
+      const availableUtxo = accountUtxos[accountId] ?? [];
 
       const accountAddresses: AnyAddress[] = cardanoAddresses.filter(
         (addr): addr is AnyAddress =>
@@ -175,16 +175,24 @@ export const makeBuildDeregistrationTx =
         .expiresIn(TWO_HOURS_IN_SECONDS)
         .setUnspentOutputs(availableUtxo);
 
-      // Get withdrawable amount - if non-zero, add withdrawal before deregistration
-      // Cardano doesn't allow deregistering a stake key with non-zero reward balance
-      const withdrawableAmount = getWithdrawableAmount(
-        accountId,
-        rewardAccountDetails,
-      );
+      // The ledger refuses to deregister a stake key whose reward balance is
+      // not zero, and takes only a withdrawal of the whole balance, so a
+      // non-zero balance is withdrawn in the same transaction. An in-flight
+      // transaction that withdraws the rewards leaves the balance at zero:
+      // this transaction then withdraws nothing and depends on that one like
+      // any chained transaction. If that one never lands, the node refuses
+      // this one too, and the rewards stay in the reward account.
+      const rewardAccount = getRewardAccount(stakeCredential, networkMagic);
+      const withdrawalAmount = isRewardWithdrawalPending({
+        pendingRewardWithdrawals,
+        networkMagic,
+        rewardAccount,
+      })
+        ? 0n
+        : getWithdrawableAmount(accountId, rewardAccountDetails);
 
-      if (withdrawableAmount > 0n) {
-        const rewardAccount = getRewardAccount(stakeCredential, networkMagic);
-        builder.addRewardsWithdrawal(rewardAccount, withdrawableAmount);
+      if (withdrawalAmount > 0n) {
+        builder.addRewardsWithdrawal(rewardAccount, withdrawalAmount);
       }
 
       // Add the Conway-era unregistration certificate with deposit
@@ -209,7 +217,7 @@ export const makeBuildDeregistrationTx =
         serializedTx,
         fees,
         depositReturn,
-        withdrawalAmount: String(withdrawableAmount),
+        withdrawalAmount: String(withdrawalAmount),
       };
     }).pipe(
       catchError((error: Error) =>

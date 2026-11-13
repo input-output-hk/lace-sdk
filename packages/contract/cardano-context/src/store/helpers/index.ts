@@ -4,6 +4,7 @@ export * from './get-activity-type-from-delegation-entry';
 export * from './get-epoch-first-slot';
 export * from './get-top-on-chain-activity-id';
 export * from './group-cardano-addresses-by-account';
+export * from './in-flight-transaction';
 export * from './find-missing-activities';
 export * from './map-transaction-to-activity';
 export * from './map-reward-to-activity';

@@ -7,6 +7,13 @@
     "type-check-test": {},
     "test": {
       "executor": "nx:run-commands",
+      "inputs": [
+        "default",
+        "^default",
+        "sharedGlobals",
+        "{workspaceRoot}/packages/*/*/src/**/*.{ts,tsx}",
+        "{workspaceRoot}/apps/*/src/**/*.{ts,tsx}"
+      ],
       "options": {
         "command": "vitest run --config=vitest.config.js --coverage",
         "cwd": "{projectRoot}"

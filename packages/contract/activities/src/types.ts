@@ -28,6 +28,16 @@ export type Activity<BlockchainSpecificMetadata = unknown> =
     timestamp: Timestamp;
     tokenBalanceChanges: Array<{ tokenId: TokenId; amount: BigNumber }>;
     type: ActivityType;
+    /**
+     * Immutable, signed token changes keyed by their source in a derived Pending
+     * row. Publications union these contributions so disappearing ownership or
+     * delayed actions cannot erase resolved amounts. Feature writers omit this
+     * field when replacing the derived row.
+     */
+    provisional?: Record<
+      string,
+      Array<{ tokenId: TokenId; amount: BigNumber }>
+    >;
   };
 
 /** An activity recording staking rewards received by the account. */
