@@ -21,7 +21,15 @@ import {
 
 import {
   account,
+  CONTRACT_ADDRESS,
+  CONTRACT_DATA,
+  CONTRACT_HASH,
+  CONTRACT_SCRIPT,
+  contractCall,
+  contractPin,
+  contractScriptCarrier,
   controlOutput,
+  COST_MODELS,
   creation,
   device,
   deviceRewrite,
@@ -42,6 +50,7 @@ import {
   spendWithGrant,
   sweepGrant,
   sweptUtxosOf,
+  txIdOf,
   utxo,
   VALID_UNTIL,
 } from './custody-transactions';
@@ -71,11 +80,15 @@ import {
   transition,
 } from './inspect-helpers';
 
-import type { CustodyAccountState, CustodyGrant } from '../src';
+import type {
+  CustodyAccountState,
+  CustodyGrant,
+  CustodyRecipient,
+} from '../src';
 import type { TransactionShape } from './custody-transactions';
 import type { Inspection } from './inspect-helpers';
 
-const [lovelaceGrant, tokenGrant] = fixtureGrants;
+const [lovelaceGrant, tokenGrant, restrictedGrant] = fixtureGrants;
 const TOKEN = Cardano.AssetId(`${TOKEN_POLICY}${TOKEN_NAME}`);
 const DATUM_HASH = Hash32ByteBase16('00'.repeat(32));
 
@@ -1314,6 +1327,247 @@ describe('inspectCustodyTransaction with grants', () => {
         ),
       ).toEqual(['expired']);
       expect(posixMsToSlot(Number(grant.scope.expiresAt))).toBe(expiry);
+    });
+  });
+
+  describe('contract calls', () => {
+    const CONTRACT_CALL_OPTIONS = {
+      ...GRANT_SPEND_OPTIONS,
+      allowContractCall: true,
+      costModels: COST_MODELS,
+    } as const;
+    const inspectCall = (shape: TransactionShape) =>
+      inspect(shape, CONTRACT_CALL_OPTIONS);
+    const call = () => contractCall({ grant: lovelaceGrant });
+    const contractRecipient: CustodyRecipient = {
+      paymentCredential: {
+        type: Cardano.CredentialType.ScriptHash,
+        hash: CONTRACT_HASH,
+      },
+    };
+
+    it('reads a grant spend that spends, mints and references for another contract', () => {
+      const inspection = accepted(inspectCall(call()));
+      const report = onlyAccount(inspection);
+      expect(report.operations).toEqual([{ kind: 'grant-spend', slot: 0n }]);
+      expect(report.netOutflow).toEqual({
+        lovelace: 2_200_000n,
+        assets: new Map(),
+      });
+      expect(inspection.externalInputs).toEqual([
+        expect.objectContaining({
+          input: { txId: txIdOf(0x20), index: 0 },
+          address: CONTRACT_ADDRESS,
+        }),
+      ]);
+    });
+
+    it('reports the call raw without pins', () => {
+      expect(accepted(inspectCall(call())).contractCalls).toEqual({
+        spends: [
+          expect.objectContaining({
+            input: { txId: txIdOf(0x20), index: 0 },
+            redeemer: { kind: 'raw', data: CONTRACT_DATA },
+          }),
+        ],
+        mints: [expect.objectContaining({ policyId: CONTRACT_HASH })],
+        referenceInputs: [
+          expect.objectContaining({ address: CONTRACT_ADDRESS }),
+        ],
+      });
+    });
+
+    it('checks the call against contract pins when given', () => {
+      expect(
+        reasonsOf(
+          inspect(call(), { ...CONTRACT_CALL_OPTIONS, contractPins: [] }),
+        ),
+      ).toEqual([
+        'custody-unsupported-operation/unknown-contract',
+        'custody-unsupported-operation/unknown-contract',
+      ]);
+      expect(
+        accepted(
+          inspect(call(), {
+            ...CONTRACT_CALL_OPTIONS,
+            contractPins: [contractPin()],
+          }),
+        ).contractCalls?.spends,
+      ).toEqual([
+        expect.objectContaining({
+          label: 'Order book',
+          redeemer: {
+            kind: 'decoded',
+            value: { kind: 'integer', value: CONTRACT_DATA },
+          },
+        }),
+      ]);
+    });
+
+    it('refuses the same call unless contract calls are allowed', () => {
+      expect(reasonsOf(inspectSpend(call()))).toEqual([
+        'custody-unsupported-operation/grant-spend-foreign-input',
+        'custody-unsupported-operation/foreign-mint',
+        'custody-unsupported-operation/foreign-reference-script',
+      ]);
+    });
+
+    it('refuses an attached call script on a grant spend by its own rules alone', () => {
+      const shape = call();
+      expect(
+        reasonsOf(
+          inspectSpend({
+            ...shape,
+            referenceInputs: shape.referenceInputs!.filter(
+              reference => reference !== contractScriptCarrier,
+            ),
+            scripts: [CONTRACT_SCRIPT],
+          }),
+        ),
+      ).toEqual([
+        'custody-unsupported-operation/grant-spend-foreign-input',
+        'custody-unsupported-operation/foreign-mint',
+      ]);
+    });
+
+    it('refuses the same call when grant spends are not allowed', () => {
+      expect(
+        reasonsOf(
+          inspect(call(), {
+            allowContractCall: true,
+            deviceKeyHash: undefined,
+          }),
+        ),
+      ).toEqual([
+        'custody-unsupported-operation/grant-spend',
+        'custody-unsupported-operation/foreign-mint',
+        'custody-unsupported-operation/foreign-reference-script',
+      ]);
+    });
+
+    it('still refuses an input at a key address', () => {
+      const shape = call();
+      expect(
+        refusalsOf(
+          inspectCall({
+            ...shape,
+            inputs: [...shape.inputs, sponsorFee],
+            outputs: [...shape.outputs, payout(5_000_000n, SPONSOR_ADDRESS)],
+          }),
+        ),
+      ).toEqual([
+        {
+          code: 'custody-unsupported-operation',
+          reason: 'grant-spend-foreign-input',
+          account,
+          input: { txId: sponsorFee[0].txId, index: 0 },
+        },
+      ]);
+    });
+
+    it("keeps refusing the call when another account's fund spend rides along", () => {
+      const shape = call();
+      const otherFunds = utxo(0x16, {
+        address: otherIdentity.address,
+        value: { coins: 5_000_000n },
+      });
+      expect(
+        violationsOf(
+          inspect(
+            {
+              ...shape,
+              inputs: [...shape.inputs, otherFunds],
+              spendRedeemers: [...shape.spendRedeemers!, fund(otherFunds)],
+            },
+            { ...CONTRACT_CALL_OPTIONS, accountRecord: undefined },
+          ),
+        ),
+      ).toEqual([
+        'custody-unsupported-operation/grant-spend-foreign-input',
+        'custody-unsupported-operation/foreign-mint',
+        'custody-unsupported-operation/foreign-reference-script',
+        'custody-unsupported-operation/fund-without-account-token',
+      ]);
+    });
+
+    it("refuses the contract's continuing output when the grant lists recipients without it", () => {
+      expect(
+        violationsOf(inspectCall(contractCall({ grant: restrictedGrant }))),
+      ).toEqual(['recipient-not-allowed']);
+    });
+
+    it('reads a call when the grant lists the contract', () => {
+      const grant: CustodyGrant = {
+        ...restrictedGrant,
+        scope: lovelaceScope([strangerRecipient, contractRecipient]),
+      };
+      expect(
+        onlyAccount(accepted(inspectCall(contractCall({ grant })))).operations,
+      ).toEqual([{ kind: 'grant-spend', slot: 2n }]);
+    });
+
+    it('charges the caps on the net outflow, value the contract pays back included', () => {
+      const report = onlyAccount(
+        accepted(
+          inspectCall(
+            contractCall({
+              grant: lovelaceGrant,
+              toContract: 12_000_000n,
+              fromContract: 4_000_000n,
+            }),
+          ),
+        ),
+      );
+      expect(report.netOutflow).toEqual({
+        lovelace: 8_200_000n,
+        assets: new Map(),
+      });
+      expect(report.grantSpend?.after.scope.cap).toBe(6_800_000n);
+    });
+
+    it('refuses a call over the per call cap when nothing comes back', () => {
+      expect(
+        violationsOf(
+          inspectCall(
+            contractCall({ grant: lovelaceGrant, toContract: 12_000_000n }),
+          ),
+        ),
+      ).toEqual(['per-call-cap-exceeded']);
+    });
+
+    it('counts no value of the contract against the caps', () => {
+      expect(
+        onlyAccount(
+          accepted(
+            inspectCall(
+              contractCall({
+                grant: lovelaceGrant,
+                orderLovelace: 100_000_000n,
+              }),
+            ),
+          ),
+        ).netOutflow,
+      ).toEqual({ lovelace: 2_200_000n, assets: new Map() });
+    });
+
+    it('refuses a back-payment that carries a datum', () => {
+      const shape = contractCall({
+        grant: lovelaceGrant,
+        fromContract: 1_000_000n,
+      });
+      expect(
+        violationsOf(
+          inspectCall(
+            withOutput(shape, 3, {
+              ...fundOutput(1_000_000n),
+              datum: CONTRACT_DATA,
+            }),
+          ),
+        ),
+      ).toEqual([
+        'deposit-not-plain',
+        'custody-unsupported-operation/foreign-reserve',
+      ]);
     });
   });
 });

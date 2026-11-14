@@ -190,6 +190,32 @@ export const collateralUtxo = utxo(902, {
   value: { coins: 5_000_000n },
 });
 
+/** A PlutusV3 script of another contract: a validator and a minting policy. */
+const contractScript = (bytes: string): Cardano.PlutusScript => ({
+  __type: Cardano.ScriptType.Plutus,
+  version: Cardano.PlutusLanguageVersion.V3,
+  bytes: HexBlob(bytes),
+});
+
+/** The contract a grant spend calls, and a second one beside it. */
+export const CONTRACT_SCRIPT = contractScript('4e4d01000033222220051200120011');
+export const OTHER_CONTRACT_SCRIPT = contractScript(
+  '4e4d01000033222220051200120012',
+);
+export const CONTRACT_HASH =
+  Serialization.Script.fromCore(CONTRACT_SCRIPT).hash();
+export const OTHER_CONTRACT_HASH = Serialization.Script.fromCore(
+  OTHER_CONTRACT_SCRIPT,
+).hash();
+
+/** The called contract's enterprise script address on the test network. */
+export const CONTRACT_ADDRESS = Cardano.EnterpriseAddress.fromCredentials(
+  Cardano.NetworkId.Testnet,
+  { type: Cardano.CredentialType.ScriptHash, hash: CONTRACT_HASH },
+)
+  .toAddress()
+  .toBech32() as Cardano.PaymentAddress;
+
 /** The inline datum exactly as a chain read decodes it. */
 export const datumOf = (state: CustodyAccountState): Cardano.PlutusData =>
   Serialization.PlutusData.fromCbor(

@@ -86,6 +86,29 @@ describe('custodyExecutionEstimate', () => {
     expect(custodyExecutionEstimate({})).toEqual({ memory: 0, steps: 0 });
   });
 
+  it('seeds each redeemer of a called contract at 2M memory and 800M steps beside the custody runs', () => {
+    const spend = custodyExecutionEstimate({
+      spendWithGrant: 1,
+      fund: 1,
+      logic: 'agent',
+    });
+    expect(
+      custodyExecutionEstimate({
+        spendWithGrant: 1,
+        fund: 1,
+        logic: 'agent',
+        contractRedeemers: 2,
+      }),
+    ).toEqual({
+      memory: spend.memory + 4_000_000,
+      steps: spend.steps + 1_600_000_000,
+    });
+    expect(custodyExecutionEstimate({ contractRedeemers: 1 })).toEqual({
+      memory: 2_000_000,
+      steps: 800_000_000,
+    });
+  });
+
   it('caps an estimate above the per-transaction limit at the limit', () => {
     const sweepOfEight = custodyExecutionEstimate({
       device: 1,

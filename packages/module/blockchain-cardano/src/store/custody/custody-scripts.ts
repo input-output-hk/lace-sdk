@@ -29,7 +29,8 @@ export interface CustodyScriptWitnesses {
   readonly referenced: readonly Cardano.Utxo[];
 }
 
-const scriptHashOf = (script: Cardano.Script): string =>
+/** The hash of a script, as the ledger names it. */
+export const scriptHashOf = (script: Cardano.Script): string =>
   Serialization.Script.fromCore(script).hash();
 
 /**

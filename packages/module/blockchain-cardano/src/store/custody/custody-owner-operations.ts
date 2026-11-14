@@ -47,6 +47,15 @@ import {
   readFromProvider,
   validitySlotFor,
 } from './custody-chain';
+import {
+  checkContractCall,
+  contractCallSupplyOf,
+  contractMintsOf,
+  contractRedeemerCountOf,
+  contractReferencesOf,
+  outflowOf,
+  owedOf,
+} from './custody-contract-call';
 import { buildWithEvaluatedBudgets } from './custody-evaluation';
 import { custodyExecutionEstimate } from './custody-execution-estimate';
 import {
@@ -63,7 +72,7 @@ import {
 import { finalizeCustodyBuild } from './custody-validation';
 
 import type { CustodyAccountContext } from './custody-account';
-import type { CustodyTransactionPlan } from './custody-assembly';
+import type { CustodyMint, CustodyTransactionPlan } from './custody-assembly';
 import type { CustodyChain } from './custody-chain';
 import type {
   CustodyLogicRun,
@@ -73,6 +82,7 @@ import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildResult,
   CardanoCustodyCollateralFunding,
+  CardanoCustodyContractCall,
   CardanoCustodyGrantScopeRequest,
 } from '@lace-contract/cardano-context';
 import type { Cardano, Serialization } from '@lace-lib/cardano-core';
@@ -141,6 +151,8 @@ interface OwnerEffect {
   readonly withdrawal?: bigint;
   /** The metadata an owner spend carries as auxiliary data. */
   readonly metadata?: Cardano.TxMetadata;
+  /** The other contracts an owner spend calls. */
+  readonly contract?: CardanoCustodyContractCall;
 }
 
 /**
@@ -244,6 +256,24 @@ const metadataOf = (
 };
 
 /**
+ * The contract call an operation carries. Only an owner spend calls other
+ * contracts: a caller that names a call on any other operation type is
+ * refused rather than built without it.
+ */
+const contractOf = (
+  operation: CustodyOwnerOperation,
+): CardanoCustodyContractCall | undefined => {
+  const { contract } = operation as { contract?: CardanoCustodyContractCall };
+  return contract !== undefined && operation.type !== 'owner-spend'
+    ? failCustodyBuild({
+        code: 'invalid-operation',
+        reason: 'invalid-contract-call',
+        message: `A ${operation.type} calls no contract`,
+      })
+    : contract;
+};
+
+/**
  * The state an owner operation writes and what else it does. State changes
  * go through the library's transitions, which refuse what the account could
  * not use afterwards; withdrawal reads the reward balance now, because the
@@ -256,6 +286,7 @@ const ownerEffectOf = async (
 ): Promise<OwnerEffect> => {
   const { identity, state } = context;
   const metadata = metadataOf(operation);
+  const contract = contractOf(operation);
   const grants = context.grants.map(({ grant }) => grant);
   const requestOf = (scope: CardanoCustodyGrantScopeRequest) =>
     grantRequestOf({ scope, slot: state.nextSlot }, identity, chain.now);
@@ -300,6 +331,7 @@ const ownerEffectOf = async (
         state,
         outputs: operation.outputs,
         ...(metadata && { metadata }),
+        ...(contract && { contract }),
       };
     case 'delegate':
       return { state, outputs: [], poolId: poolIdOf(operation.poolId) };
@@ -354,6 +386,27 @@ interface OwnerTransaction {
 
 const sweptGrantsOf = ({ effect }: OwnerBuild) => effect.swept?.grants ?? [];
 
+/** The contract call an owner spend makes, or an empty one. */
+const callOf = ({ effect }: OwnerBuild): CardanoCustodyContractCall =>
+  effect.contract ?? {};
+
+/** The call's reference inputs the build does not already read. */
+const callReferencesOf = (build: OwnerBuild): Cardano.Utxo[] =>
+  contractReferencesOf(callOf(build), build.witnesses.referenced);
+
+/**
+ * What the funds owe the requested outputs before the fee: the outputs
+ * themselves, or, with a contract call, the outputs less what the call
+ * supplies, so the call's inputs and mints pay first and its burns are
+ * owed beside the outputs.
+ */
+const owedByFundsOf = ({ effect }: OwnerBuild): Required<Cardano.Value> => {
+  const requested = totalValueOf(effect.outputs);
+  return effect.contract
+    ? owedOf(outflowOf(requested, contractCallSupplyOf(effect.contract)))
+    : requested;
+};
+
 /**
  * The lovelace the withdrawals add to the transaction: the rewards an
  * operation withdraws and whatever the logic run draws. The change or the
@@ -371,9 +424,10 @@ const planOf = (
   const { context, chain, effect, signer, funding, issued, witnesses } = build;
   const { identity, control } = context;
   const swept = sweptGrantsOf(build);
+  const call = callOf(build);
   const isStakeOperation =
     effect.poolId !== undefined || effect.withdrawal !== undefined;
-  const mint = issued
+  const accountMint: CustodyMint | undefined = issued
     ? {
         assets: new Map([
           [custodyGrantAssetId(context.record, issued.grant.slot), 1n],
@@ -386,22 +440,28 @@ const planOf = (
         redeemer: BURN_REDEEMER,
       }
     : undefined;
+  const mint = [
+    ...(accountMint ? [accountMint] : []),
+    ...contractMintsOf(call),
+  ];
   return {
     inputs: [
       { utxo: control, redeemer: DEVICE_REDEEMER },
       ...swept.map(({ utxo }) => ({ utxo, redeemer: SWEEP_REDEEMER })),
       ...funds.map(utxo => ({ utxo, redeemer: FUND_REDEEMER })),
+      ...(call.inputs ?? []),
     ],
     outputs: [
       controlOutputOf(identity, effect.state, controlLovelace),
       ...(issued ? [issued.output] : []),
       ...effect.outputs,
     ],
-    referenceInputs: witnesses.referenced,
+    referenceInputs: [...witnesses.referenced, ...callReferencesOf(build)],
     changeAddress: identity.address,
     scripts: [
       ...witnesses.attached,
       ...(isStakeOperation ? [identity.stakeScript] : []),
+      ...(call.scripts ?? []),
     ],
     executionEstimate: custodyExecutionEstimate({
       device: 1,
@@ -411,6 +471,7 @@ const planOf = (
       burnGrants: swept.length > 0 ? 1 : 0,
       operate: isStakeOperation ? 1 : 0,
       logic: 'owner',
+      contractRedeemers: contractRedeemerCountOf(call),
     }),
     requiredSigner: signer,
     ...(effect.swept?.invalidBefore !== undefined && {
@@ -421,7 +482,7 @@ const planOf = (
       utxo: funding.collateralUtxo,
       returnAddress: funding.sponsorAddress,
     },
-    ...(mint && { mint }),
+    ...(mint.length > 0 && { mint }),
     ...(effect.poolId && {
       delegation: {
         stakeCredential: scriptCredentialOf(identity.stakeScriptHash),
@@ -516,7 +577,7 @@ const topUpControl = (
 const buildPaidByFunds = async (
   build: OwnerBuild,
 ): Promise<OwnerTransaction> => {
-  const { context, chain, effect, issued, minimum } = build;
+  const { context, chain, issued, minimum } = build;
   const { identity } = context;
   const spendable = context.funds.filter(
     ([, output]) => output.scriptReference === undefined,
@@ -530,9 +591,9 @@ const buildPaidByFunds = async (
     issued && reserveTarget > controlLovelace
       ? reserveTarget - controlLovelace
       : 0n;
-  const requested = totalValueOf(effect.outputs);
+  const owed = owedByFundsOf(build);
   const needed =
-    requested.coins +
+    owed.coins +
     (issued?.output.value.coins ?? 0n) +
     (controlLovelace - build.spentAccountLovelace) +
     topUp +
@@ -544,7 +605,7 @@ const buildPaidByFunds = async (
     chain,
     funds: selectFunds(
       spendable,
-      { coins: needed > 0n ? needed : 0n, assets: requested.assets },
+      { coins: needed > 0n ? needed : 0n, assets: owed.assets },
       context.reserves,
     ),
     plan: funds => planOf(build, funds, controlLovelace),
@@ -563,6 +624,8 @@ const buildPaidByFunds = async (
       ...spendable,
       ...context.reserves,
       ...swept.map(({ utxo }) => utxo),
+      ...(callOf(build).inputs ?? []).map(({ utxo }) => utxo),
+      ...callReferencesOf(build),
     ],
   };
 };
@@ -626,8 +689,15 @@ const isInsufficientFunds = (error: unknown): boolean =>
  * stake operation attaches the stake script.
  *
  * Plain funds and reserves pay first. When they cannot, an operation that
- * pays nothing out and issues no grant takes its fee from the control
- * output's headroom instead.
+ * pays nothing out, issues no grant and calls no contract takes its fee
+ * from the control output's headroom instead.
+ *
+ * An owner spend with a contract call also spends the call's script UTxOs,
+ * mints under its policies, attaches its scripts and reads its reference
+ * inputs, with the same checks as a grant spend's call. What the call's
+ * inputs hold and what it mints pay the outputs first, and what it burns
+ * the funds supply, so the funds pay the net value leaving the account.
+ * The control state is written back unchanged.
  */
 export const buildCustodyOwnerOperation = async (
   {
@@ -645,6 +715,12 @@ export const buildCustodyOwnerOperation = async (
   const { coinsPerUtxoByte } = chain.protocolParameters;
   const effect = await ownerEffectOf(operation, context, chain);
   checkRequestedOutputs(effect.outputs, identity, coinsPerUtxoByte);
+  if (effect.contract) {
+    checkContractCall(effect.contract, context, {
+      chainId: chain.chainId,
+      isControlSpent: true,
+    });
+  }
   const logicRun = await readCustodyLogicRun(accountLogicOf(context), chain);
   const { contractVersion } = identity;
 
@@ -683,7 +759,8 @@ export const buildCustodyOwnerOperation = async (
       logicRun.logic.script,
     ]),
   };
-  const isControlPayable = effect.outputs.length === 0 && !issued;
+  const isControlPayable =
+    effect.outputs.length === 0 && !issued && !effect.contract;
   let paid: OwnerTransaction;
   try {
     paid = await buildPaidByFunds(build);
@@ -711,6 +788,9 @@ export const buildCustodyOwnerOperation = async (
         ? [{ grant: issued.grant, lovelace: issued.output.value.coins }]
         : [],
       sweptSlots: swept.map(({ grant }) => grant.slot),
+      ...(effect.contract && {
+        contractCall: { supplied: contractCallSupplyOf(effect.contract) },
+      }),
       signer,
       deviceKeyHash: signer,
       outflow: {

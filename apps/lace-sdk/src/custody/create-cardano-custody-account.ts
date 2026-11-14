@@ -244,6 +244,7 @@ const signAndSubmitCreation = async (
       accountRecord: result.accountRecord,
       chainId,
       device: account.device,
+      ...(result.costModels && { costModels: result.costModels }),
     }),
     bodyHash: result.bodyHash,
     keyHash: account.device.keyHash,

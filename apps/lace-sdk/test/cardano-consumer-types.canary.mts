@@ -58,6 +58,8 @@ void cardanoEntry.createCardanoCustodyAccount;
 void rootEntry.createCardanoCustodyAccount;
 // @ts-expect-error The custody sponsor client is experimental.
 void cardanoEntry.createCardanoCustodySponsorClient;
+// @ts-expect-error Custody contract pins are experimental.
+void cardanoEntry.cardanoCustodyContractPinOf;
 // @ts-expect-error Passport accounts are experimental.
 void rootEntry.m.createPassportAccountModule;
 // @ts-expect-error Passport accounts are experimental.

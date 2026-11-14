@@ -10,6 +10,7 @@ import {
   createCardanoSignerHandlers,
   type WithMnemonicWords,
 } from '../../src/signing/cardano-signer-handlers';
+import { serializeCardanoCustodyCostModels } from '../../src/signing/custody-sign-request';
 import { MalformedRequestError } from '../../src/signing/request-parsing';
 import {
   signCardanoDataWithWords,
@@ -21,6 +22,7 @@ import {
   agentGrant,
   CHALLENGE,
   controlOutput,
+  COST_MODELS,
   creation,
   custodyDataPayload,
   DAPP_ORIGIN,
@@ -33,6 +35,8 @@ import {
   initialState,
   issueGrant,
   NOW,
+  orderBookPin,
+  ownerContractCall,
   requestedScopeOf,
   revokeGrant,
   serializeCustodyTransaction,
@@ -51,6 +55,7 @@ import {
   words,
 } from './sign-with-words.fixtures';
 
+import type { CardanoContractPin } from '@lace-lib/cardano-custody';
 import type { HexBlob as HexBlobType } from '@lace-lib/cardano-util';
 
 const accountPayload = {
@@ -69,6 +74,7 @@ const dataPayload = {
 
 const createHandlers = (
   withMnemonicWords?: WithMnemonicWords,
+  contractPins?: readonly CardanoContractPin[],
 ): {
   assertions: ReturnType<typeof vi.fn>;
   handlers: ReturnType<typeof createCardanoSignerHandlers>;
@@ -85,6 +91,7 @@ const createHandlers = (
     handlers: createCardanoSignerHandlers({
       withMnemonicWords: withWords,
       now: () => NOW,
+      ...(contractPins ? { contractPins } : {}),
     }),
   };
 };
@@ -439,6 +446,38 @@ describe('custody request kinds', () => {
     );
     expect([...verification.valid.keys()]).toEqual([DEVICE_0]);
     expect(initialState.devices).toContain(DEVICE_0);
+  });
+
+  it('signs an owner spend that calls a contract it pins', async () => {
+    const { handlers, assertions } = createHandlers(undefined, [orderBookPin]);
+    const payload = custodyPayload(ownerContractCall(), {
+      costModels: serializeCardanoCustodyCostModels(COST_MODELS),
+    });
+
+    const { witnessSet } = await handlers['sign-cardano-custody-tx'](payload);
+
+    expect(assertions).toHaveBeenCalledTimes(1);
+    const verification = await verifyVkeyWitnesses(
+      txIdOfPayload(payload),
+      readWitnessSet(witnessSet).vkeys,
+    );
+    expect([...verification.valid.keys()]).toEqual([DEVICE_0]);
+  });
+
+  it('refuses a contract call before any assertion when it pins no contract', async () => {
+    const { handlers, assertions } = createHandlers();
+
+    await expect(
+      handlers['sign-cardano-custody-tx'](
+        custodyPayload(ownerContractCall(), {
+          costModels: serializeCardanoCustodyCostModels(COST_MODELS),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: 'custody-unsupported-operation',
+      reason: 'unknown-contract',
+    });
+    expect(assertions).not.toHaveBeenCalled();
   });
 
   it.each([

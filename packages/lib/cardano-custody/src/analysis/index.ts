@@ -1,3 +1,11 @@
+export type {
+  CustodyContractCalls,
+  CustodyContractData,
+  CustodyContractDatum,
+  CustodyContractMint,
+  CustodyContractReferenceInput,
+  CustodyContractSpend,
+} from './contract-calls';
 export { detectCustodyEffects } from './detect';
 export type { CustodyEffects } from './detect';
 export {
@@ -19,7 +27,11 @@ export type {
   CustodyTransactionInspection,
 } from './inspect';
 export { classifyCustodyAddress } from './outputs';
-export type { CustodyRefusal, CustodyRefusalCode } from './refusals';
+export type {
+  CustodyContractLocation,
+  CustodyRefusal,
+  CustodyRefusalCode,
+} from './refusals';
 export {
   compareRequestedGrantScope,
   parseCustodyRequestedGrantScope,
@@ -29,5 +41,6 @@ export type {
   CustodyRequestedGrantScope,
   SerializedCustodyRequestedGrantScope,
 } from './requested-scope';
+export { addValueDeltas, negateValueDelta, valueDeltaOf } from './value';
 export type { CustodyValueDelta } from './value';
 export * from './sponsor-rules';

@@ -7,11 +7,14 @@
 // the account script, the known logics and the stake derivation come from a
 // contract version and the fee limit is the service's default, where the
 // service reads its configuration; the shared collateral rule also refuses a
-// fee that collateral cannot cover; and the script rule also refuses a
-// reference script other than the version's parked scripts.
+// fee that collateral cannot cover; the script rule also refuses, in fee
+// mode, a reference script other than the version's parked scripts; and in
+// collateral mode the script rules let a transaction call another PlutusV3
+// contract, by spending its inputs, minting under its policy, attaching or
+// referencing its script, and the value rule counts what it mints and burns.
 
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
-import { blake2b, Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import { HexBlob } from '@lace-lib/cardano-util';
 
 import { bytesToHex, HASH_28_BYTE_LENGTH } from '../hex';
@@ -21,7 +24,16 @@ import {
 } from '../identity';
 import { parseCustodyAccountTokenName } from '../tokens';
 
+import {
+  checkScriptDataHash,
+  fieldsOf,
+  hasScriptData,
+  readMapEntries,
+  scriptDataOf,
+} from './script-data-hash';
+
 import type { CustodyContractVersion } from '../contract-version';
+import type { ScriptData } from './script-data-hash';
 import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 
 /** The service's limit on the size of a transaction it inspects, in bytes. */
@@ -94,9 +106,10 @@ type CustodySponsorControlLocation =
  * `fee-exceeds-collateral` is the largest fee the shared collateral covers.
  * `logic-draw` is a withdrawal drawing lovelace from the logic it runs,
  * which the service runs on a withdrawal of zero only.
- * `foreign-reference-script` is Lace's own: a reference input carrying a
- * script, other than a parked script's UTxO carrying exactly that script.
- * Its `scriptHash` is absent for a parked script's UTxO that carries none.
+ * `foreign-reference-script` is Lace's own: a parked script's UTxO carrying
+ * another script or none, or in fee mode any other reference input carrying
+ * a script. Its `scriptHash` is absent for a parked script's UTxO that
+ * carries none.
  */
 export type CustodySponsorRuleViolation =
   | {
@@ -386,12 +399,6 @@ interface NamedLogic {
   readonly stakeScriptHash: Hash28ByteBase16;
 }
 
-/** The redeemers and the datums of a witness set, as the bytes it states them in. */
-interface WitnessScriptData {
-  readonly redeemers: HexBlob | undefined;
-  readonly datums: HexBlob | undefined;
-}
-
 /** What the transaction is to the account contract, or why it is neither an operation nor a creation. */
 type AccountReading =
   | {
@@ -417,7 +424,8 @@ interface Analysis {
    * body keeps one entry per reward account, the service reads them all.
    */
   readonly withdrawals: readonly Cardano.Withdrawal[];
-  readonly witnessScriptData: WitnessScriptData;
+  /** What the script data hash covers, read from the transaction's bytes. */
+  readonly scriptData: ScriptData;
   readonly reading: AccountReading;
   /** The stake scripts of the accounts the transaction belongs to. */
   readonly stakeScriptHashes: ReadonlySet<string>;
@@ -700,50 +708,19 @@ const balanceOf = (values: readonly Cardano.Value[]): Map<string, bigint> => {
   return balance;
 };
 
-/** Reads each entry of the CBOR map the reader is at, definite or not. */
-const readMapEntries = (
-  reader: Serialization.CborReader,
-  readEntry: () => void,
-): void => {
-  const count = reader.readStartMap();
-  for (
-    let read = 0;
-    count === null
-      ? reader.peekState() !== Serialization.CborReaderState.EndMap
-      : read < count;
-    read++
-  ) {
-    readEntry();
-  }
-};
-
-/** The fields of an encoded body or witness set by key, each as the bytes it is stated in. */
-const fieldsOf = (encoded: Uint8Array): Map<bigint, HexBlob> => {
-  const reader = new Serialization.CborReader(bytesToHex(encoded));
-  const fields = new Map<bigint, HexBlob>();
-  readMapEntries(reader, () =>
-    fields.set(reader.readUInt(), bytesToHex(reader.readEncodedValue())),
-  );
-  return fields;
-};
-
 const BODY_WITHDRAWALS = 5n;
-const WITNESS_DATUMS = 4n;
-const WITNESS_REDEEMERS = 5n;
 
 /**
- * The body withdrawals and the witness script data as the transaction's
- * bytes state them, which is what the service reads: the decoded body keeps
- * one withdrawal per reward account, and the script data hash is taken over
- * the bytes the witness set carries.
+ * The body withdrawals as the transaction's bytes state them, which is what
+ * the service reads: the decoded body keeps one withdrawal per reward
+ * account.
  */
-const statedOf = (
+const statedWithdrawalsOf = (
   transaction: Serialization.Transaction,
-): Pick<Analysis, 'withdrawals' | 'witnessScriptData'> => {
+): Cardano.Withdrawal[] => {
   const reader = new Serialization.CborReader(HexBlob(transaction.toCbor()));
   reader.readStartArray();
   const body = fieldsOf(reader.readEncodedValue());
-  const witnessSet = fieldsOf(reader.readEncodedValue());
   const withdrawals: Cardano.Withdrawal[] = [];
   const encodedWithdrawals = body.get(BODY_WITHDRAWALS);
   if (encodedWithdrawals !== undefined) {
@@ -759,13 +736,7 @@ const statedOf = (
       }),
     );
   }
-  return {
-    withdrawals,
-    witnessScriptData: {
-      redeemers: witnessSet.get(WITNESS_REDEEMERS),
-      datums: witnessSet.get(WITNESS_DATUMS),
-    },
-  };
+  return withdrawals;
 };
 
 /**
@@ -972,7 +943,11 @@ const analyse = (
         output.address !== context.sponsorAddress &&
         !isAccountOutput(output, context),
     ),
-    ...statedOf(transaction),
+    withdrawals: statedWithdrawalsOf(transaction),
+    scriptData: scriptDataOf(
+      transaction,
+      [...inputs, ...referenceInputs].map(({ output }) => output),
+    ),
     reading,
     stakeScriptHashes: stakeScriptHashesOf(tokens, reading),
     namedLogics,
@@ -1248,14 +1223,17 @@ const sponsorOutflow: Rule = (analysis, { mode }) =>
     ? sponsorOutflowBounded(analysis, mode)
     : sponsorOutflowZero(analysis);
 
-/** Outputs away from the sponsor and the account are covered by what non-sponsor inputs and withdrawals bring. */
-const noSponsorValueElsewhere: Rule = ({
-  withdrawals,
-  inputs,
-  sponsorInputs,
-  foreignOutputs,
-  sponsorKeys,
-}) => {
+/**
+ * Outputs away from the sponsor and the account are covered by what
+ * non-sponsor inputs and withdrawals bring. In collateral mode a contract
+ * call may mint and burn, so what it mints counts as supply and what it
+ * burns as demand: minted tokens paid out are covered, and burned tokens
+ * must come from the inputs too.
+ */
+const noSponsorValueElsewhere: Rule = (
+  { body, withdrawals, inputs, sponsorInputs, foreignOutputs, sponsorKeys },
+  { mode },
+) => {
   const supply = balanceOf(
     inputs
       .filter(input => !sponsorInputs.includes(input))
@@ -1270,6 +1248,13 @@ const noSponsorValueElsewhere: Rule = ({
     }
   }
   const demand = balanceOf(foreignOutputs.map(output => output.value));
+  if (mode.kind === 'collateral') {
+    for (const [assetId, quantity] of body.mint ?? []) {
+      const [balance, moved] =
+        quantity > 0n ? [supply, quantity] : [demand, -quantity];
+      balance.set(assetId, (balance.get(assetId) ?? 0n) + moved);
+    }
+  }
   for (const [key, demanded] of demand) {
     const supplied = supply.get(key) ?? 0n;
     if (demanded > supplied) {
@@ -1286,13 +1271,15 @@ const noSponsorValueElsewhere: Rule = ({
 };
 
 /**
- * Lace's own rule on reference inputs: one carrying a script must be a
- * version's parked script UTxO on the network, carrying exactly the script
- * parked there, and a parked script's UTxO must carry its script.
+ * Lace's own rule on reference inputs: a parked script's UTxO on the
+ * network must carry exactly the script parked there. In fee mode a
+ * reference input carrying a script must also be one of those UTxOs. In
+ * collateral mode a reference input may carry the script of a contract the
+ * transaction calls.
  */
 const foreignReferenceScriptOf = (
   referenceInputs: readonly ResolvedInput[],
-  { contractVersion, networkMagic }: CustodySponsorRuleContext,
+  { contractVersion, networkMagic, mode }: CustodySponsorRuleContext,
 ): CustodySponsorRuleViolation | undefined => {
   const parked = new Map(
     (contractVersion.referenceScripts[networkMagic] ?? []).map(
@@ -1305,7 +1292,7 @@ const foreignReferenceScriptOf = (
     const expected = parked.get(outpointKey(input));
     const isForeign =
       expected === undefined
-        ? scriptHash !== undefined
+        ? scriptHash !== undefined && mode.kind === 'fee'
         : output !== undefined && scriptHash !== expected;
     if (isForeign) {
       return {
@@ -1320,11 +1307,18 @@ const foreignReferenceScriptOf = (
 };
 
 /**
- * Every script the transaction runs or attaches belongs to the account.
- * Inputs and mints use the account proxy alone. A certificate or a vote may
- * name the proxy or the stake script of an account the transaction belongs
- * to. A logic its control datums name may also run through a withdrawal,
- * of zero only, and be attached. No reward account is drawn from twice.
+ * Every script the transaction runs or attaches belongs to the account, or
+ * in collateral mode to a contract the transaction calls. Inputs and mints
+ * use the account proxy alone in fee mode; in collateral mode they may run
+ * any Plutus script, since the service evaluates every script before it
+ * lends collateral, so a failing call never gets it, and the script data
+ * rule keeps every script the transaction runs to PlutusV3. A certificate
+ * or a vote may name the proxy or the stake script of an account the
+ * transaction belongs to. A logic its control datums name may also run
+ * through a withdrawal, of zero only, and be attached. No reward account
+ * is drawn from twice. A native script is refused attached in either mode,
+ * and in collateral mode also as the reference script of an input or a
+ * reference input, where a called contract could take it from.
  */
 const noForeignScripts: Rule = (
   {
@@ -1339,19 +1333,22 @@ const noForeignScripts: Rule = (
   context,
 ) => {
   const rule = 'no_foreign_scripts';
+  const canCallContracts = context.mode.kind === 'collateral';
   const proxy: string = context.contractVersion.accountValidatorHash;
   const accountScripts = new Set<string>([proxy, ...stakeScriptHashes]);
   const runnable = new Set<string>([...accountScripts, ...logicHashes]);
   for (const { input, output } of inputs) {
     const scriptHash =
       output && scriptHashOf(paymentCredentialOf(output.address));
-    if (scriptHash !== undefined && scriptHash !== proxy) {
+    if (scriptHash !== undefined && scriptHash !== proxy && !canCallContracts) {
       return { rule, reason: 'foreign-script-input', input, scriptHash };
     }
   }
   for (const assetId of body.mint?.keys() ?? []) {
     const policyId = policyIdOf(assetId);
-    if (policyId !== proxy) return { rule, reason: 'foreign-mint', policyId };
+    if (policyId !== proxy && !canCallContracts) {
+      return { rule, reason: 'foreign-mint', policyId };
+    }
   }
   for (const [certificateIndex, certificate] of (
     body.certificates ?? []
@@ -1399,12 +1396,17 @@ const noForeignScripts: Rule = (
     }
   }
   const scripts = witness.scripts ?? [];
-  if (scripts.some(script => Cardano.isNativeScript(script))) {
+  const carried = canCallContracts
+    ? [...inputs, ...referenceInputs].flatMap(
+        ({ output }) => output?.scriptReference ?? [],
+      )
+    : [];
+  if ([...scripts, ...carried].some(script => Cardano.isNativeScript(script))) {
     return { rule, reason: 'native-script' };
   }
   for (const script of scripts) {
     const scriptHash = Serialization.Script.fromCore(script).hash();
-    if (!runnable.has(scriptHash)) {
+    if (!runnable.has(scriptHash) && !canCallContracts) {
       return { rule, reason: 'foreign-attached-script', scriptHash };
     }
   }
@@ -1412,70 +1414,34 @@ const noForeignScripts: Rule = (
 };
 
 /**
- * The Plutus languages of the scripts the transaction attaches, then of the
- * reference scripts its inputs and reference inputs carry: the service's
- * language view covers all of them, not only the scripts that run.
- */
-const languagesOf = ({
-  witness,
-  inputs,
-  referenceInputs,
-}: Analysis): Cardano.PlutusLanguageVersion[] => [
-  ...(witness.scripts ?? []).flatMap(script =>
-    Cardano.isPlutusScript(script) ? [script.version] : [],
-  ),
-  ...[...inputs, ...referenceInputs].flatMap(({ output }) =>
-    output?.scriptReference && Cardano.isPlutusScript(output.scriptReference)
-      ? [output.scriptReference.version]
-      : [],
-  ),
-];
-
-/** The redeemers that stand in for a witness set carrying datums and no redeemers. */
-const EMPTY_REDEEMERS = 'a0';
-
-/**
  * The script data hash the body commits to is the one the witness set's
  * redeemers and datums hash to, under the cost models, with the language
  * view of every attached and referenced script. Every script an account
- * runs is Plutus V3, so a transaction carrying any other language is
- * refused before a view is formed.
+ * runs is PlutusV3, and so must be every contract a transaction calls in
+ * collateral mode, so a transaction carrying script data and any other
+ * language is refused before a view is formed.
  */
-const scriptDataHash: Rule = (analysis, { costModels }) => {
+const scriptDataHash: Rule = ({ body, scriptData }, { costModels }) => {
   const rule = 'script_data_hash';
-  const declared = analysis.body.scriptIntegrityHash;
-  const { redeemers, datums } = analysis.witnessScriptData;
-  if (redeemers === undefined && datums === undefined) {
-    return declared === undefined
-      ? undefined
-      : { rule, reason: 'unexpected-script-data-hash', declared };
+  const problem = checkScriptDataHash(
+    body.scriptIntegrityHash,
+    scriptData,
+    costModels,
+  );
+  if (
+    problem?.reason === 'unexpected-script-data-hash' ||
+    problem?.reason === 'missing-script-data-hash' ||
+    !hasScriptData(scriptData)
+  ) {
+    return problem && { rule, ...problem };
   }
-  if (declared === undefined)
-    return { rule, reason: 'missing-script-data-hash' };
-  const languages = languagesOf(analysis);
-  const foreign = languages.find(
+  const foreign = scriptData.languages.find(
     language => language !== Cardano.PlutusLanguageVersion.V3,
   );
   if (foreign !== undefined) {
     return { rule, reason: 'non-v3-script', language: foreign };
   }
-  const views = new Serialization.Costmdls();
-  for (const language of new Set(languages)) {
-    const costs = costModels.get(language);
-    if (!costs) return { rule, reason: 'missing-cost-model', language };
-    views.insert(new Serialization.CostModel(language, costs));
-  }
-  const computed = blake2b.hash<Hash32ByteBase16>(
-    HexBlob(
-      `${redeemers ?? EMPTY_REDEEMERS}${
-        datums ?? ''
-      }${views.languageViewsEncoding()}`,
-    ),
-    32,
-  );
-  return computed === declared
-    ? undefined
-    : { rule, reason: 'script-data-hash-mismatch', declared, computed };
+  return problem && { rule, ...problem };
 };
 
 /** Neither sponsor key signs for anything but the sponsor's own inputs. */
@@ -1543,8 +1509,15 @@ const RULES: readonly Rule[] = [
  * operator lists, which Lace takes to be the contract version's. Beyond the
  * service's rules, the shared collateral rule refuses a fee above what the
  * shared collateral covers, which the ledger would refuse after the service
- * signed, and the script rule refuses a reference script other than the
- * version's parked scripts on the network.
+ * signed, and in fee mode the script rule refuses a reference script other
+ * than the version's parked scripts on the network.
+ *
+ * In collateral mode an operation may call other PlutusV3 contracts: spend
+ * their inputs, mint under their policies, attach or reference their
+ * scripts. There is no switch for it: the service evaluates every script
+ * before it lends collateral, so a failing call never gets collateral.
+ * Native scripts, and scripts of any other Plutus language, stay refused,
+ * and so do foreign scripts on certificates, withdrawals and votes.
  *
  * @param resolvedInputs - the outputs the transaction's inputs spend and its
  *   reference inputs name; an input or a reference input without one is

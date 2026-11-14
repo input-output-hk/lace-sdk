@@ -11,6 +11,12 @@ type FundHold = {
   txId: Cardano.TransactionId;
   inputs: readonly Cardano.TxIn[];
   resolvedInputs: readonly Cardano.Utxo[];
+  /**
+   * Whether the spend calls other contracts. Only a spend built with a
+   * contract call may spend and read UTxOs outside the account, which
+   * `resolvedInputs` alone resolves.
+   */
+  callsContract: boolean;
   /** POSIX milliseconds after which the spend can no longer be included. */
   expiresAt: number;
 };
@@ -153,15 +159,18 @@ export const beginGrantSpendBuild = (
   };
 };
 
-/** The resolutions a held grant spend was built with, if this wallet holds it. */
-export const heldResolutionsOf = (
+/**
+ * The grant spend `txId` as this wallet built it, with the resolutions it
+ * was built with, if this wallet holds it.
+ */
+export const heldGrantSpendOf = (
   wallet: Pick<WalletWithCardanoCustody, 'stateObservables'>,
   accountId: AccountId,
   txId: Cardano.TransactionId,
-): readonly Cardano.Utxo[] =>
+): Pick<FundHold, 'callsContract' | 'resolvedInputs'> | undefined =>
   [...accountHolds(wallet, accountId).values()].find(
     ({ built }) => built?.txId === txId,
-  )?.built?.resolvedInputs ?? [];
+  )?.built;
 
 /** Ends the hold of the spend `txId`, which was submitted or must be rebuilt. */
 export const releaseGrantSpendInputs = (

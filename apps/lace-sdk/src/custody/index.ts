@@ -17,6 +17,7 @@ export {
   CardanoCustodyAgentWitnessError,
   CardanoCustodyAlreadyRegisteredError,
   CardanoCustodyBuildFailedError,
+  CardanoCustodyContractPinInvalidError,
   CardanoCustodyDeviceNotListedError,
   CardanoCustodyEnrollmentInvalidError,
   CardanoCustodyFundContentionError,
@@ -41,6 +42,7 @@ export {
   CardanoCustodyWitnessError,
 } from './cardano-custody-errors';
 export type {
+  CardanoCustodyContractPinInvalidReason,
   CardanoCustodyGrantSpendReason,
   CardanoCustodyInvalidOperationReason,
   CardanoCustodyWitnessRefusal,
@@ -56,6 +58,7 @@ export type {
   CardanoCustodyAccountProps,
   CardanoCustodyAccountState,
   CardanoCustodyBuildError,
+  CardanoCustodyContractCall,
   CardanoCustodyDeviceBinding,
   CardanoCustodyDeviceChannel,
   CardanoCustodyGrantScopeRequest,
@@ -76,6 +79,15 @@ export type {
 } from './cardano-custody-device';
 export { requestCardanoCustodyDeviceKey } from './request-cardano-custody-device-key';
 export type { RequestCardanoCustodyDeviceKeyProps } from './request-cardano-custody-device-key';
+export { registerCustomCardanoNetwork } from '@lace-contract/cardano-context';
+export type { CustomCardanoNetwork } from '@lace-contract/cardano-context';
+export { cardanoCustodyContractPinOf } from './cardano-custody-contract-pin';
+export type {
+  CardanoCustodyContractDefinitions,
+  CardanoCustodyContractPin,
+  CardanoCustodyContractPinRequest,
+  CardanoCustodyContractSchema,
+} from './cardano-custody-contract-pin';
 export {
   createLocalCardanoCustodyDeviceSigner,
   createRemoteCardanoCustodyDeviceSigner,

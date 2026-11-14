@@ -1,5 +1,5 @@
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
-import { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import { blake2b, Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
 import { HexBlob } from '@lace-lib/cardano-util';
 
 import {
@@ -17,15 +17,19 @@ import {
   findCustodyLogic,
 } from '../src';
 
-import { NOW, OWNER_KEY } from './fixtures';
+import { grantedState, NOW, OWNER_KEY } from './fixtures';
 
 import type {
+  CardanoContractPin,
   CustodyAccountRedeemer,
   CustodyAccountState,
   CustodyGrant,
 } from '../src';
 import type { CustodyInspectionOptions } from '../src/analysis/inspect';
-import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import type {
+  Hash28ByteBase16,
+  Hash32ByteBase16,
+} from '@lace-lib/cardano-crypto';
 
 export const PREPROD = Cardano.ChainIds.Preprod;
 
@@ -308,11 +312,43 @@ export interface TransactionShape {
   readonly invalidHereafter?: Cardano.Slot;
   readonly invalidBefore?: Cardano.Slot;
   readonly scripts?: readonly Cardano.Script[];
+  /** Datums the witness set carries, the preimages of datum hashes. */
+  readonly datums?: readonly Cardano.PlutusData[];
   /** Carried as auxiliary data, with its hash in the body unless `body` overrides it. */
   readonly auxiliaryData?: Cardano.AuxiliaryData;
   readonly body?: Partial<Cardano.TxBody>;
   readonly fee?: bigint;
+  /**
+   * The cost models the body's script data hash is taken under, over the
+   * language view of each one; without them the body commits to none.
+   */
+  readonly costModels?: Cardano.CostModels;
 }
+
+/** A Plutus V3 cost model: every script the fixtures carry is Plutus V3. */
+export const COST_MODELS: Cardano.CostModels = new Map([
+  [Cardano.PlutusLanguageVersion.V3, [1, 2, 3]],
+]);
+
+/** The script data hash a transaction's witness set calls for under `costModels`. */
+const scriptDataHashOf = (
+  transaction: Serialization.Transaction,
+  costModels: Cardano.CostModels,
+): Hash32ByteBase16 => {
+  const witnessSet = transaction.witnessSet();
+  const views = new Serialization.Costmdls();
+  for (const [language, costs] of costModels) {
+    views.insert(new Serialization.CostModel(language, costs));
+  }
+  return blake2b.hash(
+    HexBlob(
+      `${witnessSet.redeemers()?.toCbor() ?? 'a0'}${
+        witnessSet.plutusData()?.toCbor() ?? ''
+      }${views.languageViewsEncoding()}`,
+    ),
+    32,
+  );
+};
 
 const outpointKey = ({ txId, index }: Cardano.TxIn) => `${txId}#${index}`;
 
@@ -448,10 +484,20 @@ export const buildTransaction = (
       signatures: new Map(),
       ...(redeemers.length > 0 ? { redeemers } : {}),
       ...(shape.scripts ? { scripts: [...shape.scripts] } : {}),
+      ...(shape.datums ? { datums: [...shape.datums] } : {}),
     },
     ...(shape.auxiliaryData ? { auxiliaryData: shape.auxiliaryData } : {}),
   };
-  const cbor = Serialization.Transaction.fromCore(tx).toCbor();
+  const unhashed = Serialization.Transaction.fromCore(tx);
+  const cbor = shape.costModels
+    ? Serialization.Transaction.fromCore({
+        ...tx,
+        body: {
+          ...tx.body,
+          scriptIntegrityHash: scriptDataHashOf(unhashed, shape.costModels),
+        },
+      }).toCbor()
+    : unhashed.toCbor();
   return {
     transaction: Serialization.Transaction.fromCbor(cbor),
     resolvedInputs: [
@@ -644,6 +690,159 @@ export const grantSpend = (
     fee,
   };
 };
+
+/** The validator of another contract an agent calls, also its minting policy. */
+export const CONTRACT_SCRIPT: Cardano.Script = {
+  __type: Cardano.ScriptType.Plutus,
+  version: Cardano.PlutusLanguageVersion.V3,
+  bytes: HexBlob('4e4d01000033222220051200120011'),
+};
+export const CONTRACT_HASH =
+  Serialization.Script.fromCore(CONTRACT_SCRIPT).hash();
+export const CONTRACT_ADDRESS = enterpriseAddress(
+  scriptCredential(CONTRACT_HASH),
+);
+/** A token the called contract mints under its own policy. */
+export const CONTRACT_TOKEN = Cardano.AssetId(`${CONTRACT_HASH}6f72646572`);
+/** The datum and redeemer the called contract reads; it ignores both. */
+export const CONTRACT_DATA: Cardano.PlutusData = 42n;
+
+/** The UTxO that parks the called contract's script, outside every account. */
+export const contractScriptCarrier = utxo(0x21, {
+  address: CONTRACT_ADDRESS,
+  value: { coins: 10_000_000n },
+  scriptReference: CONTRACT_SCRIPT,
+});
+
+/**
+ * An agent's lovelace grant spend that calls another contract: beside the
+ * shape of `grantSpend`, it spends the contract's order UTxO of
+ * `orderLovelace` under a redeemer, mints the contract's token, references
+ * the contract's parked script, pays `toContract` into the contract's
+ * continuing output and takes `fromContract` back to the account as a plain
+ * deposit. The grant is recreated with its cap lowered by exactly the net
+ * outflow, and the body commits to its script data under `COST_MODELS`.
+ */
+export const contractCall = ({
+  grant,
+  toContract = 2_000_000n,
+  fromContract = 0n,
+  orderLovelace = 5_000_000n,
+}: {
+  grant: CustodyGrant;
+  toContract?: bigint;
+  fromContract?: bigint;
+  orderLovelace?: bigint;
+}): TransactionShape => {
+  const shape = grantSpend(grantedState, grant, toContract);
+  const fee = shape.fee ?? 0n;
+  const order = utxo(0x20, {
+    address: CONTRACT_ADDRESS,
+    value: { coins: orderLovelace },
+    datum: CONTRACT_DATA,
+  });
+  const [, , change] = shape.outputs;
+  return {
+    ...shape,
+    inputs: [...shape.inputs, order],
+    referenceInputs: [...shape.referenceInputs!, contractScriptCarrier],
+    spendRedeemers: [
+      ...shape.spendRedeemers!,
+      { utxo: order, data: CONTRACT_DATA },
+    ],
+    outputs: [
+      grantOutput(
+        custodyGrantAfterSpend(grant, {
+          lovelace: toContract + fee - fromContract,
+          assets: new Map(),
+        }),
+      ),
+      {
+        address: CONTRACT_ADDRESS,
+        value: {
+          coins: orderLovelace + toContract - fromContract,
+          assets: new Map([[CONTRACT_TOKEN, 1n]]),
+        },
+        datum: CONTRACT_DATA,
+      },
+      change,
+      ...(fromContract > 0n ? [fundOutput(fromContract)] : []),
+    ],
+    mint: new Map([[CONTRACT_TOKEN, 1n]]),
+    mintRedeemer: CONTRACT_DATA,
+    costModels: COST_MODELS,
+  };
+};
+
+/** The UTxO of the called contract an owner spends, holding `CONTRACT_DATA` inline. */
+export const contractOrder = utxo(0x20, {
+  address: CONTRACT_ADDRESS,
+  value: { coins: 5_000_000n },
+  datum: CONTRACT_DATA,
+});
+
+/**
+ * An owner spend that calls another contract, the account paying the fee
+ * and the sponsor lending only its collateral: beside the device rewrite of
+ * the control UTxO, it spends a 20 tADA fund UTxO and the contract's order
+ * UTxO under a redeemer, mints the contract's token, references the
+ * contract's parked script and pays `toContract` into the contract's
+ * continuing output, the change going back to the account. The body commits
+ * to its script data under `COST_MODELS`.
+ */
+export const ownerContractCall = (
+  toContract = 2_000_000n,
+): TransactionShape => {
+  const fee = 200_000n;
+  const rewrite = deviceRewrite(grantedState, grantedState);
+  const [control] = rewrite.inputs;
+  const funds = utxo(0x11, fundOutput(20_000_000n));
+  const [, order] = contractOrder;
+  return {
+    ...rewrite,
+    inputs: [control, funds, contractOrder],
+    referenceInputs: [...PARKED_SCRIPTS, contractScriptCarrier],
+    spendRedeemers: [
+      device(control),
+      fund(funds),
+      { utxo: contractOrder, data: CONTRACT_DATA },
+    ],
+    outputs: [
+      controlOutput(grantedState),
+      {
+        address: CONTRACT_ADDRESS,
+        value: {
+          coins: order.value.coins + toContract,
+          assets: new Map([[CONTRACT_TOKEN, 1n]]),
+        },
+        datum: CONTRACT_DATA,
+      },
+      fundOutput(20_000_000n - fee - toContract),
+    ],
+    mint: new Map([[CONTRACT_TOKEN, 1n]]),
+    mintRedeemer: CONTRACT_DATA,
+    fee,
+    costModels: COST_MODELS,
+  };
+};
+
+/**
+ * The pin of the called contract: its integer redeemers for both handlers
+ * and its integer datum, the datum through a definition.
+ */
+export const contractPin = (
+  changes: Partial<CardanoContractPin> = {},
+): CardanoContractPin => ({
+  label: 'Order book',
+  scriptHash: CONTRACT_HASH,
+  spend: {
+    redeemer: { title: 'Action', dataType: 'integer' },
+    datum: { $ref: '#/definitions/Int' },
+  },
+  mint: { redeemer: { title: 'Mint', dataType: 'integer' } },
+  definitions: { Int: { dataType: 'integer' } },
+  ...changes,
+});
 
 export const hexOf = (text: string): HexBlob =>
   HexBlob(Buffer.from(text, 'utf8').toString('hex'));

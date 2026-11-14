@@ -2,7 +2,7 @@ import {
   CARDANO_CUSTODY_DEFAULT_GRANT_FEE_BOUND,
   outpointKey,
 } from '@lace-contract/cardano-context';
-import { Cardano, Serialization } from '@lace-lib/cardano-core';
+import { Cardano } from '@lace-lib/cardano-core';
 import {
   custodyGrantAfterSpend,
   custodyGrantLiveness,
@@ -24,6 +24,15 @@ import {
   totalValueOf,
 } from './custody-assembly';
 import { validitySlotFor } from './custody-chain';
+import {
+  checkContractCall,
+  contractCallSupplyOf,
+  contractMintsOf,
+  contractRedeemerCountOf,
+  contractReferencesOf,
+  outflowOf,
+  owedOf,
+} from './custody-contract-call';
 import { buildWithEvaluatedBudgets } from './custody-evaluation';
 import { custodyExecutionEstimate } from './custody-execution-estimate';
 import { checkRequestedOutputs } from './custody-requests';
@@ -41,6 +50,7 @@ import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildResult,
   CardanoCustodyCollateralFunding,
+  CardanoCustodyContractCall,
 } from '@lace-contract/cardano-context';
 import type * as Crypto from '@lace-lib/cardano-crypto';
 import type {
@@ -74,23 +84,13 @@ const SPEND_WITH_GRANT_REDEEMER = encodeCustodyAccountRedeemer({
 });
 const FUND_REDEEMER = encodeCustodyAccountRedeemer({ kind: 'fund' });
 
-const cborOf = (data: Cardano.PlutusData): string =>
-  Serialization.PlutusData.fromCore(data).toCbor();
-
-const FUND_REDEEMER_CBOR = cborOf(FUND_REDEEMER);
-const SPEND_WITH_GRANT_REDEEMER_CBOR = cborOf(SPEND_WITH_GRANT_REDEEMER);
-
-const deltaOf = (
-  value: Required<Cardano.Value>,
+/** The value leaving the account when it also pays `fee`. */
+const leavingOf = (
+  outflow: CustodyValueDelta,
   fee = 0n,
 ): CustodyValueDelta => ({
-  lovelace: value.coins + fee,
-  assets: new Map(
-    [...value.assets].map(([assetId, quantity]) => [
-      assetId.toLowerCase() as Cardano.AssetId,
-      quantity,
-    ]),
-  ),
+  lovelace: outflow.lovelace + fee,
+  assets: outflow.assets,
 });
 
 /**
@@ -246,20 +246,20 @@ const grantSpendValiditySlot = (
 
 /**
  * Refuses a spend the fund UTxOs cannot pay however they are combined:
- * they hold less of a requested asset, or less lovelace, with whatever the
- * logic run draws, than the outputs and the least fee. It runs before the
- * fund input cap, because consolidation cannot help an account that is
- * short of funds.
+ * they hold less of an owed asset, or less lovelace, with whatever the
+ * logic run draws, than the net outflow owes and the least fee. It runs
+ * before the fund input cap, because consolidation cannot help an account
+ * that is short of funds.
  */
 const refuseShortFunds = (
   candidates: readonly Cardano.Utxo[],
-  requested: Required<Cardano.Value>,
+  owed: Required<Cardano.Value>,
   { leastFee, drawn }: { leastFee: bigint; drawn: bigint },
 ): void => {
   const available = totalValueOf(candidates.map(([, output]) => output));
   const isShort =
-    available.coins + drawn < requested.coins + leastFee ||
-    [...requested.assets].some(
+    available.coins + drawn < owed.coins + leastFee ||
+    [...owed.assets].some(
       ([assetId, quantity]) => (available.assets.get(assetId) ?? 0n) < quantity,
     );
   if (isShort) {
@@ -282,41 +282,68 @@ const refuseFundInputCount = (funds: readonly Cardano.Utxo[]): void => {
   }
 };
 
-/**
- * Refuses a spend whose budgets exceed the per-transaction execution limit,
- * as a fund input count above what one spend fits: the grant's run is
- * fixed, so only fewer, larger fund UTxOs help. The count that fits follows
- * from the grant's and the logic's budgets and the dearest fund budget; the
- * logic's budget already counts every fund it checked, so the count errs
- * low.
- */
-const refuseOverBudget = (
-  redeemers: readonly Cardano.Redeemer[],
-  { maxExecutionUnitsPerTransaction: limit }: Cardano.ProtocolParameters,
-): void => {
-  const total = redeemers.reduce(
+/** The sum of the redeemers' execution units. */
+const budgetOf = (redeemers: readonly Cardano.Redeemer[]): Cardano.ExUnits =>
+  redeemers.reduce(
     (sum, { executionUnits }) => ({
       memory: sum.memory + executionUnits.memory,
       steps: sum.steps + executionUnits.steps,
     }),
     { memory: 0, steps: 0 },
   );
-  if (total.memory <= limit.memory && total.steps <= limit.steps) return;
-  const fixed = redeemers
-    .filter(
-      ({ purpose, data }) =>
-        purpose === Cardano.RedeemerPurpose.withdrawal ||
-        cborOf(data) === SPEND_WITH_GRANT_REDEEMER_CBOR,
-    )
-    .reduce(
-      (sum, { executionUnits }) => ({
-        memory: sum.memory + executionUnits.memory,
-        steps: sum.steps + executionUnits.steps,
-      }),
-      { memory: 0, steps: 0 },
-    );
+
+/** Whether a budget fits a limit in both memory and steps. */
+const isWithin = (budget: Cardano.ExUnits, limit: Cardano.ExUnits): boolean =>
+  budget.memory <= limit.memory && budget.steps <= limit.steps;
+
+/**
+ * Refuses a spend whose budgets exceed the per-transaction execution limit,
+ * as a fund input count above what one spend fits: the grant's run, the
+ * logic's and a contract call's are fixed, so only fewer, larger fund UTxOs
+ * help. The count that fits follows from the fixed budgets and the dearest
+ * fund budget; the logic's budget already counts every fund it checked, so
+ * the count errs low. A fund redeemer is a spend redeemer whose input,
+ * among `inputs` in the ledger's order, is in `fundKeys`; a call redeemer
+ * is a spend redeemer whose input is in `callKeys`, or a mint redeemer,
+ * since a grant spend mints only for its call. When the call's redeemers
+ * alone take the fixed budgets over the limit, no fund count helps, and
+ * the spend is left to the fee bound and the finished transaction's limit
+ * check.
+ */
+const refuseOverBudget = (
+  redeemers: readonly Cardano.Redeemer[],
+  {
+    inputs,
+    fundKeys,
+    callKeys,
+  }: {
+    inputs: readonly Cardano.TxIn[];
+    fundKeys: ReadonlySet<string>;
+    callKeys: ReadonlySet<string>;
+  },
+  { maxExecutionUnitsPerTransaction: limit }: Cardano.ProtocolParameters,
+): void => {
+  if (isWithin(budgetOf(redeemers), limit)) return;
+  const spendsFrom =
+    (keys: ReadonlySet<string>) =>
+    ({ purpose, index }: Cardano.Redeemer) =>
+      purpose === Cardano.RedeemerPurpose.spend &&
+      inputs[index] !== undefined &&
+      keys.has(outpointKey(inputs[index]));
+  const isFund = spendsFrom(fundKeys);
+  const isCallInput = spendsFrom(callKeys);
+  const fixedRedeemers = redeemers.filter(redeemer => !isFund(redeemer));
+  const fixed = budgetOf(fixedRedeemers);
+  const custodyFixed = budgetOf(
+    fixedRedeemers.filter(
+      redeemer =>
+        !isCallInput(redeemer) &&
+        redeemer.purpose !== Cardano.RedeemerPurpose.mint,
+    ),
+  );
+  if (!isWithin(fixed, limit) && isWithin(custodyFixed, limit)) return;
   const fundBudgets = redeemers
-    .filter(({ data }) => cborOf(data) === FUND_REDEEMER_CBOR)
+    .filter(isFund)
     .map(({ executionUnits }) => executionUnits);
   const fundMemory = Math.max(1, ...fundBudgets.map(({ memory }) => memory));
   const fundSteps = Math.max(1, ...fundBudgets.map(({ steps }) => steps));
@@ -336,17 +363,17 @@ const refuseOverBudget = (
 
 /**
  * The grant the recreated grant UTxO carries: the caps `grant_after_spend`
- * allows for the requested outputs and `fee`, and no lower than zero. The
+ * allows for the net `outflow` and `fee`, and no lower than zero. The
  * logic accepts any cap from zero to the value for the fee of the
  * transaction it checks, so a `fee` no lower than that one writes valid
  * caps.
  */
 const grantAfter = (
   grant: CustodyGrant,
-  requested: Required<Cardano.Value>,
+  outflow: CustodyValueDelta,
   fee: bigint,
 ): CustodyGrant => {
-  const { scope } = custodyGrantAfterSpend(grant, deltaOf(requested, fee));
+  const { scope } = custodyGrantAfterSpend(grant, leavingOf(outflow, fee));
   return {
     ...grant,
     scope: {
@@ -360,16 +387,16 @@ const grantAfter = (
 /**
  * The most fee the outflow carries before it breaks a lovelace cap of the
  * scope: the lower of a lovelace grant's caps, or of a token grant's
- * lovelace caps, less the requested lovelace.
+ * lovelace caps, less the net lovelace outflow.
  */
 const feeRoomOf = (
   { scope }: CustodyGrant,
-  requested: Required<Cardano.Value>,
+  outflow: CustodyValueDelta,
 ): bigint => {
   const [perCallCap, cap] = isCustodyLovelaceAsset(scope.asset)
     ? [scope.perCallCap, scope.cap]
     : [scope.lovelacePerCallCap, scope.lovelaceCap];
-  return (perCallCap < cap ? perCallCap : cap) - requested.coins;
+  return (perCallCap < cap ? perCallCap : cap) - outflow.lovelace;
 };
 
 /**
@@ -384,6 +411,13 @@ const feeRoomOf = (
  * fee, which counts against the grant's caps; the sponsor contributes only
  * its collateral. The proxy and the logic are read from their parked UTxOs
  * on a network that has them, and attached elsewhere.
+ *
+ * With a contract call, the transaction also spends the call's script
+ * UTxOs, mints under its policies, attaches its scripts and reads its
+ * reference inputs. What the call's inputs hold and what it mints pay the
+ * outputs first, and what it burns the funds supply, so the funds pay, and
+ * the caps fall by, the net value leaving the account. A call that names
+ * nothing, or names one of the account's own UTxOs, is refused.
  *
  * The caps go into the datum before the fee is known, and the logic counts
  * the fee in the outflow it checks against them, both on the final
@@ -418,9 +452,14 @@ export const buildCustodyGrantSpend = async (
     parameters.coinsPerUtxoByte,
   );
   checkRecipients(grant, operation.outputs, identity.chainId.networkId);
+  const call: CardanoCustodyContractCall = operation.contract ?? {};
+  if (operation.contract) checkContractCall(operation.contract, context, chain);
+  const supplied = contractCallSupplyOf(call);
   const requested = totalValueOf(operation.outputs);
+  const outflow = outflowOf(requested, supplied);
+  const owed = owedOf(outflow);
   // A payment that alone breaks the caps is refused before any build.
-  refuseScope(grant, deltaOf(requested));
+  refuseScope(grant, leavingOf(outflow));
   const invalidHereafter = grantSpendValiditySlot(grant, funding, chain);
   const grantee = grant.grantee as unknown as Crypto.Ed25519KeyHashHex;
 
@@ -431,6 +470,10 @@ export const buildCustodyGrantSpend = async (
     contractVersion.accountValidator,
     logicRun.logic.script,
   ]);
+  const referenced = [control, ...witnesses.referenced];
+  const callInputs = call.inputs ?? [];
+  const callReferences = contractReferencesOf(call, referenced);
+  const callMints = contractMintsOf(call);
 
   const excluded = new Set((operation.excludedInputs ?? []).map(outpointKey));
   const candidates = context.funds.filter(
@@ -443,18 +486,20 @@ export const buildCustodyGrantSpend = async (
       inputs: [
         { utxo: spent.utxo, redeemer: SPEND_WITH_GRANT_REDEEMER },
         ...funds.map(utxo => ({ utxo, redeemer: FUND_REDEEMER })),
+        ...callInputs,
       ],
-      referenceInputs: [control, ...witnesses.referenced],
+      referenceInputs: [...referenced, ...callReferences],
       outputs: [
         grantOutputOf(identity, after, spent.utxo[1].value.coins),
         ...operation.outputs,
       ],
       changeAddress: identity.address,
-      scripts: witnesses.attached,
+      scripts: [...witnesses.attached, ...(call.scripts ?? [])],
       executionEstimate: custodyExecutionEstimate({
         spendWithGrant: 1,
         fund: funds.length,
         logic: 'agent',
+        contractRedeemers: contractRedeemerCountOf(call),
       }),
       requiredSigner: grantee,
       invalidHereafter,
@@ -463,27 +508,28 @@ export const buildCustodyGrantSpend = async (
         returnAddress: funding.sponsorAddress,
       },
       withdrawals: [logicRun.withdrawal],
+      ...(callMints.length > 0 && { mint: callMints }),
     });
   const needed =
-    requested.coins +
+    owed.coins +
     plannedFeeOf(planOf(grant)([]), parameters) +
     changeReserveAt(identity.address, parameters.coinsPerUtxoByte) -
     drawn;
   const selection = selectFunds(candidates, {
     coins: needed > 0n ? needed : 0n,
-    assets: requested.assets,
+    assets: owed.assets,
   });
   if (!selection.covers) {
-    refuseShortFunds(candidates, requested, {
+    refuseShortFunds(candidates, owed, {
       leastFee: leastFeeOf(planOf(grant)([]), parameters),
       drawn,
     });
   }
 
-  const feeRoom = feeRoomOf(grant, requested);
+  const feeRoom = feeRoomOf(grant, outflow);
   /** A build whose caps are lowered by `lowering` and whose drafts fit them. */
   const build = async (lowering: bigint, funds: FundSelection) => {
-    const after = grantAfter(grant, requested, lowering);
+    const after = grantAfter(grant, outflow, lowering);
     const transaction = await buildWithEvaluatedBudgets({
       chain,
       funds,
@@ -507,26 +553,35 @@ export const buildCustodyGrantSpend = async (
           reason: 'scope',
           violations: findCustodyScopeViolations(
             grant.scope,
-            deltaOf(requested, fee),
+            leavingOf(outflow, fee),
             fee,
           ),
         });
 
+  const fundKeys = new Set(candidates.map(([input]) => outpointKey(input)));
+  const callKeys = new Set(
+    callInputs.map(({ utxo: [input] }) => outpointKey(input)),
+  );
   const first = await build(feeBound, selection).catch((error: unknown) => {
     if (!(error instanceof MaxBalancedFeeExceeded)) throw error;
     // Too many funds explain a fee above the bound and are what to change.
-    refuseOverBudget(error.evaluatedRedeemers, parameters);
+    refuseOverBudget(
+      error.evaluatedRedeemers,
+      { inputs: error.evaluatedInputs, fundKeys, callKeys },
+      parameters,
+    );
     return refuseFee(error.fee);
   });
   refuseOverBudget(
     first.transaction.witnessSet().redeemers()?.toCore() ?? [],
+    { inputs: first.transaction.body().toCore().inputs, fundKeys, callKeys },
     parameters,
   );
   const firstFunds = resolvedInputsOf(first.transaction, candidates);
 
   let chosen = first;
   const tightFee = first.fee + GRANT_CAP_FEE_MARGIN;
-  const { scope: tight } = grantAfter(grant, requested, tightFee);
+  const { scope: tight } = grantAfter(grant, outflow, tightFee);
   // Both lowerings may take the caps to zero, which leaves nothing to save.
   const isTighter =
     tight.cap > first.after.scope.cap ||
@@ -558,9 +613,10 @@ export const buildCustodyGrantSpend = async (
       transaction,
       resolvedInputs: resolvedInputsOf(transaction, [
         spent.utxo,
-        control,
-        ...witnesses.referenced,
+        ...referenced,
         ...candidates,
+        ...callInputs.map(({ utxo }) => utxo),
+        ...callReferences,
         funding.collateralUtxo,
       ]),
     },
@@ -568,6 +624,7 @@ export const buildCustodyGrantSpend = async (
     {
       record: context.record,
       grantSpend: { slot: grant.slot, after },
+      ...(operation.contract && { contractCall: { supplied } }),
       signer: grantee,
       outflow: { requested, withdrawal: drawn },
       funding,

@@ -71,7 +71,9 @@ import type { Result } from '@lace-lib/util';
  *   `remove-device`, which refuses the last device;
  * - `owner-spend` pays outputs from the account's funds and reserves, and
  *   carries its optional `metadata` as auxiliary data (`invalid-metadata`
- *   when the ledger would refuse it);
+ *   when the ledger would refuse it). With `contract`, it also calls other
+ *   contracts: the funds pay the net value leaving the account, and the
+ *   device signs only a call to contracts it pins;
  * - `delegate` delegates the account's stake to a pool;
  * - `withdraw-rewards` withdraws the whole reward balance to the account.
  */
@@ -289,6 +291,7 @@ const buildSignAndSubmit = async (
       ...(requestedScopes && { requestedScopes }),
       grantUtxos,
       ...(metadataMeanings && { metadataMeanings }),
+      ...(result.costModels && { costModels: result.costModels }),
     }),
     bodyHash: result.bodyHash,
     keyHash: device.keyHash,
@@ -386,7 +389,11 @@ const executeExclusively = async (
  * since the build, such as the balance someone paid to the logic's reward
  * account at an epoch boundary, is built, signed and submitted once more,
  * which asks the sponsor and the device again; a second such refusal fails
- * with {@link CardanoCustodyRewardBalanceChangedError}.
+ * with {@link CardanoCustodyRewardBalanceChangedError}. A device that
+ * refuses the transaction fails it with its refusal, such as a
+ * `CardanoCustodyRequestRefusedError` with the reason
+ * `unknown-contract` from a local signer asked to sign a call to a contract
+ * it does not pin.
  *
  * For `issue-grant` and `replace-grant`, the submission, and a
  * {@link CardanoCustodyOutcomeUnknownError}, name the `grantSlot` of the

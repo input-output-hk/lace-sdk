@@ -1,4 +1,5 @@
 import { ActivityType } from '@lace-contract/activities';
+import { CardanoCustodyRequestRefusedError } from '@lace-contract/cardano-context';
 import { Cardano } from '@lace-lib/cardano-core';
 import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import { HexBlob } from '@lace-lib/cardano-util';
@@ -35,6 +36,7 @@ import {
   agentGrantUtxo,
   buildResultOf,
   controlOutput,
+  COST_MODELS,
   createCustodyTestWallet,
   creatorBinding,
   DEVICE_1,
@@ -46,6 +48,9 @@ import {
   liveControl,
   localChannel,
   LOGIC_REWARD_ACCOUNT,
+  orderBookPin,
+  ownerContractCallRequest,
+  ownerContractCallShape,
   ownerSpendShape,
   RECIPIENT_ADDRESS,
   preprodEraSummaries,
@@ -58,6 +63,7 @@ import {
 } from './custody-fixtures';
 import { collateral, createSponsorFake, NOW } from './custody-sponsor-fake';
 
+import type { CardanoCustodyContractPin } from '../../src/custody/cardano-custody-contract-pin';
 import type {
   CardanoCustodyDeviceSigner,
   CardanoCustodyDeviceSignRequest,
@@ -395,6 +401,86 @@ describe('executeCardanoCustodyOperation', () => {
     expect(signTransaction).toHaveBeenCalledWith(
       expect.objectContaining({ metadataMeanings }),
     );
+  });
+
+  it('sends the device the cost models the build ran under', async () => {
+    const { wallet, accountId, sponsor, control } = await setup();
+    control.answerBuild = () => ({
+      ok: true,
+      result: buildResultOf(ownerSpendShape(), { costModels: COST_MODELS }),
+    });
+    const signTransaction = vi.fn(async () => {
+      throw new Error('stop');
+    });
+
+    await executeCardanoCustodyOperation(wallet, {
+      accountId,
+      operation: {
+        type: 'owner-spend',
+        outputs: [{ address: RECIPIENT_ADDRESS, value: { coins: 2_000_000n } }],
+      },
+      deviceSigner: { signTransaction },
+      sponsor,
+    });
+
+    expect(signTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ costModels: COST_MODELS }),
+    );
+  });
+
+  describe('an owner spend that calls another contract', () => {
+    const callingSpend: CardanoCustodyOperation = {
+      type: 'owner-spend',
+      outputs: ownerContractCallShape().outputs.slice(1, 2),
+      contract: ownerContractCallRequest,
+    };
+
+    const setupCall = async (contractPins: CardanoCustodyContractPin[]) => {
+      const test = await setup();
+      test.control.answerBuild = () => ({
+        ok: true,
+        result: buildResultOf(ownerContractCallShape(), {
+          costModels: COST_MODELS,
+        }),
+      });
+      const deviceSigner = createLocalCardanoCustodyDeviceSigner({
+        keySource: keySource(),
+        contractPins,
+        now: () => NOW,
+      });
+      return { ...test, deviceSigner };
+    };
+
+    it('builds the call, has a device that pins the contract sign it, and submits', async () => {
+      const { execute, deviceSigner, builds, submitted } = await setupCall([
+        orderBookPin,
+      ]);
+
+      const executed = await execute(callingSpend, deviceSigner);
+
+      expect(executed.unwrap()).toEqual({
+        txId: buildResultOf(ownerContractCallShape()).bodyHash,
+        invalidHereafter: buildResultOf(ownerContractCallShape())
+          .invalidHereafter,
+      });
+      expect(builds[0].operation).toEqual(callingSpend);
+      expect(submitted).toHaveLength(1);
+    });
+
+    it('fails with the refusal of a device that pins no such contract, submitting nothing', async () => {
+      const { execute, deviceSigner, submitted } = await setupCall([]);
+
+      const executed = await execute(callingSpend, deviceSigner);
+
+      expect(executed.isErr() && executed.error).toBeInstanceOf(
+        CardanoCustodyRequestRefusedError,
+      );
+      expect(executed.isErr() && executed.error).toMatchObject({
+        code: 'custody-unsupported-operation',
+        reason: 'unknown-contract',
+      });
+      expect(submitted).toEqual([]);
+    });
   });
 
   it('tells the device no metadata meaning when the app gives none', async () => {

@@ -1,5 +1,7 @@
 import { NEVER, of } from 'rxjs';
 
+import { registerCardanoProvider } from '../cardano-provider-registry';
+
 import type { LaceInit, LaceModuleStoreInit } from '@lace-contract/module';
 
 const store: LaceInit<LaceModuleStoreInit> = () => ({
@@ -13,6 +15,7 @@ const store: LaceInit<LaceModuleStoreInit> = () => ({
     // the SDK.
     trackAnalyticsEvent: () => of(undefined),
   },
+  sideEffects: [registerCardanoProvider],
 });
 
 export default store;

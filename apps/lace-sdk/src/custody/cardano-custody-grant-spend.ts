@@ -28,7 +28,7 @@ import {
 } from './cardano-custody-errors';
 import {
   beginGrantSpendBuild,
-  heldResolutionsOf,
+  heldGrantSpendOf,
   inputsHeldByOtherGrantees,
   releaseGrantSpendInputs,
 } from './cardano-custody-fund-holds';
@@ -66,6 +66,7 @@ import type { WalletWithCardanoCustody } from './cardano-custody-wallet';
 import type { CardanoCustodySubmission } from './submit-cardano-custody-transaction';
 import type {
   CardanoCustodyAccount,
+  CardanoCustodyContractCall,
   CardanoVkeyWitness,
 } from '@lace-contract/cardano-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
@@ -94,6 +95,15 @@ export type BuildCardanoCustodyGrantSpendProps = {
    * absent.
    */
   feeBound?: bigint;
+  /**
+   * Other contracts the spend calls: their script UTxOs it spends, the
+   * tokens it mints under their policies, the scripts it attaches and the
+   * UTxOs it reads. The outputs that pay a called contract are ordinary
+   * `outputs`, so a grant that lists recipients must list the contract's
+   * address. What the call's inputs bring in and what it mints pay the
+   * outputs first, so the caps fall by the net value leaving the account.
+   */
+  contract?: CardanoCustodyContractCall;
 };
 
 /** An unsigned grant spend, for the agent to sign. */
@@ -150,6 +160,7 @@ const buildExclusively = async (
     sponsor,
     slot,
     feeBound,
+    contract,
   }: BuildCardanoCustodyGrantSpendProps,
 ): Promise<Result<CardanoCustodyGrantSpend, Error>> => {
   await readCardanoBuildChain(wallet);
@@ -175,6 +186,7 @@ const buildExclusively = async (
         ...(slot !== undefined && { slot }),
         ...(feeBound !== undefined && { feeBound }),
         ...(excludedInputs.length > 0 && { excludedInputs }),
+        ...(contract !== undefined && { contract }),
       },
       funding,
     });
@@ -186,6 +198,7 @@ const buildExclusively = async (
       inputs: Serialization.Transaction.fromCbor(transaction).body().toCore()
         .inputs,
       resolvedInputs,
+      callsContract: contract !== undefined,
       expiresAt: funding.validUntil,
     });
     return Ok({
@@ -215,6 +228,13 @@ const buildExclusively = async (
  * its validity ends, every other grantee's spend leaves its fund UTxOs out.
  * A second spend for the same grantee takes the same grant UTxO, so only
  * one of the two can settle.
+ *
+ * With `contract`, the spend also calls other contracts on the grant's
+ * behalf; a call the builder cannot run, such as one that spends a UTxO no
+ * script locks or mints the account's own tokens, fails with
+ * {@link CardanoCustodyInvalidOperationError} (`invalid-contract-call`).
+ * Only this wallet can submit such a spend, since it alone holds the other
+ * contracts' UTxOs the spend was built on.
  *
  * Lace never signs a grant spend: the agent's own wallet signs `bodyHash`,
  * and `submitCardanoCustodyGrantSpend` adds the sponsor's witness and
@@ -248,7 +268,8 @@ export const buildCardanoCustodyGrantSpend = async (
  * The grantee whose witness the spend needs, read with the custody
  * inspector from the transaction and the UTxOs it spends and references:
  * the grant UTxO's datum names it. The spend must still be one the
- * validator accepts on them.
+ * validator accepts on them. It may call other contracts only when
+ * `callsContract`, which the held build says, never the transaction.
  */
 const granteeOf = ({
   transaction,
@@ -256,12 +277,14 @@ const granteeOf = ({
   chainId,
   eraSummaries,
   resolvedInputs,
+  callsContract,
 }: {
   transaction: Serialization.Transaction;
   account: CardanoCustodyAccount;
   chainId: Cardano.ChainId;
   eraSummaries: EraSummary[];
   resolvedInputs: Cardano.Utxo[];
+  callsContract: boolean;
 }): Ed25519KeyHashHex => {
   const slotTime = createSlotTimeCalc(eraSummaries);
   const inspection = inspectCustodyTransaction(transaction, resolvedInputs, {
@@ -270,6 +293,7 @@ const granteeOf = ({
     slotToPosixMs: slot => slotTime(slot).getTime(),
     accountRecord: createCustodyAccountRecord(verifiedIdentityOf(account)),
     allowGrantSpend: true,
+    allowContractCall: callsContract,
   });
   if (!inspection.ok) {
     throw new CardanoCustodyBuildFailedError({
@@ -332,24 +356,66 @@ const parkedScriptUtxosOf = (
 /**
  * The UTxOs a spend's inputs may resolve to, by outpoint: the confirmed
  * UTxOs, those the build of a spend held here read from the chain, which
- * the wallet may not have synced yet, and the parked contract scripts.
+ * the wallet may not have synced yet, and the parked contract scripts. The
+ * held build alone resolves the other contracts' UTxOs a contract call
+ * spends and reads.
  */
 const knownUtxosOf = async (
   wallet: WalletWithCardanoCustody,
   account: CardanoCustodyAccount,
-  txId: Cardano.TransactionId,
+  heldResolutions: readonly Cardano.Utxo[],
 ): Promise<Map<string, Cardano.Utxo>> =>
   new Map(
     [
       ...parkedScriptUtxosOf(account),
-      ...heldResolutionsOf(wallet, account.accountId, txId),
+      ...heldResolutions,
       ...(await readSettledUtxos(wallet, account.accountId)),
     ].map(utxo => [outpointKey(utxo[0]), utxo] as const),
   );
 
+/**
+ * The error for reference inputs the wallet cannot resolve. Without the
+ * account's control UTxO among the resolved ones, an owner operation
+ * replaced it. With it, the others are UTxOs of a contract call this
+ * wallet holds no build of, so it cannot resolve them.
+ */
+const unresolvedReferencesError = (
+  transaction: HexBlob,
+  resolved: readonly Cardano.Utxo[],
+  address: Cardano.PaymentAddress,
+): Error =>
+  custodyInputRolesOf(transaction, resolved, address).controls.length > 0
+    ? new CardanoCustodyGrantSpendError('contract-call-not-held')
+    : new CardanoCustodyStaleControlError();
+
 const isResolved = (
   resolution: Cardano.Utxo | undefined,
 ): resolution is Cardano.Utxo => resolution !== undefined;
+
+/**
+ * Whether the transaction shows a contract call without its build: it
+ * mints, which a plain grant spend never does, or it attaches a script
+ * other than the account's contract scripts. A call whose scripts all ride
+ * on UTxOs it spends shows neither.
+ */
+const showsContractCall = (
+  transaction: Serialization.Transaction,
+  account: CardanoCustodyAccount,
+): boolean => {
+  const { contractVersion } = verifiedIdentityOf(account);
+  const custodyHashes = new Set<string>([
+    contractVersion.accountValidatorHash,
+    ...contractVersion.logics.map(({ hash }) => hash),
+  ]);
+  const { body, witness } = transaction.toCore();
+  return (
+    (body.mint?.size ?? 0) > 0 ||
+    (witness.scripts ?? []).some(
+      script =>
+        !custodyHashes.has(Serialization.Script.fromCore(script).hash()),
+    )
+  );
+};
 
 const submitExclusively = async (
   wallet: WalletWithCardanoCustody,
@@ -395,11 +461,18 @@ const submitExclusively = async (
     return Err(new CardanoCustodyOperationInProgressError(accountId));
   }
   const bodyHash = tx.getId();
-  const known = await knownUtxosOf(wallet, account, bodyHash);
+  const held = heldGrantSpendOf(wallet, accountId, bodyHash);
+  const known = await knownUtxosOf(wallet, account, held?.resolvedInputs ?? []);
   const resolve = (input: Cardano.TxIn) => known.get(outpointKey(input));
   const referenced = (body.referenceInputs ?? []).map(resolve);
   if (!referenced.every(isResolved)) {
-    return Err(new CardanoCustodyStaleControlError());
+    return Err(
+      unresolvedReferencesError(
+        transaction,
+        referenced.filter(isResolved),
+        address,
+      ),
+    );
   }
   const spent = body.inputs.map(resolve);
   if (!spent.every(isResolved)) {
@@ -408,12 +481,16 @@ const submitExclusively = async (
       spent.filter(isResolved),
       address,
     );
+    if (roles.grants.length === 0) {
+      return Err(new CardanoCustodyStaleGrantError());
+    }
+    if (!held?.callsContract && showsContractCall(tx, account)) {
+      return Err(new CardanoCustodyGrantSpendError('contract-call-not-held'));
+    }
     return Err(
-      roles.grants.length === 0
-        ? new CardanoCustodyStaleGrantError()
-        : new CardanoCustodyFundContentionError(
-            body.inputs.filter((_, index) => spent[index] === undefined),
-          ),
+      new CardanoCustodyFundContentionError(
+        body.inputs.filter((_, index) => spent[index] === undefined),
+      ),
     );
   }
   const resolvedInputs = [...spent, ...referenced, collateral.collateralUtxo];
@@ -424,6 +501,7 @@ const submitExclusively = async (
     chainId,
     eraSummaries,
     resolvedInputs,
+    callsContract: held?.callsContract ?? false,
   });
   const agent = await verifyAgentWitness(
     {
@@ -502,8 +580,17 @@ const isResubmittable = (result: Result<CardanoCustodySubmission, Error>) =>
  * submission of a spend by the same grantee runs
  * ({@link CardanoCustodyOperationInProgressError}), and for collateral the
  * sponsor has replaced ({@link CardanoCustodyGrantSpendError},
- * `collateral-changed`). An input spent since the build, as the wallet, the
- * sponsor or the node sees it, fails with
+ * `collateral-changed`). A spend that calls other contracts is submitted
+ * only through the wallet that built it, while that build is its
+ * grantee's last: the build resolves the contracts' UTxOs and alone allows
+ * the call. Otherwise it is refused before the sponsor signs, with
+ * {@link CardanoCustodyGrantSpendError} (`contract-call-not-held`) when it
+ * reads UTxOs the wallet cannot resolve, or spends them while it mints or
+ * attaches a script other than the account's. A call that does neither and
+ * reads nothing of its own, its scripts riding on the UTxOs it spends, is
+ * refused as {@link CardanoCustodyFundContentionError} naming those UTxOs.
+ * An input spent since the build, as
+ * the wallet, the sponsor or the node sees it, fails with
  * {@link CardanoCustodyStaleControlError} when an owner operation replaced
  * the control UTxO, {@link CardanoCustodyStaleGrantError} when the grant
  * UTxO moved, or {@link CardanoCustodyFundContentionError} when another

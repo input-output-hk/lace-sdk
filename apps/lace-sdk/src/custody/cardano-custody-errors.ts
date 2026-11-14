@@ -8,7 +8,10 @@ import type {
 import type { AccountId } from '@lace-contract/wallet-repo';
 import type { Cardano } from '@lace-lib/cardano-core';
 import type { Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
-import type { CustodyAccountRecordError } from '@lace-lib/cardano-custody';
+import type {
+  CardanoContractPinError,
+  CustodyAccountRecordError,
+} from '@lace-lib/cardano-custody';
 
 /**
  * An imported account record does not name a genuine custody account on the
@@ -269,6 +272,13 @@ export type CardanoCustodyInvalidOperationReason =
  *   `detail.liveness` says, so it cannot be swept.
  * - `dead-grant`: the grant in `detail.slot` no longer works, as
  *   `detail.liveness` says, so it has no agent policy.
+ * - `invalid-contract-call`: the contract call of a grant spend or an owner
+ *   spend cannot run, or rides on another owner operation, as
+ *   `detail.message` says, for example a call that names nothing, spends
+ *   a key-address UTxO or one of the account's own UTxOs, lacks the datum
+ *   its UTxO's hash names, mints the account's own tokens or a zero
+ *   quantity, names a UTxO, policy or script twice, attaches a script that
+ *   no input or mint needs, or runs a script that is not PlutusV3.
  */
 export class CardanoCustodyInvalidOperationError extends CustomError {
   public readonly code = 'custody-invalid-operation' as const;
@@ -356,6 +366,7 @@ export const custodyMetadataMeaningError = (
 export type CardanoCustodyGrantSpendReason =
   | Extract<CardanoCustodyBuildError, { code: 'grant-spend' }>['reason']
   | 'collateral-changed'
+  | 'contract-call-not-held'
   | 'transaction-witnessed';
 
 /**
@@ -373,6 +384,11 @@ export type CardanoCustodyGrantSpendReason =
  *   fewer, larger deposits help.
  * - `collateral-changed`: the sponsor replaced its collateral since the
  *   build; build again and have the agent sign again.
+ * - `contract-call-not-held`: the spend reads UTxOs of other contracts
+ *   that only its build resolves, and this wallet does not hold that build:
+ *   another wallet built it, a later build for the grantee replaced it, or
+ *   an earlier submission of it failed. Build again here and have the agent
+ *   sign again.
  * - `transaction-witnessed`: the transaction already carries vkey or
  *   bootstrap witnesses; submit the unsigned transaction the build
  *   returned, with the agent witness beside it.
@@ -478,6 +494,49 @@ export class CardanoCustodyAgentPolicyInvalidError extends CustomError {
       `The custody agent policy is invalid: ${reason}${
         field === undefined ? '' : ` (${field})`
       }`,
+    );
+  }
+}
+
+/**
+ * Why a blueprint gave no contract pin:
+ * - `malformed-blueprint`: the blueprint is not a CIP-57 blueprint whose
+ *   schemas the signer can decode, at `field` when it is known;
+ * - `unknown-validator`: the blueprint has no such validator, or none with
+ *   a spend or mint handler of the asked purpose;
+ * - `missing-purpose`: the validator is titled without a purpose suffix, so
+ *   the request must name its purpose;
+ * - `mismatched-purpose`: the asked purpose contradicts the validator's
+ *   datum, which only a spend validator has;
+ * - `missing-script-hash`: the validator has parameters or no hash, so the
+ *   request must name its deployed script hash;
+ * - `mismatched-script-hash`: the handlers of the validator name different
+ *   hashes, or the deployed script hash is not the blueprint's;
+ * - `invalid-script-hash`: the deployed script hash is not 28 bytes of
+ *   lower-case hex;
+ * - `empty-label`: the label is blank.
+ */
+export type CardanoCustodyContractPinInvalidReason =
+  CardanoContractPinError['code'];
+
+/**
+ * A blueprint gives no pin for the asked validator. `reason` says why,
+ * `validator` names the validator where the refusal is about one, and
+ * `field` the blueprint field that is malformed, such as
+ * `validators[2].hash`.
+ */
+export class CardanoCustodyContractPinInvalidError extends CustomError {
+  public readonly code = 'custody-contract-pin-invalid' as const;
+
+  public constructor(
+    readonly reason: CardanoCustodyContractPinInvalidReason,
+    readonly validator?: string,
+    readonly field?: string,
+  ) {
+    super(
+      `The custody contract pin is invalid: ${reason}${
+        validator === undefined ? '' : ` (${validator})`
+      }${field === undefined ? '' : ` (${field})`}`,
     );
   }
 }

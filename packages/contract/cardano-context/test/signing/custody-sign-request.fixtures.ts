@@ -1,5 +1,9 @@
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
-import { Bip32PublicKeyHex, Ed25519KeyHashHex } from '@lace-lib/cardano-crypto';
+import {
+  Bip32PublicKeyHex,
+  blake2b,
+  Ed25519KeyHashHex,
+} from '@lace-lib/cardano-crypto';
 import {
   createCustodyAccountRecord,
   CURRENT_CUSTODY_CONTRACT_VERSION,
@@ -16,8 +20,12 @@ import {
 } from '@lace-lib/cardano-custody';
 import { HexBlob } from '@lace-lib/cardano-util';
 
-import type { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
 import type {
+  Hash28ByteBase16,
+  Hash32ByteBase16,
+} from '@lace-lib/cardano-crypto';
+import type {
+  CardanoContractPin,
   CustodyAccountRedeemer,
   CustodyAccountState,
   CustodyGrant,
@@ -216,6 +224,18 @@ export type CustodyTransactionShape = {
   mint?: Cardano.TokenMap;
   /** The mint's redeemer; a creation's when omitted. */
   mintRedeemer?: CustodyMintRedeemer;
+  /** The mint's redeemer data, for a mint under another contract's policy. */
+  mintRedeemerData?: Cardano.PlutusData;
+  /** The redeemers of the UTxOs of other contracts the transaction spends. */
+  contractSpends?: readonly {
+    spent: Cardano.Utxo;
+    data: Cardano.PlutusData;
+  }[];
+  /**
+   * The cost models the body's script data hash is taken under; without
+   * them the body commits to none.
+   */
+  costModels?: Cardano.CostModels;
   certificates?: readonly Cardano.Certificate[];
   withdrawals?: readonly CustodyWithdrawal[];
   requiredSigners?: readonly string[];
@@ -252,6 +272,26 @@ const withdrawalRedeemersOf = (
   }));
 };
 
+/** The script data hash a transaction's witness set calls for under `costModels`. */
+const scriptDataHashOf = (
+  transaction: Serialization.Transaction,
+  costModels: Cardano.CostModels,
+): Hash32ByteBase16 => {
+  const witnessSet = transaction.witnessSet();
+  const views = new Serialization.Costmdls();
+  for (const [language, costs] of costModels) {
+    views.insert(new Serialization.CostModel(language, costs));
+  }
+  return blake2b.hash(
+    HexBlob(
+      `${witnessSet.redeemers()?.toCbor() ?? 'a0'}${
+        witnessSet.plutusData()?.toCbor() ?? ''
+      }${views.languageViewsEncoding()}`,
+    ),
+    32,
+  );
+};
+
 /** The transaction a shape describes, as the CBOR a dApp sends. */
 export const serializeCustodyTransaction = (
   shape: CustodyTransactionShape,
@@ -264,14 +304,22 @@ export const serializeCustodyTransaction = (
       data: encodeCustodyAccountRedeemer(redeemer),
       executionUnits: EXECUTION_UNITS,
     })),
+    ...(shape.contractSpends ?? []).map(({ spent: [input], data }) => ({
+      purpose: Cardano.RedeemerPurpose.spend,
+      index: sortedInputs.indexOf(outpointKey(input)),
+      data,
+      executionUnits: EXECUTION_UNITS,
+    })),
     ...(shape.mint
       ? [
           {
             purpose: Cardano.RedeemerPurpose.mint,
             index: 0,
-            data: encodeCustodyMintRedeemer(
-              shape.mintRedeemer ?? { kind: 'createAccount' },
-            ),
+            data:
+              shape.mintRedeemerData ??
+              encodeCustodyMintRedeemer(
+                shape.mintRedeemer ?? { kind: 'createAccount' },
+              ),
             executionUnits: EXECUTION_UNITS,
           },
         ]
@@ -284,7 +332,7 @@ export const serializeCustodyTransaction = (
     })),
     ...withdrawalRedeemersOf(shape.withdrawals ?? []),
   ];
-  return Serialization.Transaction.fromCore({
+  const tx: Cardano.Tx = {
     id: txIdOf(0),
     body: {
       inputs: shape.inputs.map(([{ txId, index }]) => ({ txId, index })),
@@ -344,7 +392,19 @@ export const serializeCustodyTransaction = (
       ...(shape.scripts ? { scripts: [...shape.scripts] } : {}),
     },
     ...(shape.auxiliaryData ? { auxiliaryData: shape.auxiliaryData } : {}),
-  }).toCbor();
+  };
+  return shape.costModels
+    ? Serialization.Transaction.fromCore({
+        ...tx,
+        body: {
+          ...tx.body,
+          scriptIntegrityHash: scriptDataHashOf(
+            Serialization.Transaction.fromCore(tx),
+            shape.costModels,
+          ),
+        },
+      }).toCbor()
+    : Serialization.Transaction.fromCore(tx).toCbor();
 };
 
 /** A resolution as the protocol carries it: CIP-30 unspent output CBOR. */
@@ -566,3 +626,118 @@ export const custodyDataPayload = (
   purpose: 'sign-in',
   ...overrides,
 });
+
+/** A Plutus V3 cost model: every script the fixtures carry is Plutus V3. */
+export const COST_MODELS: Cardano.CostModels = new Map([
+  [Cardano.PlutusLanguageVersion.V3, [1, 2, 3]],
+]);
+
+/** The validator of another contract the account calls, also its minting policy. */
+export const CONTRACT_SCRIPT: Cardano.Script = {
+  __type: Cardano.ScriptType.Plutus,
+  version: Cardano.PlutusLanguageVersion.V3,
+  bytes: HexBlob('4e4d01000033222220051200120011'),
+};
+export const CONTRACT_HASH =
+  Serialization.Script.fromCore(CONTRACT_SCRIPT).hash();
+export const CONTRACT_ADDRESS = Cardano.EnterpriseAddress.fromCredentials(
+  Cardano.NetworkId.Testnet,
+  { type: Cardano.CredentialType.ScriptHash, hash: CONTRACT_HASH },
+)
+  .toAddress()
+  .toBech32() as Cardano.PaymentAddress;
+/** A token the called contract mints under its own policy. */
+export const CONTRACT_TOKEN = Cardano.AssetId(`${CONTRACT_HASH}6f72646572`);
+
+/** The datum of an order: its owner and its price. */
+export const ORDER_DATUM: Cardano.PlutusData = {
+  constructor: 0n,
+  fields: { items: [Buffer.from('aa'.repeat(28), 'hex'), 5_000_000n] },
+};
+/** The redeemer that fills an order for an amount. */
+export const FILL: Cardano.PlutusData = {
+  constructor: 1n,
+  fields: { items: [2_000_000n] },
+};
+
+/** The pin of the called contract, from the schemas its blueprint gives. */
+export const orderBookPin: CardanoContractPin = {
+  label: 'Order book',
+  scriptHash: CONTRACT_HASH,
+  spend: {
+    redeemer: { $ref: '#/definitions/Action' },
+    datum: { $ref: '#/definitions/Order' },
+  },
+  mint: { redeemer: { $ref: '#/definitions/Action' } },
+  definitions: {
+    Int: { dataType: 'integer' },
+    ByteArray: { dataType: 'bytes' },
+    Order: {
+      title: 'Order',
+      dataType: 'constructor',
+      index: 0,
+      fields: [
+        { title: 'owner', $ref: '#/definitions/ByteArray' },
+        { title: 'price', $ref: '#/definitions/Int' },
+      ],
+    },
+    Action: {
+      title: 'Action',
+      anyOf: [
+        { title: 'Cancel', dataType: 'constructor', index: 0, fields: [] },
+        {
+          title: 'Fill',
+          dataType: 'constructor',
+          index: 1,
+          fields: [{ title: 'amount', $ref: '#/definitions/Int' }],
+        },
+      ],
+    },
+  },
+};
+
+/** The order UTxO of the called contract, holding `ORDER_DATUM` inline. */
+export const contractOrder = utxo(0x20, {
+  address: CONTRACT_ADDRESS,
+  value: { coins: 5_000_000n },
+  datum: ORDER_DATUM,
+});
+
+/** The UTxO that parks the called contract's script, outside every account. */
+export const contractScriptCarrier = utxo(0x21, {
+  address: CONTRACT_ADDRESS,
+  value: { coins: 10_000_000n },
+  scriptReference: CONTRACT_SCRIPT,
+});
+
+/**
+ * An owner spend that calls the order book: beside the control UTxO, which
+ * it writes back unchanged, and the fund UTxO that pays, it fills the
+ * order UTxO, mints the contract's token, references the contract's parked
+ * script and pays 2 tADA more into the contract's continuing output. The
+ * body commits to its script data under `COST_MODELS`.
+ */
+export const ownerContractCall = (): CustodyTransactionShape => {
+  const shape = deviceRewrite(initialState);
+  return {
+    ...shape,
+    inputs: [...shape.inputs, contractOrder],
+    contractSpends: [{ spent: contractOrder, data: FILL }],
+    referenceInputs: [...PARKED_SCRIPTS, contractScriptCarrier],
+    outputs: [
+      controlOutput(initialState),
+      {
+        address: CONTRACT_ADDRESS,
+        value: {
+          coins: 7_000_000n,
+          assets: new Map([[CONTRACT_TOKEN, 1n]]),
+        },
+        datum: ORDER_DATUM,
+      },
+      payout(7_750_000n, identity.address),
+    ],
+    mint: new Map([[CONTRACT_TOKEN, 1n]]),
+    mintRedeemerData: FILL,
+    costModels: COST_MODELS,
+  };
+};

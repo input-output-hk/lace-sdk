@@ -22,6 +22,7 @@ export interface CustodyValueDelta {
 /** Hex length of a policy id: every asset class on chain has a 28-byte one. */
 const POLICY_ID_HEX_LENGTH = 56;
 
+/** A value as a delta, by lower-case asset id, with zero token quantities dropped. */
 export const valueDeltaOf = (value: Cardano.Value): CustodyValueDelta =>
   addValueDeltas([
     {
@@ -57,6 +58,7 @@ export const addValueDeltas = (
   return { lovelace, assets };
 };
 
+/** The delta with every quantity's sign flipped. */
 export const negateValueDelta = (
   delta: CustodyValueDelta,
 ): CustodyValueDelta => ({

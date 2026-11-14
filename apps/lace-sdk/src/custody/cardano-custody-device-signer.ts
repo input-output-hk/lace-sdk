@@ -2,6 +2,7 @@ import {
   CardanoCustodyDeviceKeyMismatchError,
   checkCardanoCustodySignDataRequest,
   checkCardanoCustodySignRequest,
+  serializeCardanoCustodyCostModels,
   signCardanoCustodyDataWithWords,
   signCardanoCustodyTransactionWithWords,
 } from '@lace-contract/cardano-context';
@@ -20,6 +21,7 @@ import { CardanoCustodyUnsupportedSignerError } from './cardano-custody-errors';
 import { vkeyWitnessSetOf } from './cardano-custody-witnesses';
 
 import type { RemoteSignerRequester } from '../cardano-remote-signer-factory';
+import type { CardanoCustodyContractPin } from './cardano-custody-contract-pin';
 import type {
   CardanoCustodyDataPurpose as ContextCardanoCustodyDataPurpose,
   CardanoCustodyDeviceBinding,
@@ -69,6 +71,14 @@ export type CardanoCustodyDeviceSignRequest = {
    * refused.
    */
   metadataMeanings?: Readonly<Record<string, string>>;
+  /**
+   * The protocol's cost models the transaction was built under. The signer
+   * recomputes the script data hash of every transaction whose body
+   * declares one under them, so the redeemers it was sent are the ones the
+   * body commits to, and refuses such a transaction without them; wrong
+   * ones only make the hash fail to match.
+   */
+  costModels?: Cardano.CostModels;
 };
 
 /**
@@ -144,6 +154,7 @@ const custodySignPayloadOf = ({
   requestedScopes,
   grantUtxos,
   metadataMeanings,
+  costModels,
 }: CardanoCustodyDeviceSignRequest) => ({
   serializedTx: transaction,
   chainId: { networkId: chainId.networkId, networkMagic: chainId.networkMagic },
@@ -158,6 +169,9 @@ const custodySignPayloadOf = ({
   }),
   ...(grantUtxos && { grantUtxos: grantUtxos.map(unspentOutputCbor) }),
   ...(metadataMeanings && { metadataMeanings: { ...metadataMeanings } }),
+  ...(costModels && {
+    costModels: serializeCardanoCustodyCostModels(costModels),
+  }),
 });
 
 /** The request in the `sign-cardano-custody-data` protocol payload shape. */
@@ -190,6 +204,14 @@ export type CreateLocalCardanoCustodyDeviceSignerProps = {
    * refuses before any ceremony.
    */
   origin?: string;
+  /**
+   * The other contracts this app lets an owner transaction call, each made
+   * with `cardanoCustodyContractPinOf` from the contract's blueprint. The signer signs a
+   * call only when every script it runs is pinned here and its redeemers
+   * and datums match the pinned schemas, so the app's consent can name the
+   * contract and show its data. Defaults to none, which refuses every call.
+   */
+  contractPins?: readonly CardanoCustodyContractPin[];
   /** POSIX milliseconds now; defaults to the system clock. */
   now?: () => number;
 };
@@ -240,19 +262,27 @@ const assertBoundKey = (
  * device key is derived from its words and checked against `device.keyHash`
  * before it signs. Data signatures bind `origin`.
  *
+ * An owner transaction that calls another contract is signed only when
+ * every called script is one of `contractPins`, else it is refused as
+ * `unknown-contract`, and data that does not match its pinned schema as
+ * `contract-data-mismatch`. The signer does not read the chain: it trusts
+ * the app for the outputs of the inputs a call spends and reads, as it does
+ * for every resolved input.
+ *
  * It refuses a device bound to another channel or credential with
  * {@link PasskeyWalletMismatchError}.
  */
 export const createLocalCardanoCustodyDeviceSigner = ({
   keySource,
   origin,
+  contractPins = [],
   now = Date.now,
 }: CreateLocalCardanoCustodyDeviceSignerProps): Required<CardanoCustodyDeviceSigner> => ({
   signTransaction: async request => {
     assertLocalChannel(keySource, request.device);
     const check = await checkCardanoCustodySignRequest(
       custodySignPayloadOf(request),
-      { now: now() },
+      { now: now(), contractPins },
     );
     assertBoundKey(request.device, check.device.keyHash);
     const witness = await keySource.withPasskeyMnemonic(async words =>
@@ -355,7 +385,10 @@ const originField = (result: unknown): string => {
  * `RemotePasskeySigner` from `createRemotePasskeySigner`. The page shows the
  * custody consent, derives the device key from a fresh assertion and checks
  * it against the requested device before it signs. A data signature binds
- * the origin of this app as the page saw it.
+ * the origin of this app as the page saw it. The page signs a call to
+ * another contract only to contracts its build pins, on a network its build
+ * configures a chain lookup for; it pins none yet, so it refuses every call,
+ * and the app cannot add pins to it.
  *
  * It refuses a device bound to a local passkey with
  * {@link PasskeyWalletMismatchError}, and a signer that does not support

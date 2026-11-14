@@ -22,11 +22,16 @@ import { vi } from 'vitest';
 // test code enters the SDK.
 // eslint-disable-next-line @nx/enforce-module-boundaries
 import {
+  CONTRACT_HASH,
+  CONTRACT_TOKEN,
+  contractOrder,
+  contractScriptCarrier as orderBookScriptCarrier,
   controlOutput,
   creation,
   DEVICE_0,
   deviceRewrite,
   EXPIRY,
+  FILL,
   fundUtxo,
   grantedState,
   grantOutput,
@@ -35,6 +40,7 @@ import {
   initialState,
   issueGrant,
   logicRun,
+  ownerContractCall,
   PARKED_SCRIPTS,
   payout,
   PREPROD,
@@ -55,6 +61,7 @@ import type { Activity } from '@lace-contract/activities';
 import type {
   CardanoCustodyBuildRequest,
   CardanoCustodyBuildResult,
+  CardanoCustodyContractCall,
   CardanoCustodyCreatorIndexProbeError,
   CardanoCustodyCreatorIndexProbeRequest,
   CardanoCustodyCreatorIndexProbeResult,
@@ -81,6 +88,7 @@ type CardanoCustodyBuildOutcome = Awaited<
 // eslint-disable-next-line @nx/enforce-module-boundaries
 export {
   controlOutput,
+  COST_MODELS,
   DEVICE_0,
   DEVICE_1,
   EXPIRY,
@@ -92,6 +100,8 @@ export {
   identity,
   initialState,
   LOGIC_REWARD_ACCOUNT,
+  orderBookPin,
+  ownerContractCall,
   payout,
   PREPROD,
   record,
@@ -235,6 +245,92 @@ export const grantSpendShape = (): CustodyTransactionShape => {
     ...collateralMode,
     requiredSigners: [agentKey.keyHash],
   };
+};
+
+/** The validator of another contract an agent calls. */
+export const CONTRACT_SCRIPT: Cardano.PlutusScript = {
+  __type: Cardano.ScriptType.Plutus,
+  version: Cardano.PlutusLanguageVersion.V3,
+  bytes: HexBlob('4e4d01000033222220051200120011'),
+};
+
+const CONTRACT_ADDRESS = Cardano.EnterpriseAddress.fromCredentials(
+  Cardano.NetworkId.Testnet,
+  {
+    type: Cardano.CredentialType.ScriptHash,
+    hash: Serialization.Script.fromCore(CONTRACT_SCRIPT).hash(),
+  },
+)
+  .toAddress()
+  .toBech32() as Cardano.PaymentAddress;
+
+/** The datum and redeemer the called contract reads. */
+const CONTRACT_DATA: Cardano.PlutusData = 42n;
+
+/** An order UTxO the called contract locks, which the call spends. */
+export const contractOrderUtxo = utxo(0x20, {
+  address: CONTRACT_ADDRESS,
+  value: { coins: 5_000_000n },
+  datum: CONTRACT_DATA,
+});
+
+/** The UTxO that parks the called contract's script, which the call reads. */
+export const contractScriptCarrier = utxo(0x21, {
+  address: CONTRACT_ADDRESS,
+  value: { coins: 10_000_000n },
+  scriptReference: CONTRACT_SCRIPT,
+});
+
+/** The contract call of `contractCallShape`, as an app passes it. */
+export const contractCall: CardanoCustodyContractCall = {
+  inputs: [{ utxo: contractOrderUtxo, redeemer: CONTRACT_DATA }],
+  referenceInputs: [contractScriptCarrier],
+};
+
+/**
+ * The agent's grant spend that also calls another contract: it spends the
+ * contract's order UTxO, reads the contract's parked script and returns
+ * the order's value to the contract, so the account pays what the plain
+ * spend pays.
+ */
+export const contractCallShape = (): CustodyTransactionShape => {
+  const shape = grantSpendShape();
+  return {
+    ...shape,
+    inputs: [...shape.inputs, contractOrderUtxo],
+    referenceInputs: [...(shape.referenceInputs ?? []), contractScriptCarrier],
+    outputs: [
+      ...shape.outputs,
+      {
+        address: CONTRACT_ADDRESS,
+        value: contractOrderUtxo[1].value,
+        datum: CONTRACT_DATA,
+      },
+    ],
+  };
+};
+
+/**
+ * The owner spend that calls the order book, on this sponsor's collateral:
+ * it fills the order UTxO, mints the contract's token and pays the
+ * contract's continuing output.
+ */
+export const ownerContractCallShape = (): CustodyTransactionShape => ({
+  ...ownerContractCall(),
+  ...collateralMode,
+});
+
+/** The contract call of `ownerContractCallShape`, as an app passes it. */
+export const ownerContractCallRequest: CardanoCustodyContractCall = {
+  inputs: [{ utxo: contractOrder, redeemer: FILL }],
+  mint: [
+    {
+      policyId: Cardano.PolicyId(CONTRACT_HASH),
+      assets: new Map([[Cardano.AssetId.getAssetName(CONTRACT_TOKEN), 1n]]),
+      redeemer: FILL,
+    },
+  ],
+  referenceInputs: [orderBookScriptCarrier],
 };
 
 export const transactionOf = (shape: CustodyTransactionShape) =>

@@ -30,6 +30,7 @@ import { waitForCardanoCustodyOperation } from '../../src/custody/wait-for-carda
 
 import {
   createCustodyTestWallet,
+  COST_MODELS,
   creationResult,
   creationShape,
   DEVICE_0,
@@ -166,6 +167,20 @@ describe('createCardanoCustodyAccount', () => {
       },
     });
     expect(submitted).toHaveLength(1);
+  });
+
+  it('sends the device the cost models the build ran under', async () => {
+    const { create, control, deviceSigner } = setup();
+    control.answerBuild = () => ({
+      ok: true,
+      result: { ...creationResult(), costModels: COST_MODELS },
+    });
+
+    await create();
+
+    expect(deviceSigner.signTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ costModels: COST_MODELS }),
+    );
   });
 
   it('submits the unsigned body with exactly the sponsor and device witnesses', async () => {

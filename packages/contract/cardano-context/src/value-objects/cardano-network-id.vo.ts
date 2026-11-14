@@ -1,6 +1,8 @@
 import { BlockchainNetworkId } from '@lace-contract/network';
 import { Cardano } from '@lace-lib/cardano-core';
 
+import { customCardanoChainId } from '../custom-networks';
+
 import type { Tagged } from 'type-fest';
 
 export type CardanoNetworkId = Tagged<BlockchainNetworkId, 'CardanoNetworkId'>;
@@ -38,7 +40,7 @@ export const CardanoNetworkId: CardanoNetworkIdConstructor = Object.assign(
       const chainId = Object.values(Cardano.ChainIds).find(
         chainId => chainId.networkMagic.valueOf() === networkMagic,
       );
-      return chainId;
+      return chainId ?? customCardanoChainId(networkMagic);
     }) as CardanoNetworkIdConstructor['getChainId'],
     getName: (networkId: BlockchainNetworkId): string | undefined => {
       const networkMagic = Number(networkId.split(CARDANO_NETWORK_PREFIX)[1]);

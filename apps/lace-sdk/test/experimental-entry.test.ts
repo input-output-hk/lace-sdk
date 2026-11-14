@@ -52,6 +52,7 @@ describe('the experimental entry', () => {
   );
 
   it.each([
+    'cardanoCustodyContractPinOf',
     'createCardanoCustodyAccount',
     'createCardanoCustodySponsorClient',
     'exportCardanoCustodyAgentPolicy',

@@ -250,10 +250,12 @@ export const buildCustodyCreation = async (
           utxo: funding.collateralUtxo,
           returnAddress: funding.sponsorAddress,
         },
-        mint: {
-          assets: new Map([[identity.stateNftAssetId, 1n]]),
-          redeemer: encodeCustodyMintRedeemer({ kind: 'createAccount' }),
-        },
+        mint: [
+          {
+            assets: new Map([[identity.stateNftAssetId, 1n]]),
+            redeemer: encodeCustodyMintRedeemer({ kind: 'createAccount' }),
+          },
+        ],
         registration: {
           stakeCredential: scriptCredentialOf(identity.stakeScriptHash),
           deposit,

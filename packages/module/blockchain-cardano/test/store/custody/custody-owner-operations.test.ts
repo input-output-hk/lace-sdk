@@ -6,6 +6,7 @@ import {
   decodeCustodyGrant,
   encodeCustodyAccountRedeemer,
   encodeCustodyMintRedeemer,
+  inspectCustodyTransaction,
 } from '@lace-lib/cardano-custody';
 import { HexBlob } from '@lace-lib/cardano-util';
 import { Err } from '@lace-lib/util';
@@ -26,6 +27,10 @@ import {
   chainId,
   collateralFunding,
   collateralUtxo,
+  compareInputs,
+  CONTRACT_ADDRESS,
+  CONTRACT_HASH,
+  CONTRACT_SCRIPT,
   controlUtxo,
   currentLogic,
   custodyAccount,
@@ -45,6 +50,8 @@ import {
   lovelaceGrant,
   otherDeviceKeyHash,
   otherGranteeKeyHash,
+  OTHER_CONTRACT_HASH,
+  OTHER_CONTRACT_SCRIPT,
   otherRecipientAddress,
   parkedScriptUtxos,
   protocolParameters,
@@ -57,6 +64,7 @@ import {
   TESTNET_BYRON_ADDRESS,
   transactionOf,
   unparkedChainId,
+  utxo,
   version,
 } from './fixtures';
 
@@ -65,6 +73,7 @@ import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildRequest,
   CardanoCustodyBuildResult,
+  CardanoCustodyContractCall,
   CardanoCustodyGrantScopeRequest,
 } from '@lace-contract/cardano-context';
 import type {
@@ -1890,6 +1899,423 @@ describe('custody owner operations', () => {
         code: 'inspection-refused',
         refusals: [{ code: 'custody-locked-output' }],
       });
+    });
+  });
+
+  describe('contract calls', () => {
+    const POOL_TOKEN = Cardano.AssetId(`${'77'.repeat(28)}706f6f6c`);
+    const POOL_DATUM: Cardano.PlutusData = 42n;
+    const SWAP_REDEEMER: Cardano.PlutusData = 7n;
+    const SWAP_REDEEMER_CBOR = '07';
+    const DEVICE = cborOf(encodeCustodyAccountRedeemer({ kind: 'device' }));
+    const FUND = cborOf(encodeCustodyAccountRedeemer({ kind: 'fund' }));
+    const POOL_COINS = 50_000_000n;
+
+    /** The pool UTxO a swap spends: lovelace and pool tokens under an inline datum. */
+    const poolUtxo = utxo(700, {
+      address: CONTRACT_ADDRESS,
+      value: { coins: POOL_COINS, assets: new Map([[POOL_TOKEN, 1000n]]) },
+      datum: POOL_DATUM,
+    });
+
+    /** The pool's continuing output once `coins` lovelace went in and `tokens` came out. */
+    const poolOutput = (coins = 5_000_000n, tokens = 100n): Cardano.TxOut => ({
+      address: CONTRACT_ADDRESS,
+      value: {
+        coins: POOL_COINS + coins,
+        assets: new Map([[POOL_TOKEN, 1000n - tokens]]),
+      },
+      datum: POOL_DATUM,
+    });
+
+    /** The UTxO that parks the pool's script, outside every account. */
+    const scriptCarrier = utxo(701, {
+      address: CONTRACT_ADDRESS,
+      value: { coins: 10_000_000n },
+      scriptReference: CONTRACT_SCRIPT,
+    });
+
+    const swap = (
+      witness: Pick<
+        CardanoCustodyContractCall,
+        'referenceInputs' | 'scripts'
+      > = { scripts: [CONTRACT_SCRIPT] },
+    ): CardanoCustodyContractCall => ({
+      inputs: [{ utxo: poolUtxo, redeemer: SWAP_REDEEMER }],
+      ...witness,
+    });
+
+    const ownerCall = (
+      contract: CardanoCustodyContractCall = swap(),
+      outputs: Cardano.TxOut[] = [poolOutput()],
+    ): CardanoCustodyAccountOperation => ({
+      type: 'owner-spend',
+      outputs,
+      contract,
+    });
+
+    const ORDER_NAME = Cardano.AssetName('6f72646572');
+    const RECEIPT_NAME = Cardano.AssetName('72656365697074');
+    const ORDER_TOKEN = Cardano.AssetId.fromParts(
+      Cardano.PolicyId(CONTRACT_HASH),
+      ORDER_NAME,
+    );
+    const RECEIPT_TOKEN = Cardano.AssetId.fromParts(
+      Cardano.PolicyId(OTHER_CONTRACT_HASH),
+      RECEIPT_NAME,
+    );
+
+    /** A call that mints an order token and five receipts, each policy under its own redeemer. */
+    const mintCall: CardanoCustodyContractCall = {
+      mint: [
+        {
+          policyId: Cardano.PolicyId(CONTRACT_HASH),
+          assets: new Map([[ORDER_NAME, 1n]]),
+          redeemer: 1n,
+        },
+        {
+          policyId: Cardano.PolicyId(OTHER_CONTRACT_HASH),
+          assets: new Map([[RECEIPT_NAME, 5n]]),
+          redeemer: 2n,
+        },
+      ],
+      scripts: [CONTRACT_SCRIPT, OTHER_CONTRACT_SCRIPT],
+    };
+
+    /** The order output a minting call pays: lovelace and the minted order token. */
+    const orderOutput = (coins = 2_000_000n): Cardano.TxOut => ({
+      address: CONTRACT_ADDRESS,
+      value: { coins, assets: new Map([[ORDER_TOKEN, 1n]]) },
+      datum: POOL_DATUM,
+    });
+
+    const keyOf = ({ txId, index }: Cardano.TxIn) => `${txId}#${index}`;
+
+    /** Each spend redeemer by the key of the input it spends, as CBOR. */
+    const redeemersByInput = (result: CardanoCustodyBuildResult) => {
+      const sorted = bodyOf(result).inputs.map(keyOf).sort();
+      return new Map(
+        (transactionOf(result).witnessSet().redeemers()?.toCore() ?? [])
+          .filter(({ purpose }) => purpose === Cardano.RedeemerPurpose.spend)
+          .map(({ index, data }) => [sorted[index], cborOf(data)]),
+      );
+    };
+
+    const invalidCall = (message: string) => ({
+      code: 'invalid-operation',
+      reason: 'invalid-contract-call',
+      message,
+    });
+
+    it.each<
+      [string, Pick<CardanoCustodyContractCall, 'referenceInputs' | 'scripts'>]
+    >([
+      ['attached', { scripts: [CONTRACT_SCRIPT] }],
+      ['referenced', { referenceInputs: [scriptCarrier] }],
+    ])(
+      'spends a pool UTxO under its redeemer and pays its continuing output, with the script %s',
+      async (how, witness) => {
+        const control = controlUtxo(accountState());
+        const { run } = scenario({ control });
+        const result = expectSuccess(await run(ownerCall(swap(witness))));
+        const body = bodyOf(result);
+
+        expect(redeemersByInput(result)).toEqual(
+          new Map([
+            [keyOf(control[0]), DEVICE],
+            [keyOf(fundUtxo(1, 0n)[0]), FUND],
+            [keyOf(poolUtxo[0]), SWAP_REDEEMER_CBOR],
+          ]),
+        );
+        expect(body.referenceInputs?.map(keyOf)).toEqual(
+          [
+            ...parkedScriptUtxos.map(([input]) => input),
+            ...(how === 'referenced' ? [scriptCarrier[0]] : []),
+          ]
+            .sort(compareInputs)
+            .map(keyOf),
+        );
+        expect(transactionOf(result).witnessSet().toCore().scripts).toEqual(
+          how === 'attached' ? [CONTRACT_SCRIPT] : undefined,
+        );
+        expect(body.requiredExtraSignatures).toEqual([deviceKeyHash]);
+        expect(result.resolvedInputs).toEqual(
+          expect.arrayContaining([
+            poolUtxo,
+            ...(how === 'referenced' ? [scriptCarrier] : []),
+          ]),
+        );
+        expect(controlOf(result).state).toEqual(accountState());
+        expect(body.outputs).toContainEqual(poolOutput());
+        expect(changeOf(result)).toEqual([
+          {
+            address: identity.address,
+            value: {
+              coins: 20_000_000n - 5_000_000n - body.fee,
+              assets: new Map([[POOL_TOKEN, 100n]]),
+            },
+          },
+        ]);
+      },
+    );
+
+    it('pays the outputs and the fee from what the call supplies, leaving the funds unspent', async () => {
+      const fund = fundUtxo(1, 3_000_000n);
+      const { run } = scenario({ funds: [fund] });
+      const result = expectSuccess(
+        await run(ownerCall(swap(), [poolOutput(-10_000_000n, 0n)])),
+      );
+      expect(bodyOf(result).inputs.map(keyOf)).not.toContain(keyOf(fund[0]));
+      expect(changeOf(result)).toEqual([
+        {
+          address: identity.address,
+          value: { coins: 10_000_000n - bodyOf(result).fee },
+        },
+      ]);
+    });
+
+    it('pays the net outflow from a reserve when the plain funds cannot', async () => {
+      const reserve = reserveUtxo(2, 10_000_000n);
+      const { run } = scenario({ funds: [fundUtxo(1, 3_000_000n), reserve] });
+      const result = expectSuccess(await run(ownerCall()));
+      expect(bodyOf(result).inputs.map(keyOf)).toContain(keyOf(reserve[0]));
+    });
+
+    it('mints under two policies, each with its own redeemer, and keeps the receipts', async () => {
+      const { run } = scenario();
+      const result = expectSuccess(
+        await run(ownerCall(mintCall, [orderOutput()])),
+      );
+      const body = bodyOf(result);
+      expect(body.mint).toEqual(
+        new Map([
+          [ORDER_TOKEN, 1n],
+          [RECEIPT_TOKEN, 5n],
+        ]),
+      );
+      const redeemerOfPolicy = new Map([
+        [CONTRACT_HASH as string, '01'],
+        [OTHER_CONTRACT_HASH as string, '02'],
+      ]);
+      expect(
+        redeemersOf(result).filter(
+          ({ purpose }) => purpose === Cardano.RedeemerPurpose.mint,
+        ),
+      ).toEqual(
+        [CONTRACT_HASH, OTHER_CONTRACT_HASH].sort().map(policyId => ({
+          purpose: Cardano.RedeemerPurpose.mint,
+          data: redeemerOfPolicy.get(policyId),
+        })),
+      );
+      expect(transactionOf(result).witnessSet().toCore().scripts).toEqual([
+        CONTRACT_SCRIPT,
+        OTHER_CONTRACT_SCRIPT,
+      ]);
+      expect(changeOf(result)[0].value.assets).toEqual(
+        new Map([[RECEIPT_TOKEN, 5n]]),
+      );
+    });
+
+    it('selects the fund UTxO holding the token a call burns', async () => {
+      const holder = fundUtxo(2, 2_000_000n, {
+        value: { coins: 2_000_000n, assets: new Map([[ORDER_TOKEN, 10n]]) },
+      });
+      const { run } = scenario({ funds: [fundUtxo(1, 20_000_000n), holder] });
+      const burn: CardanoCustodyContractCall = {
+        ...swap(),
+        mint: [
+          {
+            policyId: Cardano.PolicyId(CONTRACT_HASH),
+            assets: new Map([[ORDER_NAME, -4n]]),
+            redeemer: 1n,
+          },
+        ],
+      };
+      const result = expectSuccess(
+        await run(ownerCall(burn, [poolOutput(-3_000_000n, 0n)])),
+      );
+      const body = bodyOf(result);
+      expect(body.inputs.map(keyOf)).toContain(keyOf(holder[0]));
+      expect(body.inputs.map(keyOf)).not.toContain(keyOf(fundUtxo(1, 0n)[0]));
+      expect(body.mint).toEqual(new Map([[ORDER_TOKEN, -4n]]));
+      expect(changeOf(result)[0].value.assets).toEqual(
+        new Map([[ORDER_TOKEN, 6n]]),
+      );
+    });
+
+    it.each<[Cardano.PlutusData, string]>([
+      [SWAP_REDEEMER, SWAP_REDEEMER_CBOR],
+      [0n, '00'],
+    ])(
+      'spends a script UTxO that carries a datum hash under redeemer %s, with its datum in the witness set',
+      async (redeemer, redeemerCbor) => {
+        const locked = utxo(702, {
+          address: CONTRACT_ADDRESS,
+          value: { coins: 10_000_000n },
+          datumHash: Serialization.PlutusData.fromCore(POOL_DATUM).hash(),
+        });
+        const { run } = scenario();
+        const result = expectSuccess(
+          await run(
+            ownerCall(
+              {
+                inputs: [{ utxo: locked, redeemer, datum: POOL_DATUM }],
+                scripts: [CONTRACT_SCRIPT],
+              },
+              [{ address: CONTRACT_ADDRESS, value: { coins: 12_000_000n } }],
+            ),
+          ),
+        );
+        expect(redeemersByInput(result).get(keyOf(locked[0]))).toBe(
+          redeemerCbor,
+        );
+        expect(transactionOf(result).witnessSet().toCore().datums).toEqual([
+          POOL_DATUM,
+        ]);
+      },
+    );
+
+    it('passes the shared inspection only as an allowed contract call', async () => {
+      const { run } = scenario();
+      const result = expectSuccess(await run(ownerCall()));
+      const inspect = (allowContractCall: boolean) =>
+        inspectCustodyTransaction(
+          transactionOf(result),
+          result.resolvedInputs,
+          {
+            chainId,
+            now: Date.now(),
+            slotToPosixMs: slot => slot * 1000,
+            accountRecord: result.accountRecord,
+            deviceKeyHash,
+            allowContractCall,
+          },
+        );
+      expect(inspect(true).ok).toBe(true);
+      expect(inspect(false).ok).toBe(false);
+    });
+
+    it.each<[string, () => CardanoCustodyContractCall, string]>([
+      [
+        'nothing to call',
+        () => ({}),
+        'A contract call names no input, mint, script or reference',
+      ],
+      [
+        'a reference input of an account fund',
+        () => ({ ...swap(), referenceInputs: [fundUtxo(1, 20_000_000n)] }),
+        `UTxO ${keyOf(fundUtxo(1, 0n)[0])} is the account's own`,
+      ],
+      [
+        'a reference input of a reserve',
+        () => ({ ...swap(), referenceInputs: [reserveUtxo(2, 10_000_000n)] }),
+        `UTxO ${keyOf(reserveUtxo(2, 0n)[0])} is the account's own`,
+      ],
+      [
+        'a reference input of the control it spends',
+        () => ({ ...swap(), referenceInputs: [controlUtxo(accountState())] }),
+        `UTxO ${keyOf(controlUtxo(accountState())[0])} is the account's own`,
+      ],
+      [
+        'an input at a key address',
+        () => ({
+          inputs: [
+            {
+              utxo: utxo(703, {
+                address: recipientAddress,
+                value: { coins: 5_000_000n },
+              }),
+              redeemer: SWAP_REDEEMER,
+            },
+          ],
+        }),
+        'Input 0 is not locked by a script',
+      ],
+      [
+        'an input of the account',
+        () => ({
+          inputs: [
+            { utxo: fundUtxo(704, 5_000_000n), redeemer: SWAP_REDEEMER },
+          ],
+        }),
+        'Input 0 belongs to a custody account',
+      ],
+      [
+        'a datum for an inline datum input',
+        () => ({
+          inputs: [
+            { utxo: poolUtxo, redeemer: SWAP_REDEEMER, datum: POOL_DATUM },
+          ],
+        }),
+        'Input 0 carries no datum hash for its datum',
+      ],
+      [
+        'an attached custody account validator',
+        () => ({ ...swap(), scripts: [version.accountValidator] }),
+        `Script ${version.accountValidatorHash} is a custody contract script`,
+      ],
+      [
+        'a script nothing in the call needs',
+        () => ({
+          ...swap(),
+          scripts: [CONTRACT_SCRIPT, OTHER_CONTRACT_SCRIPT],
+        }),
+        `Script ${OTHER_CONTRACT_HASH} is needed by no input or mint of the call`,
+      ],
+      [
+        'an input the spend also references',
+        () => ({
+          inputs: [{ utxo: parkedScriptUtxos[0], redeemer: SWAP_REDEEMER }],
+        }),
+        `UTxO ${keyOf(parkedScriptUtxos[0][0])} is both spent and referenced`,
+      ],
+      [
+        'a mint of custody account tokens',
+        () => ({
+          mint: [
+            {
+              policyId: Cardano.PolicyId(version.accountValidatorHash),
+              assets: new Map([[ORDER_NAME, 1n]]),
+              redeemer: 1n,
+            },
+          ],
+        }),
+        'A contract call cannot mint custody account tokens',
+      ],
+      [
+        'a mint of no quantity',
+        () => ({
+          mint: [{ ...mintCall.mint![0], assets: new Map([[ORDER_NAME, 0n]]) }],
+        }),
+        `Policy ${CONTRACT_HASH} names no asset or a zero quantity`,
+      ],
+    ])(
+      'refuses before any evaluation a call with %s',
+      async (_what, contract, message) => {
+        const { run, provider } = scenario({
+          funds: [fundUtxo(1, 20_000_000n), reserveUtxo(2, 10_000_000n)],
+        });
+        expect(expectFailure(await run(ownerCall(contract())))).toEqual(
+          invalidCall(message),
+        );
+        expect(provider.evaluateTx).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each<CardanoCustodyAccountOperation>([
+      { type: 'revoke-all-grants' },
+      { type: 'add-device', keyHash: otherDeviceKeyHash },
+    ])('refuses a contract call on a $type', async operation => {
+      const { run, provider } = scenario();
+      expect(
+        expectFailure(
+          await run({
+            ...operation,
+            contract: swap(),
+          } as CardanoCustodyAccountOperation),
+        ),
+      ).toEqual(invalidCall(`A ${operation.type} calls no contract`));
+      expect(provider.evaluateTx).not.toHaveBeenCalled();
     });
   });
 

@@ -1,6 +1,7 @@
 export * from './analysis';
 export * from './blueprint';
 export * from './codecs';
+export * from './contracts';
 export * from './data-signature';
 export * from './state';
 export {

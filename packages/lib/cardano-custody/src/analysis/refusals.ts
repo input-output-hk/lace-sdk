@@ -10,6 +10,7 @@ import type {
   CustodyStateViolation,
 } from '../state/rules';
 import type { Cardano } from '@lace-lib/cardano-core';
+import type { Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 import type { HexBlob } from '@lace-lib/cardano-util';
 
 /** The body list an input belongs to. */
@@ -19,6 +20,15 @@ export type CustodyInputSource = 'collaterals' | 'inputs' | 'referenceInputs';
 export type CustodyOutputLocation =
   | { readonly index: number; readonly kind: 'output' }
   | { readonly kind: 'collateral-return' };
+
+/**
+ * Where a transaction meets another contract: an input it spends, a policy
+ * it mints under, or an output it pays.
+ */
+export type CustodyContractLocation =
+  | { readonly index: number; readonly kind: 'output' }
+  | { readonly input: Cardano.TxIn; readonly kind: 'input' }
+  | { readonly kind: 'mint'; readonly policyId: Cardano.PolicyId };
 
 /** Body fields no custody operation uses, whose effects inspection does not read. */
 export type CustodyUnsupportedBodyField =
@@ -160,7 +170,8 @@ export type CustodyRefusal =
   /**
    * `grant-spend`: a grant spend the caller did not allow.
    * `grant-spend-foreign-input`: an input of an allowed grant spend outside
-   * the account address; an agent spends from the account alone.
+   * the account address; an agent spends from the account alone, and on an
+   * allowed contract call also from the script UTxOs of other contracts.
    */
   | {
       readonly account: CustodyAccountHashes;
@@ -215,10 +226,16 @@ export type CustodyRefusal =
       readonly logic: HexBlob;
       readonly reason: 'logic-withdrawal-missing';
     }
+  /**
+   * `contract-call-with-state-change`: an owner operation that calls other
+   * contracts and changes the account's control state, issues or sweeps
+   * grants, or touches its stake credential. A call moves value only.
+   */
   | {
       readonly account: CustodyAccountHashes;
       readonly code: 'custody-unsupported-operation';
       readonly reason:
+        | 'contract-call-with-state-change'
         | 'creation-without-registration'
         | 'fund-without-account-token'
         | 'grant-mint-without-control'
@@ -328,6 +345,12 @@ export type CustodyRefusal =
       readonly logic: string;
       readonly reason: 'unused-logic';
     }
+  /** Two contract pins the caller gives name one script: neither is the pin. */
+  | {
+      readonly code: 'custody-context-mismatch';
+      readonly reason: 'duplicate-contract-pin';
+      readonly scriptHash: string;
+    }
   | {
       readonly code: 'custody-context-mismatch';
       readonly reason: 'invalid-record';
@@ -352,6 +375,43 @@ export type CustodyRefusal =
       readonly outputIndex: number;
       readonly reason: 'control-output-datum' | 'control-output-value';
     }
+  /**
+   * A pinned contract call, or any transaction inspected with
+   * `bindScriptData`, whose script data hash is not the one the witness
+   * set's redeemers and datums hash to under the caller's cost models, so
+   * the body does not bind the data consent shows.
+   */
+  | {
+      readonly code: 'custody-unsupported-operation';
+      readonly computed: Hash32ByteBase16;
+      readonly declared: Hash32ByteBase16;
+      readonly reason: 'script-data-hash-mismatch';
+    }
+  /**
+   * A redeemer or datum of a pinned contract that does not decode against
+   * the pin's schema, or is missing where the pin has one. `path` is where
+   * decoding stopped, empty at the root, and `expected` what the schema
+   * wanted there.
+   */
+  | {
+      readonly code: 'custody-unsupported-operation';
+      readonly data: 'datum' | 'redeemer';
+      readonly expected: string;
+      readonly location: CustodyContractLocation;
+      readonly path: string;
+      readonly reason: 'contract-data-mismatch';
+      readonly scriptHash: string;
+    }
+  /**
+   * A pinned contract call, or any transaction inspected with
+   * `bindScriptData`, whose body declares a script data hash without any
+   * script data.
+   */
+  | {
+      readonly code: 'custody-unsupported-operation';
+      readonly declared: Hash32ByteBase16;
+      readonly reason: 'unexpected-script-data-hash';
+    }
   | {
       readonly code: 'custody-unsupported-operation';
       readonly field: CustodyUnsupportedBodyField;
@@ -374,11 +434,16 @@ export type CustodyRefusal =
    * grant spend of its account. `foreign-reference-script`: a reference
    * input carrying a reference script other than a contract script parked
    * at its pinned output reference on the inspected network.
+   * `foreign-script-input`: an input locked by another contract's script,
+   * spent by a transaction that is not an allowed contract call.
    */
   | {
       readonly code: 'custody-unsupported-operation';
       readonly input: Cardano.TxIn;
-      readonly reason: 'foreign-reference-script' | 'reference-control';
+      readonly reason:
+        | 'foreign-reference-script'
+        | 'foreign-script-input'
+        | 'reference-control';
     }
   /** A reserve spent without the control UTxO, which only a device spends. */
   | {
@@ -386,12 +451,33 @@ export type CustodyRefusal =
       readonly input: Cardano.TxIn;
       readonly reason: 'reserve-without-control';
     }
+  /**
+   * A pinned contract call, or any transaction inspected with
+   * `bindScriptData`, when the cost models lack the one of a language the
+   * transaction carries, so its script data hash cannot be recomputed.
+   */
+  | {
+      readonly code: 'custody-unsupported-operation';
+      readonly language: Cardano.PlutusLanguageVersion;
+      readonly reason: 'missing-cost-model';
+    }
   | {
       readonly code: 'custody-unsupported-operation';
       readonly location:
         | CustodyOutputLocation
         | { readonly input: Cardano.TxIn; readonly kind: 'input' };
       readonly reason: 'account-token-misplaced';
+    }
+  /**
+   * A contract call, inspected against contract pins, that runs a script no
+   * pin describes for that use: a spent input whose script has no spend
+   * pin, or a policy with no mint pin.
+   */
+  | {
+      readonly code: 'custody-unsupported-operation';
+      readonly location: CustodyContractLocation;
+      readonly reason: 'unknown-contract';
+      readonly scriptHash: string;
     }
   /**
    * An output at a custody account that holds no account token and is
@@ -433,6 +519,27 @@ export type CustodyRefusal =
       readonly code: 'custody-unsupported-operation';
       readonly reason: 'duplicate-withdrawal' | 'foreign-withdrawal';
       readonly rewardAccount: Cardano.RewardAccount;
+    }
+  /**
+   * A Plutus script attached by a transaction that is not an allowed
+   * contract call, other than the account validator, a known logic or the
+   * stake script of an account it operates.
+   */
+  | {
+      readonly code: 'custody-unsupported-operation';
+      readonly reason: 'foreign-attached-script';
+      readonly scriptHash: string;
+    }
+  /**
+   * `missing-cost-models`: a pinned contract call, or any transaction
+   * inspected with `bindScriptData`, when no cost models are given, so its
+   * script data hash cannot be recomputed.
+   * `missing-script-data-hash`: a pinned contract call whose body declares
+   * no script data hash, so nothing binds its redeemers and datums.
+   */
+  | {
+      readonly code: 'custody-unsupported-operation';
+      readonly reason: 'missing-cost-models' | 'missing-script-data-hash';
     };
 
 export type CustodyRefusalCode = CustodyRefusal['code'];
@@ -445,6 +552,7 @@ export type CustodyRefusalCode = CustodyRefusal['code'];
 const STAGE: Record<CustodyRefusal['reason'], number> = {
   'unsupported-contract-version': 0,
   'invalid-record': 0,
+  'duplicate-contract-pin': 0,
   'unresolved-input': 1,
   'resolution-not-in-body': 1,
   'duplicate-resolution': 1,
@@ -491,6 +599,16 @@ const STAGE: Record<CustodyRefusal['reason'], number> = {
   'grant-mint-without-control': 4,
   'reference-control': 4,
   'foreign-reference-script': 4,
+  'foreign-script-input': 4,
+  'foreign-attached-script': 4,
+  'unknown-contract': 4,
+  'contract-data-mismatch': 4,
+  'contract-call-with-state-change': 4,
+  'missing-cost-models': 4,
+  'missing-cost-model': 4,
+  'missing-script-data-hash': 4,
+  'unexpected-script-data-hash': 4,
+  'script-data-hash-mismatch': 4,
   'creation-without-registration': 4,
   'fund-without-account-token': 4,
   'reserve-without-control': 4,

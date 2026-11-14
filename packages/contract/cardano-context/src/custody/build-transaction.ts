@@ -87,6 +87,49 @@ export type CardanoCustodyGrantScopeRequest = Pick<
 >;
 
 /**
+ * Other contracts a grant spend or an owner spend calls. The outputs that
+ * pay a called contract, such as its continuing output or an order, are
+ * ordinary requested outputs of the spend, so a grant must list the
+ * contract's address when it lists recipients. Every script the call runs
+ * must be attached in `scripts` or carried by a UTxO of `referenceInputs`.
+ *
+ * The value the call's inputs bring in and what it mints count against what
+ * leaves the account, and what it burns counts with it: the account's
+ * funds pay, and a grant's caps fall by, the net value leaving the account,
+ * never below zero.
+ */
+export type CardanoCustodyContractCall = {
+  /**
+   * Script UTxOs of other contracts the call spends, each with the spend
+   * redeemer its validator reads. `datum` is the datum of a UTxO that
+   * carries only its hash; a UTxO with an inline datum takes none.
+   */
+  inputs?: {
+    utxo: Cardano.Utxo;
+    redeemer: Cardano.PlutusData;
+    datum?: Cardano.PlutusData;
+  }[];
+  /**
+   * Tokens minted (positive) or burned (negative) under Plutus policies of
+   * other contracts, one entry per policy with the mint redeemer it reads.
+   */
+  mint?: {
+    policyId: Cardano.PolicyId;
+    assets: Map<Cardano.AssetName, bigint>;
+    redeemer: Cardano.PlutusData;
+  }[];
+  /** Plutus scripts the witness set attaches: validators and policies the call runs. */
+  scripts?: Cardano.PlutusScript[];
+  /**
+   * UTxOs the call reads without spending: reference inputs a validator
+   * inspects and UTxOs carrying the reference scripts the call runs. One
+   * the spend already reads, such as the account's control UTxO, is read
+   * once.
+   */
+  referenceInputs?: Cardano.Utxo[];
+};
+
+/**
  * Creates the account of the first usable creator key of a device. The
  * device keys are `m/1854'/1815'/a'/0/i`, derived from
  * `deviceAccountPublicKey`: the CIP-1854 account key of account
@@ -112,7 +155,9 @@ export type CardanoCustodyCreateOperation = {
  *   remaining caps fall by the outputs and the fee, and the fee may not
  *   exceed `feeBound` (`CARDANO_CUSTODY_DEFAULT_GRANT_FEE_BOUND` when
  *   absent). The build selects no fund UTxO in `excludedInputs`: the inputs
- *   of other spends built and not yet seen settle.
+ *   of other spends built and not yet seen settle. With `contract`, the
+ *   spend also calls other contracts, and the caps fall by the net value
+ *   leaving the account.
  * - `issue-grant`: issues a grant in the account's next slot, and tops the
  *   control output's headroom up to the owner fee reserve target from plain
  *   funds.
@@ -122,7 +167,10 @@ export type CardanoCustodyCreateOperation = {
  *   paid, such as a subscription's payment intent. Text and bytes hold at
  *   most 64 bytes each, as the ledger requires. No other operation carries
  *   metadata: one named on it is refused as `invalid-metadata`, never
- *   dropped.
+ *   dropped. With `contract`, the spend also calls other contracts, and
+ *   the funds pay the net value leaving the account, while the control
+ *   state stays as it was. No other owner operation calls a contract: one
+ *   named on it is refused as `invalid-contract-call`.
  * - `replace-grant`: revokes the grant in `slot` and issues `scope` in the
  *   next slot in one transaction, topping the headroom up as an issue does.
  * - `revoke-all-grants`: raises the grant generation, which kills every
@@ -144,11 +192,13 @@ export type CardanoCustodyAccountOperation =
       slot?: bigint;
       feeBound?: bigint;
       excludedInputs?: Cardano.TxIn[];
+      contract?: CardanoCustodyContractCall;
     }
   | {
       type: 'owner-spend';
       outputs: Cardano.TxOut[];
       metadata?: Cardano.TxMetadata;
+      contract?: CardanoCustodyContractCall;
     }
   | {
       type: 'replace-grant';
@@ -197,6 +247,11 @@ export type CardanoCustodyBuildResult = {
   accountRecord: CustodyAccountRecord;
   fee: bigint;
   invalidHereafter: Cardano.Slot;
+  /**
+   * The protocol's cost models the build ran under, which a device signer
+   * needs to check the script data hash the body declares.
+   */
+  costModels?: Cardano.CostModels;
   /** Present for a creation: the creator key index and the new account. */
   creation?: {
     creatorIndex: number;
@@ -249,7 +304,14 @@ export type CardanoCustodyBuildResult = {
  *   names what is wrong. With `reason: 'state-transition'`, the state rules
  *   refuse the new account state; with `reason: 'invalid-metadata'`, the
  *   metadata is not a map of labels to metadata the ledger accepts, or
- *   rides on a grant spend.
+ *   rides on a grant spend; with `reason: 'invalid-contract-call'`, the
+ *   contract call of a grant spend or an owner spend cannot run, or rides
+ *   on another owner operation, as `message` says, for example a call that
+ *   names nothing, spends a UTxO no script locks, a
+ *   custody account's UTxO or one of the account's own, lacks the datum its
+ *   UTxO's hash names, mints the account's own tokens or a zero quantity,
+ *   names a UTxO, policy or script twice, attaches a script that no input
+ *   or mint needs, or attaches or references a script that is not PlutusV3.
  * - `logic-not-registered`: the stake credential of the logic the
  *   transaction runs (the current logic at creation, the logic the control
  *   state names otherwise), whose reward account is `rewardAccount`, is not
@@ -370,6 +432,7 @@ export type CardanoCustodyBuildError =
       reason:
         | 'funding-mode'
         | 'grant-scope'
+        | 'invalid-contract-call'
         | 'invalid-device-key'
         | 'invalid-fee-bound'
         | 'invalid-metadata'

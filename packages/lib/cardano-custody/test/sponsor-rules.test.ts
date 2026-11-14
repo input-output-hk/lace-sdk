@@ -1630,14 +1630,14 @@ describe('findCustodySponsorRuleViolations', () => {
       });
     });
 
-    it('refuses an input locked by any script but the proxy, the stake script included', () => {
+    it('refuses an input locked by any script but the proxy, the stake script included, in fee mode', () => {
       for (const scriptHash of [FOREIGN_SCRIPT, identity.stakeScriptHash]) {
         const locked = utxo(
           0x30,
           payout(2_000_000n, enterpriseAddress(scriptCredential(scriptHash))),
         );
         expect(
-          foreignViolation({ inputs: [control, fundInput, locked] }),
+          foreignViolation({ inputs: [control, fundInput, locked] }, context()),
         ).toEqual({
           rule: 'no_foreign_scripts',
           reason: 'foreign-script-input',
@@ -1647,8 +1647,10 @@ describe('findCustodySponsorRuleViolations', () => {
       }
     });
 
-    it('refuses a mint under any policy but the proxy, the stake script included', () => {
-      expect(foreignViolation({ mint: new Map([[TOKEN, 1n]]) })).toEqual({
+    it('refuses a mint under any policy but the proxy, the stake script included, in fee mode', () => {
+      expect(
+        foreignViolation({ mint: new Map([[TOKEN, 1n]]) }, context()),
+      ).toEqual({
         rule: 'no_foreign_scripts',
         reason: 'foreign-mint',
         policyId: '99'.repeat(28),
@@ -1657,7 +1659,9 @@ describe('findCustodySponsorRuleViolations', () => {
         Cardano.PolicyId(identity.stakeScriptHash),
         Cardano.AssetName('00'),
       );
-      expect(foreignViolation({ mint: new Map([[stakeToken, 1n]]) })).toEqual({
+      expect(
+        foreignViolation({ mint: new Map([[stakeToken, 1n]]) }, context()),
+      ).toEqual({
         rule: 'no_foreign_scripts',
         reason: 'foreign-mint',
         policyId: identity.stakeScriptHash,
@@ -1848,7 +1852,7 @@ describe('findCustodySponsorRuleViolations', () => {
       });
     });
 
-    it('refuses native scripts and other attached scripts', () => {
+    it('refuses native scripts, and other attached scripts in fee mode', () => {
       expect(
         foreignViolation({
           scripts: [
@@ -1863,13 +1867,16 @@ describe('findCustodySponsorRuleViolations', () => {
         }),
       ).toEqual({ rule: 'no_foreign_scripts', reason: 'native-script' });
       expect(
-        foreignViolation({
-          scripts: [
-            VERSION.accountValidator,
-            LOGIC.script,
-            otherIdentity.stakeScript,
-          ],
-        }),
+        foreignViolation(
+          {
+            scripts: [
+              VERSION.accountValidator,
+              LOGIC.script,
+              otherIdentity.stakeScript,
+            ],
+          },
+          context(),
+        ),
       ).toEqual({
         rule: 'no_foreign_scripts',
         reason: 'foreign-attached-script',
@@ -1877,15 +1884,16 @@ describe('findCustodySponsorRuleViolations', () => {
       });
     });
 
-    it('refuses an attached logic no control datum names', () => {
+    it('refuses an attached logic no control datum names, in fee mode', () => {
       const unnamed: Cardano.PlutusScript = {
         ...LOGIC.script,
         bytes: HexBlob(`${LOGIC.script.bytes}00`),
       };
       expect(
-        foreignViolation({
-          scripts: [VERSION.accountValidator, unnamed],
-        }),
+        foreignViolation(
+          { scripts: [VERSION.accountValidator, unnamed] },
+          context(),
+        ),
       ).toEqual({
         rule: 'no_foreign_scripts',
         reason: 'foreign-attached-script',
@@ -1895,10 +1903,7 @@ describe('findCustodySponsorRuleViolations', () => {
 
     describe('reference scripts, beyond the service', () => {
       const referencing = (...referenceInputs: Cardano.Utxo[]) =>
-        foreignViolation({
-          referenceInputs,
-          scripts: undefined,
-        });
+        foreignViolation({ referenceInputs, scripts: undefined }, context());
       const relocated = (
         [input, output]: Cardano.Utxo,
         script?: Cardano.PlutusScript,
@@ -1909,7 +1914,7 @@ describe('findCustodySponsorRuleViolations', () => {
         expect(referencing(parkedLogic)).toBeUndefined();
       });
 
-      it('refuses a script referenced anywhere but where the version parked it', () => {
+      it('refuses a script referenced anywhere but where the version parked it, in fee mode', () => {
         const elsewhere = utxo(0x40, {
           ...parkedProxy[1],
           address: STRANGER_ADDRESS,
@@ -1936,11 +1941,11 @@ describe('findCustodySponsorRuleViolations', () => {
         });
       });
 
-      it('accepts no parked script on a network the version parked none on', () => {
+      it('accepts no parked script on a network the version parked none on, in fee mode', () => {
         expect(
           foreignViolation(
             { referenceInputs: [parkedProxy], scripts: undefined },
-            collateralMode({ networkMagic: Cardano.NetworkMagics.Mainnet }),
+            context({ networkMagic: Cardano.NetworkMagics.Mainnet }),
           ),
         ).toEqual({
           rule: 'no_foreign_scripts',
@@ -1963,6 +1968,379 @@ describe('findCustodySponsorRuleViolations', () => {
             collateralMode(),
           ),
         ).toEqual([]);
+      });
+    });
+  });
+
+  describe('contract calls in collateral mode', () => {
+    /** A Plutus V3 script of no account the transaction belongs to: the contract an agent spend calls. */
+    const CALLED_SCRIPT = otherIdentity.stakeScript;
+    const CALLED_HASH = otherIdentity.stakeScriptHash;
+    const CALLED_TOKEN = Cardano.AssetId.fromParts(
+      Cardano.PolicyId(CALLED_HASH),
+      Cardano.AssetName('746f6b656e'),
+    );
+    const CALL_REDEEMER: Cardano.PlutusData = 0n;
+    const NATIVE_SCRIPT: Cardano.NativeScript = {
+      __type: Cardano.ScriptType.Native,
+      kind: Cardano.NativeScriptKind.RequireAnyOf,
+      scripts: [],
+    };
+    const calledInput = utxo(
+      0x50,
+      payout(3_000_000n, enterpriseAddress(scriptCredential(CALLED_HASH))),
+    );
+    /** A UTxO away from the account and the sponsor carrying `script` for reference. */
+    const carrying = (script: Cardano.Script) =>
+      utxo(0x51, { ...payout(10_000_000n), scriptReference: script });
+
+    /**
+     * An agent spend that calls the contract: it spends the contract's
+     * UTxO, mints five of its tokens and pays them to the stranger, with
+     * the contract's script attached.
+     */
+    const contractCall = (
+      overrides: Partial<TransactionShape> = {},
+    ): TransactionShape =>
+      agentSpend({
+        inputs: [grantInput, fundInput, calledInput],
+        spendRedeemers: [
+          withRedeemer(grantInput, { kind: 'spendWithGrant' }),
+          fund(fundInput),
+          { utxo: calledInput, data: CALL_REDEEMER },
+        ],
+        outputs: [
+          grantOutput({
+            ...grant,
+            scope: { ...grant.scope, cap: grant.scope.cap - 2_200_000n },
+          }),
+          {
+            address: STRANGER_ADDRESS,
+            value: {
+              coins: 2_000_000n,
+              assets: new Map([[CALLED_TOKEN, 5n]]),
+            },
+          },
+          fundOutput(10_800_000n),
+        ],
+        mint: new Map([[CALLED_TOKEN, 5n]]),
+        mintRedeemer: CALL_REDEEMER,
+        scripts: [VERSION.accountValidator, LOGIC.script, CALLED_SCRIPT],
+        ...overrides,
+      });
+
+    it('accepts a call that spends the contract, mints under its policy and attaches its script', () => {
+      expect(violationsOf(contractCall(), collateralMode())).toEqual([]);
+    });
+
+    it('accepts a call that references the contract script rather than attaching it', () => {
+      expect(
+        violationsOf(
+          contractCall({
+            referenceInputs: [grantedControl, carrying(CALLED_SCRIPT)],
+            scripts: [VERSION.accountValidator, LOGIC.script],
+          }),
+          collateralMode(),
+        ),
+      ).toEqual([]);
+    });
+
+    it('refuses the same call in fee mode', () => {
+      const uncalled: Partial<TransactionShape> = {
+        inputs: [grantInput, fundInput],
+        spendRedeemers: [
+          withRedeemer(grantInput, { kind: 'spendWithGrant' }),
+          fund(fundInput),
+        ],
+      };
+      expect(
+        violationOf('no_foreign_scripts', contractCall(), context()),
+      ).toEqual({
+        rule: 'no_foreign_scripts',
+        reason: 'foreign-script-input',
+        input: outpoint(calledInput),
+        scriptHash: CALLED_HASH,
+      });
+      expect(
+        violationOf('no_foreign_scripts', contractCall(uncalled), context()),
+      ).toEqual({
+        rule: 'no_foreign_scripts',
+        reason: 'foreign-mint',
+        policyId: CALLED_HASH,
+      });
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({ ...uncalled, mint: undefined }),
+          context(),
+        ),
+      ).toEqual({
+        rule: 'no_foreign_scripts',
+        reason: 'foreign-attached-script',
+        scriptHash: CALLED_HASH,
+      });
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({
+            ...uncalled,
+            mint: undefined,
+            referenceInputs: [grantedControl, carrying(CALLED_SCRIPT)],
+            scripts: [VERSION.accountValidator, LOGIC.script],
+          }),
+          context(),
+        ),
+      ).toEqual({
+        rule: 'no_foreign_scripts',
+        reason: 'foreign-reference-script',
+        input: outpoint(carrying(CALLED_SCRIPT)),
+        scriptHash: CALLED_HASH,
+      });
+    });
+
+    it.each([
+      Cardano.PlutusLanguageVersion.V1,
+      Cardano.PlutusLanguageVersion.V2,
+    ])(
+      'refuses a call to a contract of Plutus language %s, attached or referenced',
+      language => {
+        const otherLanguage: Cardano.PlutusScript = {
+          ...CALLED_SCRIPT,
+          version: language,
+        };
+        const nonV3 = {
+          rule: 'script_data_hash',
+          reason: 'non-v3-script',
+          language,
+        };
+        expect(
+          violationOf(
+            'script_data_hash',
+            contractCall({
+              scripts: [VERSION.accountValidator, LOGIC.script, otherLanguage],
+            }),
+            collateralMode(),
+          ),
+        ).toEqual(nonV3);
+        expect(
+          violationOf(
+            'script_data_hash',
+            contractCall({
+              referenceInputs: [grantedControl, carrying(otherLanguage)],
+              scripts: [VERSION.accountValidator, LOGIC.script],
+            }),
+            collateralMode(),
+          ),
+        ).toEqual(nonV3);
+      },
+    );
+
+    it('refuses a native script, attached, referenced or carried by a spent input', () => {
+      const nativeScript = {
+        rule: 'no_foreign_scripts',
+        reason: 'native-script',
+      };
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({
+            scripts: [VERSION.accountValidator, LOGIC.script, NATIVE_SCRIPT],
+          }),
+          collateralMode(),
+        ),
+      ).toEqual(nativeScript);
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({
+            referenceInputs: [grantedControl, carrying(NATIVE_SCRIPT)],
+          }),
+          collateralMode(),
+        ),
+      ).toEqual(nativeScript);
+      const nativeCarrier: Cardano.Utxo = [
+        calledInput[0],
+        { ...calledInput[1], scriptReference: NATIVE_SCRIPT },
+      ];
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({
+            inputs: [grantInput, fundInput, nativeCarrier],
+            spendRedeemers: [
+              withRedeemer(grantInput, { kind: 'spendWithGrant' }),
+              fund(fundInput),
+              { utxo: nativeCarrier, data: CALL_REDEEMER },
+            ],
+          }),
+          collateralMode(),
+        ),
+      ).toEqual(nativeScript);
+    });
+
+    it('still refuses a parked script UTxO carrying another script', () => {
+      const misparked: Cardano.Utxo = [
+        parkedProxy[0],
+        { ...parkedProxy[1], scriptReference: CALLED_SCRIPT },
+      ];
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({ referenceInputs: [grantedControl, misparked] }),
+          collateralMode(),
+        ),
+      ).toEqual({
+        rule: 'no_foreign_scripts',
+        reason: 'foreign-reference-script',
+        input: outpoint(parkedProxy),
+        scriptHash: CALLED_HASH,
+      });
+    });
+
+    it('still refuses a foreign script on a withdrawal or a certificate', () => {
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({
+            withdrawals: [
+              logicRun,
+              { stakeAddress: FOREIGN_REWARD_ACCOUNT, quantity: 0n },
+            ],
+          }),
+          collateralMode(),
+        ),
+      ).toEqual({
+        rule: 'no_foreign_scripts',
+        reason: 'foreign-withdrawal',
+        rewardAccount: FOREIGN_REWARD_ACCOUNT,
+      });
+      expect(
+        violationOf(
+          'no_foreign_scripts',
+          contractCall({
+            certificates: [
+              {
+                __typename: Cardano.CertificateType.Registration,
+                stakeCredential: scriptCredential(CALLED_HASH),
+                deposit: 2_000_000n,
+              },
+            ],
+          }),
+          collateralMode(),
+        ),
+      ).toEqual({
+        rule: 'no_foreign_scripts',
+        reason: 'foreign-certificate',
+        certificateIndex: 0,
+        scriptHash: CALLED_HASH,
+      });
+    });
+
+    it('counts minted tokens as supply in collateral mode only', () => {
+      expect(
+        violationOf(
+          'no_sponsor_value_elsewhere',
+          contractCall(),
+          collateralMode(),
+        ),
+      ).toBeUndefined();
+      expect(
+        violationOf('no_sponsor_value_elsewhere', contractCall(), context()),
+      ).toEqual({
+        rule: 'no_sponsor_value_elsewhere',
+        reason: 'uncovered-outflow',
+        assetId: CALLED_TOKEN,
+        demanded: 5n,
+        supplied: 0n,
+      });
+    });
+
+    it('counts burned tokens as demand, covered only by what the inputs bring', () => {
+      const holding: Cardano.Utxo = [
+        calledInput[0],
+        {
+          ...calledInput[1],
+          value: {
+            coins: 3_000_000n,
+            assets: new Map([[CALLED_TOKEN, 5n]]),
+          },
+        },
+      ];
+      const burning = (spent: Cardano.Utxo) =>
+        contractCall({
+          inputs: [grantInput, fundInput, spent],
+          spendRedeemers: [
+            withRedeemer(grantInput, { kind: 'spendWithGrant' }),
+            fund(fundInput),
+            { utxo: spent, data: CALL_REDEEMER },
+          ],
+          outputs: [
+            grantOutput({
+              ...grant,
+              scope: { ...grant.scope, cap: grant.scope.cap - 2_200_000n },
+            }),
+            payout(2_000_000n),
+            fundOutput(10_800_000n),
+          ],
+          mint: new Map([[CALLED_TOKEN, -5n]]),
+        });
+      expect(
+        violationOf(
+          'no_sponsor_value_elsewhere',
+          burning(holding),
+          collateralMode(),
+        ),
+      ).toBeUndefined();
+      expect(
+        violationOf(
+          'no_sponsor_value_elsewhere',
+          burning(calledInput),
+          collateralMode(),
+        ),
+      ).toEqual({
+        rule: 'no_sponsor_value_elsewhere',
+        reason: 'uncovered-outflow',
+        assetId: CALLED_TOKEN,
+        demanded: 5n,
+        supplied: 0n,
+      });
+    });
+
+    it('never lets a call spend a sponsor input or pay the sponsor', () => {
+      expect(
+        violationOf(
+          'no_sponsor_inputs',
+          contractCall({
+            inputs: [grantInput, fundInput, calledInput, sponsorFee],
+          }),
+          collateralMode(),
+        ),
+      ).toEqual({
+        rule: 'no_sponsor_inputs',
+        reason: 'sponsor-input',
+        input: outpoint(sponsorFee),
+      });
+      expect(
+        violationOf(
+          'sponsor_outflow_zero',
+          contractCall({
+            outputs: [
+              grantOutput({
+                ...grant,
+                scope: { ...grant.scope, cap: grant.scope.cap - 2_200_000n },
+              }),
+              payout(2_000_000n),
+              fundOutput(9_800_000n),
+              payout(1_000_000n, enterpriseAddress(keyCredential(SPONSOR_KEY))),
+            ],
+            mint: undefined,
+          }),
+          collateralMode(),
+        ),
+      ).toEqual({
+        rule: 'sponsor_outflow_zero',
+        reason: 'pays-sponsor',
+        outputIndex: 3,
       });
     });
   });

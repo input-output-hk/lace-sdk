@@ -26,6 +26,7 @@ import {
   agentGrantUtxo,
   buildResultOf,
   controlOutput,
+  COST_MODELS,
   creatorBinding,
   DEVICE_0,
   DEVICE_1,
@@ -35,6 +36,8 @@ import {
   issueGrantShape,
   liveControl,
   localChannel,
+  orderBookPin,
+  ownerContractCall,
   ownerSpendShape,
   PREPROD,
   RECIPIENT_ADDRESS,
@@ -45,6 +48,7 @@ import {
   words,
 } from './custody-fixtures';
 
+import type { CardanoCustodyContractPin } from '../../src/custody/cardano-custody-contract-pin';
 import type {
   CardanoCustodyDeviceSignDataRequest,
   CardanoCustodyDeviceSignRequest,
@@ -225,6 +229,152 @@ describe('createLocalCardanoCustodyDeviceSigner', () => {
     expect(keySource.withPasskeyMnemonic).not.toHaveBeenCalled();
   });
 
+  describe('binds the witness set to the body', () => {
+    const hashedSpend = (
+      overrides: Partial<CardanoCustodyDeviceSignRequest> = {},
+    ): CardanoCustodyDeviceSignRequest => {
+      const result = buildResultOf({
+        ...ownerSpendShape(),
+        costModels: COST_MODELS,
+      });
+      return {
+        transaction: HexBlob(result.transaction),
+        resolvedInputs: result.resolvedInputs,
+        accountRecord: record,
+        chainId: PREPROD,
+        device: creatorBinding(localChannel),
+        ...overrides,
+      };
+    };
+
+    it('signs an owner spend whose body hash binds the witness set under its cost models', async () => {
+      const keySource = keySourceOf();
+      const signer = createLocalCardanoCustodyDeviceSigner({
+        keySource,
+        now: () => NOW,
+      });
+
+      const witnessSet = await signer.signTransaction(
+        hashedSpend({ costModels: COST_MODELS }),
+      );
+
+      expect(vkeysOf(witnessSet)).toHaveLength(1);
+      expect(keySource.withPasskeyMnemonic).toHaveBeenCalledTimes(1);
+    });
+
+    it.each<[string, Partial<CardanoCustodyDeviceSignRequest>, string]>([
+      ['without cost models', {}, 'missing-cost-models'],
+      [
+        'under other cost models',
+        {
+          costModels: new Map([[Cardano.PlutusLanguageVersion.V3, [3, 2, 1]]]),
+        },
+        'script-data-hash-mismatch',
+      ],
+    ])(
+      'refuses a body that declares a script data hash %s before any ceremony',
+      async (_, overrides, reason) => {
+        const keySource = keySourceOf();
+        const signer = createLocalCardanoCustodyDeviceSigner({
+          keySource,
+          now: () => NOW,
+        });
+
+        await expect(
+          signer.signTransaction(hashedSpend(overrides)),
+        ).rejects.toMatchObject({
+          code: 'custody-unsupported-operation',
+          reason,
+        });
+        expect(keySource.withPasskeyMnemonic).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('a call to another contract', () => {
+    const contractCallRequest = (): CardanoCustodyDeviceSignRequest => {
+      const result = buildResultOf(ownerContractCall());
+      return {
+        transaction: HexBlob(result.transaction),
+        resolvedInputs: result.resolvedInputs,
+        accountRecord: record,
+        chainId: PREPROD,
+        device: creatorBinding(localChannel),
+        costModels: COST_MODELS,
+      };
+    };
+
+    it('signs when the app pins every called script', async () => {
+      const keySource = keySourceOf();
+      const signer = createLocalCardanoCustodyDeviceSigner({
+        keySource,
+        contractPins: [orderBookPin],
+        now: () => NOW,
+      });
+
+      const witnessSet = await signer.signTransaction(contractCallRequest());
+
+      const { valid, invalid } = await verifyVkeyWitnesses(
+        buildResultOf(ownerContractCall()).bodyHash,
+        vkeysOf(witnessSet),
+      );
+      expect(invalid).toEqual([]);
+      expect([...valid.keys()]).toEqual([DEVICE_0]);
+      expect(keySource.withPasskeyMnemonic).toHaveBeenCalledTimes(1);
+    });
+
+    it.each<[string, CardanoCustodyContractPin[], string]>([
+      ['without pins', [], 'unknown-contract'],
+      [
+        'pinned under another script hash',
+        [{ ...orderBookPin, scriptHash: Hash28ByteBase16('ee'.repeat(28)) }],
+        'unknown-contract',
+      ],
+      [
+        'whose redeemer the pinned schema does not describe',
+        [
+          {
+            ...orderBookPin,
+            spend: {
+              redeemer: { dataType: 'bytes' },
+              datum: { $ref: '#/definitions/Order' },
+            },
+          },
+        ],
+        'contract-data-mismatch',
+      ],
+    ])(
+      'refuses a call %s before any ceremony',
+      async (_, contractPins, reason) => {
+        const keySource = keySourceOf();
+        const signer = createLocalCardanoCustodyDeviceSigner({
+          keySource,
+          contractPins,
+          now: () => NOW,
+        });
+
+        await expect(
+          signer.signTransaction(contractCallRequest()),
+        ).rejects.toMatchObject({
+          code: 'custody-unsupported-operation',
+          reason,
+        });
+        expect(keySource.withPasskeyMnemonic).not.toHaveBeenCalled();
+      },
+    );
+
+    it('refuses every call by default', async () => {
+      const signer = createLocalCardanoCustodyDeviceSigner({
+        keySource: keySourceOf(),
+        now: () => NOW,
+      });
+
+      await expect(
+        signer.signTransaction(contractCallRequest()),
+      ).rejects.toBeInstanceOf(CardanoCustodyRequestRefusedError);
+    });
+  });
+
   it('refuses a scope the transaction does not write before any ceremony', async () => {
     const keySource = keySourceOf();
     const signer = createLocalCardanoCustodyDeviceSigner({
@@ -324,6 +474,7 @@ describe('createRemoteCardanoCustodyDeviceSigner', () => {
       requestedScopes: [requestedScope],
       grantUtxos: [agentGrantUtxo],
       metadataMeanings: { 1971: 'Midnight City subscription payment' },
+      costModels: COST_MODELS,
     });
 
     await expect(signer.signTransaction(signRequest)).resolves.toBe(witnessSet);
@@ -340,6 +491,7 @@ describe('createRemoteCardanoCustodyDeviceSigner', () => {
       requestedScopes: [serializeCustodyRequestedGrantScope(requestedScope)],
       grantUtxos: [serializeResolvedInput(agentGrantUtxo)],
       metadataMeanings: { 1971: 'Midnight City subscription payment' },
+      costModels: { 2: [1, 2, 3] },
     });
   });
 
@@ -357,6 +509,7 @@ describe('createRemoteCardanoCustodyDeviceSigner', () => {
     expect(payload).not.toHaveProperty('requestedScopes');
     expect(payload).not.toHaveProperty('grantUtxos');
     expect(payload).not.toHaveProperty('metadataMeanings');
+    expect(payload).not.toHaveProperty('costModels');
   });
 
   it('reports a signer that answers unsupported-request as one without custody support', async () => {

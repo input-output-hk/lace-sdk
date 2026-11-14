@@ -316,7 +316,11 @@ export type ExtensionSignerRequestPayloads = {
    * decimal metadata label, what the app reports the transaction's metadata
    * under that label to be; consent shows each beside the metadata read
    * from the bytes, labelled as reported by the app, and the signer refuses
-   * a label the transaction does not carry.
+   * a label the transaction does not carry. `costModels` gives the
+   * protocol's cost models the transaction was built under, each by its
+   * Plutus language version in decimal, `0` for Plutus V1; the signer
+   * recomputes the script data hash of every transaction whose body
+   * declares one under them, and refuses such a transaction without them.
    */
   'sign-cardano-custody-tx': {
     serializedTx: string;
@@ -327,6 +331,7 @@ export type ExtensionSignerRequestPayloads = {
     requestedScopes?: unknown[];
     grantUtxos?: unknown[];
     metadataMeanings?: Record<string, string>;
+    costModels?: Record<string, number[]>;
   };
   /**
    * A CIP-8 signature over `payload` (hex) by one custody device key, whose

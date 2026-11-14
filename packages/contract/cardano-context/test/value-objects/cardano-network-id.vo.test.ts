@@ -2,7 +2,7 @@ import { BlockchainNetworkId } from '@lace-contract/network';
 import { Cardano } from '@lace-lib/cardano-core';
 import { describe, expect, it } from 'vitest';
 
-import { CardanoNetworkId } from '../../src';
+import { CardanoNetworkId, registerCustomCardanoNetwork } from '../../src';
 
 describe('value-objects/cardano-network-id', () => {
   describe('CardanoNetworkId.getChainId', () => {
@@ -46,6 +46,23 @@ describe('value-objects/cardano-network-id', () => {
       const networkId = BlockchainNetworkId('cardano-999999');
       const chainId = CardanoNetworkId.getChainId(networkId);
       expect(chainId).toBeUndefined();
+    });
+
+    it('should return a testnet ChainId for a registered custom network', () => {
+      const networkMagic = 77;
+      registerCustomCardanoNetwork({
+        networkMagic,
+        slotConfig: { slotLength: 1000, zeroSlot: 0, zeroTime: 0 },
+      });
+      const networkId = BlockchainNetworkId(`cardano-${networkMagic}`);
+
+      expect(CardanoNetworkId.getChainId(networkId)).toEqual({
+        networkId: Cardano.NetworkId.Testnet,
+        networkMagic,
+      });
+      expect(CardanoNetworkId.getChainId(networkId)).toBe(
+        CardanoNetworkId.getChainId(networkId),
+      );
     });
 
     it('should return undefined for malformed network ID', () => {

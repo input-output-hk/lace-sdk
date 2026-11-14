@@ -13,6 +13,7 @@ import {
   CardanoCustodyBuildFailedError,
   CardanoCustodyFundContentionError,
   CardanoCustodyGrantSpendError,
+  CardanoCustodyInvalidOperationError,
   CardanoCustodyLogicNotServedError,
   CardanoCustodyOperationInProgressError,
   CardanoCustodyStaleControlError,
@@ -30,6 +31,11 @@ import {
   agentGrantUtxo,
   agentKey,
   buildResultOf,
+  CONTRACT_SCRIPT,
+  contractCall,
+  contractCallShape,
+  contractOrderUtxo,
+  contractScriptCarrier,
   controlOutput,
   createCustodyTestWallet,
   fundUtxo,
@@ -59,6 +65,7 @@ import type {
   CardanoCustodyAccountOperation,
   CardanoCustodyBuildError,
   CardanoCustodyBuildRequest,
+  CardanoCustodyContractCall,
   CardanoTxId,
 } from '@lace-contract/cardano-context';
 import type { Cardano } from '@lace-lib/cardano-core';
@@ -95,7 +102,11 @@ const setup = async () => {
   test.control.answerBuild = () => ({ ok: true, result: grantSpend });
   const build = async (
     grantee: Ed25519KeyHashHex = AGENT,
-    extra: { slot?: bigint; feeBound?: bigint } = {},
+    extra: {
+      slot?: bigint;
+      feeBound?: bigint;
+      contract?: CardanoCustodyContractCall;
+    } = {},
   ) =>
     buildCardanoCustodyGrantSpend(test.wallet, {
       accountId,
@@ -166,6 +177,39 @@ describe('buildCardanoCustodyGrantSpend', () => {
       slot: 0n,
       feeBound: 1_000_000n,
     });
+  });
+
+  it('passes a contract call into the grant spend', async () => {
+    const { build, builds } = await setup();
+
+    await build(AGENT, { contract: contractCall });
+
+    expect(builds[0].operation).toEqual({
+      type: 'grant-spend',
+      grantee: AGENT,
+      outputs,
+      contract: contractCall,
+    });
+  });
+
+  it('maps a contract call the builder cannot run to its reason', async () => {
+    const { build, control } = await setup();
+    control.answerBuild = () => ({
+      ok: false,
+      error: {
+        code: 'invalid-operation',
+        reason: 'invalid-contract-call',
+        message: 'Input 0 is not locked by a script',
+      },
+    });
+
+    const built = await build(AGENT, { contract: contractCall });
+
+    expect(built.isErr() && built.error).toEqual(
+      new CardanoCustodyInvalidOperationError('invalid-contract-call', {
+        message: 'Input 0 is not locked by a script',
+      }),
+    );
   });
 
   it('waits for the era summaries the build reads', async () => {
@@ -907,6 +951,183 @@ describe('submitCardanoCustodyGrantSpend', () => {
     );
     expect(sponsor.signCollateral).toHaveBeenCalledTimes(1);
     expect(submitted).toHaveLength(1);
+  });
+
+  describe('a spend that calls another contract', () => {
+    const called = buildResultOf(contractCallShape());
+    const agentWitness = agentKey.witnessOver(called.bodyHash);
+
+    const setupCall = async () => {
+      const test = await setup();
+      test.control.answerBuild = () => ({ ok: true, result: called });
+      return test;
+    };
+
+    it('submits the spend this wallet built, resolving the call from the build', async () => {
+      const { build, submit, sponsor, submitted } = await setupCall();
+      const built = await build(AGENT, { contract: contractCall });
+
+      const result = await submit(agentWitness, built.unwrap().transaction);
+
+      expect(result.unwrap()).toEqual({
+        txId: called.bodyHash,
+        invalidHereafter: called.invalidHereafter,
+      });
+      expect(sponsor.signCollateral).toHaveBeenCalledTimes(1);
+      expect(submitted).toHaveLength(1);
+    });
+
+    it('refuses the spend when this wallet holds no build of it, before the sponsor signs', async () => {
+      const { submit, sponsor, submitted } = await setupCall();
+
+      const result = await submit(agentWitness, HexBlob(called.transaction));
+
+      expect(result.isErr() && result.error).toEqual(
+        new CardanoCustodyGrantSpendError('contract-call-not-held'),
+      );
+      expect(sponsor.signCollateral).not.toHaveBeenCalled();
+      expect(submitted).toEqual([]);
+    });
+
+    describe('with no reference input of its own, when this wallet holds no build of it', () => {
+      const withoutCarrier = () => {
+        const shape = contractCallShape();
+        return {
+          ...shape,
+          referenceInputs: (shape.referenceInputs ?? []).filter(
+            reference => reference !== contractScriptCarrier,
+          ),
+        };
+      };
+
+      it('refuses a call that attaches its script as not held, before the sponsor signs', async () => {
+        const { submit, sponsor, submitted } = await setup();
+        const attaching = buildResultOf({
+          ...withoutCarrier(),
+          scripts: [CONTRACT_SCRIPT],
+        });
+
+        const result = await submit(
+          agentKey.witnessOver(attaching.bodyHash),
+          HexBlob(attaching.transaction),
+        );
+
+        expect(result.isErr() && result.error).toEqual(
+          new CardanoCustodyGrantSpendError('contract-call-not-held'),
+        );
+        expect(sponsor.signCollateral).not.toHaveBeenCalled();
+        expect(submitted).toEqual([]);
+      });
+
+      it('names the contract input as taken when nothing shows the call, before the sponsor signs', async () => {
+        const { submit, sponsor, submitted } = await setup();
+        const carried = buildResultOf(withoutCarrier());
+
+        const result = await submit(
+          agentKey.witnessOver(carried.bodyHash),
+          HexBlob(carried.transaction),
+        );
+
+        const [{ txId, index }] = contractOrderUtxo;
+        expect(result.isErr() && result.error).toEqual(
+          new CardanoCustodyFundContentionError([{ txId, index }]),
+        );
+        expect(sponsor.signCollateral).not.toHaveBeenCalled();
+        expect(submitted).toEqual([]);
+      });
+    });
+
+    it('refuses a call the held build did not carry, before the sponsor signs', async () => {
+      const { build, submit, sponsor, submitted } = await setupCall();
+      await build(AGENT);
+
+      const result = await submit(agentWitness, HexBlob(called.transaction));
+
+      expect(result.isErr() && result.error).toMatchObject({
+        reason: { code: 'inspection-refused' },
+      });
+      expect(sponsor.signCollateral).not.toHaveBeenCalled();
+      expect(submitted).toEqual([]);
+    });
+
+    it('refuses a transaction that adds a contract input the build did not hold', async () => {
+      const { build, submit, sponsor, submitted } = await setupCall();
+      await build(AGENT, { contract: contractCall });
+      const shape = contractCallShape();
+      const foreignInput = utxo(0x22, contractOrderUtxo[1]);
+      const tampered = buildResultOf({
+        ...shape,
+        inputs: [...shape.inputs, foreignInput],
+      });
+
+      const result = await submit(
+        agentKey.witnessOver(tampered.bodyHash),
+        HexBlob(tampered.transaction),
+      );
+
+      expect(result.isErr() && result.error).toEqual(
+        new CardanoCustodyGrantSpendError('contract-call-not-held'),
+      );
+      expect(sponsor.signCollateral).not.toHaveBeenCalled();
+      expect(submitted).toEqual([]);
+    });
+
+    it('names a replaced control UTxO of a call with no hold, not the missing hold', async () => {
+      const { submit, settledUtxos$, accountId, sponsor, submitted } =
+        await setupCall();
+      settledUtxos$.next({
+        [accountId]: [
+          utxo(0x12, controlOutput(grantedState)),
+          agentGrantUtxo,
+          fundUtxo,
+        ],
+      });
+
+      const result = await submit(agentWitness, HexBlob(called.transaction));
+
+      expect(result.isErr() && result.error).toEqual(
+        new CardanoCustodyStaleControlError(),
+      );
+      expect(result.isErr() && result.error.constructor).toBe(
+        CardanoCustodyStaleControlError,
+      );
+      expect(sponsor.signCollateral).not.toHaveBeenCalled();
+      expect(submitted).toEqual([]);
+    });
+
+    it('refuses the first body once a later build for the grantee replaced its hold', async () => {
+      const { build, submit, control, sponsor, submitted } = await setupCall();
+      const first = await build(AGENT, { contract: contractCall });
+      control.answerBuild = () => ({ ok: true, result: grantSpend });
+      await build(AGENT);
+
+      const result = await submit(agentWitness, first.unwrap().transaction);
+
+      expect(result.isErr() && result.error).toEqual(
+        new CardanoCustodyGrantSpendError('contract-call-not-held'),
+      );
+      expect(sponsor.signCollateral).not.toHaveBeenCalled();
+      expect(submitted).toEqual([]);
+    });
+  });
+
+  it('refuses a held plain spend that adds a spent input the build did not hold, before the sponsor signs', async () => {
+    const { build, submit, sponsor, submitted } = await setup();
+    await build(AGENT);
+    const shape = grantSpendShape();
+    const tampered = buildResultOf({
+      ...shape,
+      inputs: [...shape.inputs, utxo(0x22, contractOrderUtxo[1])],
+    });
+
+    const result = await submit(
+      agentKey.witnessOver(tampered.bodyHash),
+      HexBlob(tampered.transaction),
+    );
+
+    expect(result.isErr()).toBe(true);
+    expect(sponsor.signCollateral).not.toHaveBeenCalled();
+    expect(submitted).toEqual([]);
   });
 
   it('refuses a sponsor witness by another key', async () => {

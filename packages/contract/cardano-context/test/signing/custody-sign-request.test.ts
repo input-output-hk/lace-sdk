@@ -1,4 +1,4 @@
-import { Cardano } from '@lace-lib/cardano-core';
+import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
   Ed25519KeyHashHex,
   Hash28ByteBase16,
@@ -14,23 +14,33 @@ import {
 import { HexBlob } from '@lace-lib/cardano-util';
 import { describe, expect, it } from 'vitest';
 
+import { registerCustomCardanoNetwork } from '../../src/custom-networks';
 import {
   checkCardanoCustodySignRequest,
   checkOrdinaryCardanoTransaction,
   parseCardanoCustodyChainId,
+  serializeCardanoCustodyCostModels,
 } from '../../src/signing/custody-sign-request';
 import { MalformedRequestError } from '../../src/signing/request-parsing';
 
 import {
   AGENT_KEY,
   agentGrant,
+  CONTRACT_ADDRESS,
+  CONTRACT_HASH,
+  CONTRACT_SCRIPT,
+  CONTRACT_TOKEN,
+  contractOrder,
+  contractScriptCarrier,
   control,
+  COST_MODELS,
   controlOutput,
   creation,
   custodyPayload,
   DEVICE_0,
   DEVICE_1,
   deviceRewrite,
+  FILL,
   fundUtxo,
   GRANT_LOVELACE,
   grantedState,
@@ -41,6 +51,9 @@ import {
   issueGrant,
   logicRun,
   NOW,
+  ORDER_DATUM,
+  orderBookPin,
+  ownerContractCall,
   PARKED_SCRIPTS,
   payout,
   record,
@@ -55,18 +68,27 @@ import {
   sweepGrants,
   TESTNET_CUSTODY_XPUB,
   utxo,
+  VALID_UNTIL,
 } from './custody-sign-request.fixtures';
 
 import type { CustodyTransactionShape } from './custody-sign-request.fixtures';
-import type { CustodyGrant } from '@lace-lib/cardano-custody';
+import type {
+  CardanoContractPin,
+  CustodyGrant,
+} from '@lace-lib/cardano-custody';
 
 const STRANGER_KEY_HASH = Hash28ByteBase16('ff'.repeat(28));
 
-const check = async (payload: unknown) =>
-  checkCardanoCustodySignRequest(payload, { now: NOW });
+const check = async (
+  payload: unknown,
+  contractPins: readonly CardanoContractPin[] = [],
+) => checkCardanoCustodySignRequest(payload, { now: NOW, contractPins });
 
-const refusalOf = async (payload: unknown): Promise<unknown> =>
-  check(payload).then(
+const refusalOf = async (
+  payload: unknown,
+  contractPins?: readonly CardanoContractPin[],
+): Promise<unknown> =>
+  check(payload, contractPins).then(
     () => {
       throw new Error('Expected the request to be refused.');
     },
@@ -80,6 +102,20 @@ const thrownBy = (run: () => unknown): unknown => {
     return error;
   }
   throw new Error('Expected a refusal.');
+};
+
+/** Expects a refusal of `code/reason` under the caller's contract pins. */
+const expectCallRefused = async (
+  payload: unknown,
+  refusal: string,
+  contractPins: readonly CardanoContractPin[] = [],
+) => {
+  const [code, reason] = refusal.split('/');
+  await expect(refusalOf(payload, contractPins)).resolves.toMatchObject({
+    name: 'CardanoCustodyRequestRefusedError',
+    code,
+    reason,
+  });
 };
 
 const expectMalformed = async (payload: unknown, field: string) => {
@@ -126,6 +162,63 @@ describe('parseCardanoCustodyChainId', () => {
     expect(() => parseCardanoCustodyChainId(chainId)).toThrow(
       MalformedRequestError,
     );
+  });
+});
+
+describe('custody requests on a custom network', () => {
+  const networkMagic = 77;
+  const chainId = { networkId: Cardano.NetworkId.Testnet, networkMagic };
+  const onCustomNetwork = (shape: CustodyTransactionShape) =>
+    custodyPayload(shape, {
+      chainId,
+      accountRecord: { ...record, networkMagic },
+      requestedScopes: [requestedScopeOf(agentGrant)],
+    });
+  const withScriptsAttached = (
+    shape: CustodyTransactionShape,
+  ): CustodyTransactionShape => ({
+    ...shape,
+    referenceInputs: undefined,
+    scripts: PARKED_SCRIPTS.map(([, { scriptReference }]) => scriptReference!),
+  });
+
+  it('stays refused until the network is registered', () => {
+    expect(() => parseCardanoCustodyChainId(chainId)).toThrow(
+      MalformedRequestError,
+    );
+  });
+
+  it('reads the validity bounds with the registered slot configuration', async () => {
+    registerCustomCardanoNetwork({
+      networkMagic,
+      slotConfig: { slotLength: 2000, zeroSlot: 100, zeroTime: NOW },
+    });
+
+    expect(parseCardanoCustodyChainId(chainId)).toEqual(chainId);
+    const checked = await check(
+      onCustomNetwork(withScriptsAttached(issueGrant())),
+    );
+    expect(checked.inspection.validity.invalidHereafter).toEqual({
+      slot: VALID_UNTIL,
+      posixMs: NOW + (Number(VALID_UNTIL) - 100) * 2000,
+    });
+  });
+
+  it('refuses the scripts parked on another network', async () => {
+    await expectRefused(
+      onCustomNetwork(issueGrant()),
+      'custody-unsupported-operation',
+      'foreign-reference-script',
+    );
+  });
+
+  it('still refuses a mainnet network id on a registered magic', () => {
+    expect(() =>
+      parseCardanoCustodyChainId({
+        networkId: Cardano.NetworkId.Mainnet,
+        networkMagic,
+      }),
+    ).toThrow(MalformedRequestError);
   });
 });
 
@@ -1151,6 +1244,321 @@ describe('checkCardanoCustodySignRequest', () => {
       await expect(
         check(custodyPayload(shape(), { requestedScopes: [] })),
       ).resolves.toMatchObject({ requestedScopes: [] });
+    });
+  });
+
+  describe('contract calls', () => {
+    const costModels = serializeCardanoCustodyCostModels(COST_MODELS);
+    const callPayload = (
+      shape = ownerContractCall(),
+      overrides: Record<string, unknown> = {},
+    ) => custodyPayload(shape, { costModels, ...overrides });
+    const orderInput = { txId: contractOrder[0].txId, index: 0 };
+
+    it('reads an owner spend that calls a pinned contract, its data decoded', async () => {
+      const checked = await check(callPayload(), [orderBookPin]);
+
+      expect(checked.account.operations).toEqual([{ kind: 'owner-spend' }]);
+      expect(checked.contractCalls).toEqual({
+        spends: [
+          {
+            input: orderInput,
+            scriptHash: CONTRACT_HASH,
+            label: 'Order book',
+            value: { coins: 5_000_000n },
+            redeemer: {
+              kind: 'decoded',
+              value: {
+                kind: 'constructor',
+                name: 'Fill',
+                index: 1,
+                fields: [
+                  {
+                    name: 'amount',
+                    value: { kind: 'integer', value: 2_000_000n },
+                  },
+                ],
+              },
+            },
+            datum: {
+              kind: 'decoded',
+              value: {
+                kind: 'constructor',
+                name: 'Order',
+                index: 0,
+                fields: [
+                  {
+                    name: 'owner',
+                    value: { kind: 'bytes', hex: 'aa'.repeat(28) },
+                  },
+                  {
+                    name: 'price',
+                    value: { kind: 'integer', value: 5_000_000n },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        mints: [
+          expect.objectContaining({
+            policyId: CONTRACT_HASH,
+            label: 'Order book',
+            assets: new Map([[CONTRACT_TOKEN, 1n]]),
+          }),
+        ],
+        referenceInputs: [
+          expect.objectContaining({
+            input: {
+              txId: contractScriptCarrier[0].txId,
+              index: 0,
+            },
+            referenceScriptHash: CONTRACT_HASH,
+          }),
+        ],
+      });
+      expect(checked.inspection.externalOutputs[0]).toMatchObject({
+        label: 'Order book',
+        datum: { kind: 'decoded' },
+      });
+    });
+
+    it('reads no contract calls from an owner operation that calls none', async () => {
+      const checked = await check(
+        custodyPayload(deviceRewrite(initialState), { costModels }),
+        [orderBookPin],
+      );
+
+      expect(checked.contractCalls).toBeUndefined();
+    });
+
+    it('refuses a call to a contract the caller does not pin', async () => {
+      await expectCallRefused(
+        callPayload(),
+        'custody-unsupported-operation/unknown-contract',
+      );
+    });
+
+    it('never reads pins from the request', async () => {
+      await expectCallRefused(
+        callPayload(ownerContractCall(), { contractPins: [orderBookPin] }),
+        'custody-unsupported-operation/unknown-contract',
+      );
+    });
+
+    it('refuses a redeemer that does not match the pinned schema', async () => {
+      await expectCallRefused(
+        callPayload({
+          ...ownerContractCall(),
+          contractSpends: [{ spent: contractOrder, data: 7n }],
+        }),
+        'custody-unsupported-operation/contract-data-mismatch',
+        [orderBookPin],
+      );
+    });
+
+    it('refuses a call without the cost models its script data hash needs', async () => {
+      await expectCallRefused(
+        custodyPayload(ownerContractCall()),
+        'custody-unsupported-operation/missing-cost-models',
+        [orderBookPin],
+      );
+    });
+
+    it('refuses a call under other cost models than its body commits to', async () => {
+      await expectCallRefused(
+        callPayload(ownerContractCall(), {
+          costModels: { [Cardano.PlutusLanguageVersion.V3]: [3, 2, 1] },
+        }),
+        'custody-unsupported-operation/script-data-hash-mismatch',
+        [orderBookPin],
+      );
+    });
+
+    it('refuses a call that also changes the control state', async () => {
+      const shape = ownerContractCall();
+      const [, ...outputs] = shape.outputs;
+      await expectCallRefused(
+        callPayload({
+          ...shape,
+          outputs: [
+            controlOutput({
+              ...initialState,
+              devices: [HexBlob(DEVICE_0), HexBlob(DEVICE_1)],
+            }),
+            ...outputs,
+          ],
+        }),
+        'custody-unsupported-operation/contract-call-with-state-change',
+        [orderBookPin],
+      );
+    });
+
+    it('refuses pins that name one script twice', async () => {
+      await expectCallRefused(
+        callPayload(),
+        'custody-context-mismatch/duplicate-contract-pin',
+        [orderBookPin, { ...orderBookPin, label: 'Other' }],
+      );
+    });
+
+    it('keeps refusing a foreign reference input outside a call', async () => {
+      const shape = deviceRewrite(initialState);
+      await expectCallRefused(
+        custodyPayload(
+          {
+            ...shape,
+            referenceInputs: [
+              ...PARKED_SCRIPTS,
+              utxo(0x50, payout(2_000_000n, STRANGER_ADDRESS)),
+            ],
+          },
+          { costModels },
+        ),
+        'custody-unsupported-operation/foreign-reference-input',
+        [orderBookPin],
+      );
+    });
+
+    it.each([
+      ['a list', [1]],
+      ['an unknown language', { 9: [1] }],
+      ['a fractional cost', { 2: [1.5] }],
+      ['a cost model that is no list', { 2: 'costs' }],
+    ])('refuses cost models as %s as malformed', async (_, value) => {
+      await expectMalformed(
+        callPayload(ownerContractCall(), { costModels: value }),
+        'costModels',
+      );
+    });
+  });
+
+  describe('payments to a pinned contract outside a call', () => {
+    /** An owner spend that places an order: a plain payment to the contract, its datum inline. */
+    const placesOrder = (
+      datum: Cardano.PlutusData,
+    ): CustodyTransactionShape => {
+      const shape = deviceRewrite(initialState);
+      return {
+        ...shape,
+        outputs: [
+          controlOutput(initialState),
+          { address: CONTRACT_ADDRESS, value: { coins: 2_000_000n }, datum },
+          payout(7_750_000n, identity.address),
+        ],
+      };
+    };
+
+    it('names the pinned contract and decodes the datum the payment carries', async () => {
+      const checked = await check(custodyPayload(placesOrder(ORDER_DATUM)), [
+        orderBookPin,
+      ]);
+
+      expect(checked.contractCalls).toBeUndefined();
+      expect(checked.inspection.externalOutputs[0]).toMatchObject({
+        address: CONTRACT_ADDRESS,
+        label: 'Order book',
+        datum: {
+          kind: 'decoded',
+          value: { kind: 'constructor', name: 'Order' },
+        },
+      });
+    });
+
+    it('refuses a payment whose datum does not decode against the pin', async () => {
+      await expectCallRefused(
+        custodyPayload(placesOrder(7n)),
+        'custody-unsupported-operation/contract-data-mismatch',
+        [orderBookPin],
+      );
+    });
+  });
+
+  describe('script data binding', () => {
+    const costModels = serializeCardanoCustodyCostModels(COST_MODELS);
+    /** The order UTxO as an app resolves it to hide its script: a key address output. */
+    const misresolvedOrder: Cardano.Utxo = [
+      contractOrder[0],
+      payout(5_000_000n, STRANGER_ADDRESS),
+    ];
+
+    /**
+     * An owner spend that also spends the order UTxO, with its spend
+     * redeemer and the contract script, paying the order's funds to the
+     * stranger, under the hash of that full witness set.
+     */
+    const takesOrder = (
+      order: Cardano.Utxo = contractOrder,
+    ): CustodyTransactionShape => {
+      const shape = deviceRewrite(initialState);
+      return {
+        ...shape,
+        inputs: [...shape.inputs, order],
+        contractSpends: [{ spent: order, data: FILL }],
+        scripts: [CONTRACT_SCRIPT],
+        outputs: [...shape.outputs, payout(5_000_000n, STRANGER_ADDRESS)],
+        costModels: COST_MODELS,
+      };
+    };
+    const declared = Serialization.Transaction.fromCbor(
+      Serialization.TxCBOR(serializeCustodyTransaction(takesOrder())),
+    )
+      .body()
+      .toCore().scriptIntegrityHash;
+
+    /** `takesOrder` as sent with the order misresolved and its redeemer and script left out. */
+    const stripped = (): CustodyTransactionShape => ({
+      ...takesOrder(misresolvedOrder),
+      contractSpends: [],
+      scripts: undefined,
+      costModels: undefined,
+      body: { scriptIntegrityHash: declared },
+    });
+
+    it('accepts an honest owner transaction whose body binds its witness set', async () => {
+      const checked = await check(
+        custodyPayload(
+          { ...deviceRewrite(initialState), costModels: COST_MODELS },
+          { costModels },
+        ),
+      );
+
+      expect(
+        checked.transaction.body().toCore().scriptIntegrityHash,
+      ).toBeDefined();
+      expect(checked.account.address).toBe(identity.address);
+    });
+
+    it('refuses a stripped redeemer under the hash of the full witness set', async () => {
+      expect(declared).toBeDefined();
+      await expectCallRefused(
+        custodyPayload(stripped(), { costModels }),
+        'custody-unsupported-operation/script-data-hash-mismatch',
+      );
+    });
+
+    it('refuses a body that declares a script data hash without cost models', async () => {
+      await expectCallRefused(
+        custodyPayload(stripped()),
+        'custody-unsupported-operation/missing-cost-models',
+      );
+    });
+
+    it('refuses a misresolved script input once its redeemer is bound', async () => {
+      await expectCallRefused(
+        custodyPayload(takesOrder(misresolvedOrder), { costModels }),
+        'custody-context-mismatch/redeemer-on-key-input',
+      );
+    });
+
+    it('refuses an owner transaction under other cost models than its body commits to', async () => {
+      await expectCallRefused(
+        custodyPayload(
+          { ...deviceRewrite(initialState), costModels: COST_MODELS },
+          { costModels: { [Cardano.PlutusLanguageVersion.V3]: [3, 2, 1] } },
+        ),
+        'custody-unsupported-operation/script-data-hash-mismatch',
+      );
     });
   });
 

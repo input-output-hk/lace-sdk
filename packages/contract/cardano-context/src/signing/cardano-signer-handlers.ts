@@ -37,7 +37,10 @@ import type { CardanoSignDataResult, CardanoSignResult } from './types';
 import type { CardanoVkeyWitness } from './vkey-witnesses';
 import type { Cardano } from '@lace-lib/cardano-core';
 import type { Bip32PublicKeyHex } from '@lace-lib/cardano-crypto';
-import type { CustodyDataSignature } from '@lace-lib/cardano-custody';
+import type {
+  CardanoContractPin,
+  CustodyDataSignature,
+} from '@lace-lib/cardano-custody';
 import type { GroupedAddress } from '@lace-lib/cardano-key-management';
 import type { HexBlob } from '@lace-lib/cardano-util';
 
@@ -128,6 +131,11 @@ export type CreateCardanoSignerHandlersProps = {
    * expiry already past; defaults to the system clock.
    */
   now?: () => number;
+  /**
+   * The other contracts a custody owner transaction may call, from the
+   * signer's own build; none by default, which refuses every call.
+   */
+  contractPins?: readonly CardanoContractPin[];
 };
 
 const parseAccount = ({
@@ -190,7 +198,8 @@ const vkeyWitnessSetOf = (
  * runs every custody check on the exact bytes before the assertion, so a
  * path that skips the consent description never obtains a witness, and then
  * signs with exactly the CIP-1854 device key the request names, refusing
- * words that derive another key. The custody data kind checks that the
+ * words that derive another key. A custody transaction that calls another
+ * contract is held to `contractPins`. The custody data kind checks that the
  * account record re-derives and that the reported control UTxO runs a known
  * logic and lists the device before the assertion, then signs the payload
  * as CIP-8 data bound to the account address, the requesting dApp's origin
@@ -201,6 +210,7 @@ const vkeyWitnessSetOf = (
 export const createCardanoSignerHandlers = ({
   withMnemonicWords,
   now = Date.now,
+  contractPins = [],
 }: CreateCardanoSignerHandlersProps): CardanoSignerHandlers => ({
   'sign-cardano-tx': async ({ serializedTx, utxo, ...payload }) => {
     const validSerializedTx = parseString(serializedTx, 'serializedTx');
@@ -254,7 +264,10 @@ export const createCardanoSignerHandlers = ({
   },
   'sign-cardano-custody-tx': async payload => {
     const { transaction, txId, chainId, identity, device } =
-      await checkCardanoCustodySignRequest(payload, { now: now() });
+      await checkCardanoCustodySignRequest(payload, {
+        now: now(),
+        contractPins,
+      });
     const witness = await withMnemonicWords(async words =>
       signCardanoCustodyTransactionWithWords({
         words,

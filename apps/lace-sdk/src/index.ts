@@ -255,6 +255,8 @@ export type {
   PlutusContext,
   ScriptGuardProps,
   ScriptInputProps,
+  TxEvaluationResult,
+  TxEvaluator,
 } from '@lace-lib/cardano-tx-builder';
 export { createTxBuilder, waitForNetworkInfo } from './create-tx-builder';
 export type {
@@ -262,6 +264,8 @@ export type {
   NetworkInfo,
   WalletWithCardanoContext,
 } from './create-tx-builder';
+export { createPlutusContext } from './create-plutus-context';
+export type { WalletWithCardanoProvider } from './create-plutus-context';
 
 // Transaction signing
 export { signCardanoTx } from './sign-cardano-tx';

@@ -17,6 +17,7 @@ export type {
   CardanoCustodyBuildRequest,
   CardanoCustodyBuildResult,
   CardanoCustodyCollateralFunding,
+  CardanoCustodyContractCall,
   CardanoCustodyCreateOperation,
   CardanoCustodyFeeFunding,
   CardanoCustodyFundingContext,

@@ -5,11 +5,21 @@ import { fail, ok } from '../result';
 
 import {
   checkLogicDraws,
+  checkOwnerCallControl,
   findCandidates,
   inspectAccount,
+  isAllowedContractCall,
   withOperations,
 } from './account-inspection';
 import { checkGrantSpendMetadata, readCustodyMetadata } from './auxiliary-data';
+import {
+  checkContractPins,
+  checkForeignScripts,
+  checkScriptDataBinding,
+  isCallingContracts,
+  readContractCalls,
+  readExternalOutputs,
+} from './contract-calls';
 import { feeSharesOf } from './fee-shares';
 import { isAtAccount } from './outputs';
 import { inCheckOrder } from './refusals';
@@ -26,6 +36,7 @@ import {
   checkWithdrawalAccounts,
 } from './transaction-checks';
 import {
+  isContractScriptOutput,
   paymentCredentialOf,
   readTransaction,
   resolveBody,
@@ -36,9 +47,14 @@ import type {
   CustodyGrant,
 } from '../codecs/account-state';
 import type { CustodyContractVersion } from '../contract-version';
+import type { CardanoContractPin } from '../contracts';
 import type { CustodyAccountIdentity } from '../identity';
 import type { CustodyResult } from '../result';
 import type { InspectionScope } from './account-inspection';
+import type {
+  CustodyContractCalls,
+  CustodyContractDatum,
+} from './contract-calls';
 import type { CustodySlotToPosixMs } from './grant-spend';
 import type {
   CustodyAccountHashes,
@@ -72,6 +88,55 @@ export interface CustodyInspectionOptions {
    * is then refused as `grant-spend-violation`.
    */
   readonly allowGrantSpend?: boolean;
+  /**
+   * Accepts a transaction that calls other contracts: it may then spend
+   * UTxOs locked by other scripts, mint under other policies, and attach and
+   * reference other scripts, and the script inputs pay no part of the fee.
+   * It accepts a grant spend that calls when `allowGrantSpend` is also set,
+   * where inputs at key addresses stay refused. With or without
+   * `allowGrantSpend`, it accepts an owner operation that calls: every
+   * account the transaction operates spends its control UTxO and writes it
+   * back unchanged, with no grant issued or swept and no stake effect, else
+   * the call is refused as `contract-call-with-state-change`. Every other
+   * transaction keeps refusing contract calls.
+   */
+  readonly allowContractCall?: boolean;
+  /**
+   * The contracts a call may run, each named once. With them, every script
+   * input of an allowed call must be locked by a script with a spend pin,
+   * every policy it mints under must have a mint pin, and their redeemers
+   * and datums must decode against the pin, else the call is refused as
+   * `unknown-contract` or `contract-data-mismatch`. An output paid to a
+   * script whose spend pin gives a datum schema must carry a datum that
+   * decodes against it, inline or as a hash whose preimage the witness set
+   * carries. The body's script data hash must bind the decoded redeemers
+   * and datums, recomputed under `costModels`. Without pins an allowed call
+   * is accepted with its data undecoded.
+   */
+  readonly contractPins?: readonly CardanoContractPin[];
+  /**
+   * The protocol's cost models, under which a pinned call's script data
+   * hash is recomputed; a pinned call is refused without them. They need
+   * not be trusted: wrong ones can only make the hash fail to match.
+   */
+  readonly costModels?: Cardano.CostModels;
+  /**
+   * Binds the witness set to the body of every transaction, call or not:
+   * a body that declares a script data hash has it recomputed under
+   * `costModels` from the redeemers and datums the caller sent, else the
+   * transaction is refused as `missing-cost-models` or
+   * `script-data-hash-mismatch`. Without it, a caller could resolve a
+   * Plutus script input as a key input and leave its redeemer out of the
+   * witness set it sends, to add it back after signing. With the redeemers
+   * bound, that redeemer must be sent, and the input surfaces as
+   * `redeemer-on-key-input` or `foreign-script-input`. A native-script
+   * input, or a key-address input the device signature alone satisfies,
+   * carries no redeemer, so outside a chain-checked call it rests on the
+   * caller's resolution, which a consent surface labels as reported by the
+   * caller. A body that declares
+   * no hash can carry no redeemer on chain, so it needs no cost models.
+   */
+  readonly bindScriptData?: boolean;
 }
 
 /** One custody effect of a transaction, as a consent screen names it. */
@@ -266,6 +331,13 @@ export interface CustodyExternalOutput {
   readonly outputIndex: number;
   readonly address: string;
   readonly value: Cardano.Value;
+  /** The label of the pin naming the script it pays, if any. */
+  readonly label?: string;
+  /**
+   * The datum it carries, decoded when it pays a script whose spend pin
+   * gives a datum schema, and raw, or only its hash, otherwise.
+   */
+  readonly datum?: CustodyContractDatum;
 }
 
 /**
@@ -289,7 +361,11 @@ interface CustodyDepositOutput extends CustodyAccountHashes {
  * therefore always pays someone.
  */
 export interface CustodyFeeShares {
-  /** The addresses of the external inputs, each once, in the ledger's input order. */
+  /**
+   * The addresses of the external inputs, each once, in the ledger's input
+   * order. The inputs of other contracts a contract call spends pay nothing
+   * and take no change, so their addresses are not among them.
+   */
   readonly payers: readonly string[];
   /** Lovelace of the fee the external inputs pay. */
   readonly externalShare: bigint;
@@ -321,6 +397,8 @@ export interface CustodyTransactionInspection {
   readonly fee: bigint;
   /** Rests on the caller's resolutions of the external inputs. */
   readonly feeShares: CustodyFeeShares;
+  /** What an allowed contract call does to other contracts; absent otherwise. */
+  readonly contractCalls?: CustodyContractCalls;
   readonly donation?: bigint;
   /**
    * The metadata the auxiliary data carries, by label, which the body
@@ -412,14 +490,21 @@ const validityOf = (
  * through a withdrawal from the logic's stake credential, and that logic
  * must be one of the contract version's catalogue. A reference input may
  * carry a reference script only as a contract script parked at the output
- * reference the version pins on the inspected network.
+ * reference the version pins on the inspected network. A transaction
+ * runs no other script unless it is a contract call `allowContractCall`
+ * allows: a grant spend, or an owner operation, that spends UTxOs of other
+ * contracts, mints under other policies and attaches or references other
+ * scripts. `contractPins` restricts such a call to pinned contracts with
+ * data that decodes against their schemas.
  *
  * Witness-set redeemers are bound to the signed body only through its
- * script data hash, which inspection does not recompute. A spend redeemer
- * must fit the UTxO it spends: `Device` the control UTxO, `SpendWithGrant`
- * or `SweepGrant` a grant UTxO, `Fund` a deposit. `SpendWithGrant` is
- * refused unless `allowGrantSpend` is set, and the mint redeemer must fit
- * the mint: `CreateAccount` a state NFT, `IssueGrants` grant tokens minted,
+ * script data hash, which inspection recomputes for a pinned call, whose
+ * decoded redeemers and datums consent shows, and for every transaction
+ * that declares one under `bindScriptData`. A spend redeemer must
+ * fit the UTxO it spends: `Device` the control UTxO, `SpendWithGrant` or
+ * `SweepGrant` a grant UTxO, `Fund` a deposit. `SpendWithGrant` is refused
+ * unless `allowGrantSpend` is set, and the mint redeemer must fit the mint:
+ * `CreateAccount` a state NFT, `IssueGrants` grant tokens minted,
  * `BurnGrants` grant tokens burned. Another redeemer set under the same body
  * cannot change what the body does: it can only run a contract branch that
  * the device's signature does not authorise.
@@ -431,17 +516,21 @@ export const inspectCustodyTransaction = (
 ): CustodyResult<CustodyTransactionInspection, CustodyInspectionRefused> => {
   const record = readRecord(options);
   if (!record.ok) return fail({ refusals: [record.error] });
+  const pinRefusals = checkContractPins(options.contractPins ?? []);
+  if (pinRefusals.length > 0) return fail({ refusals: pinRefusals });
   const serializedBody = transaction.body();
   const body = serializedBody.toCore();
   const resolved = resolveBody(body, resolvedInputs);
   if (!resolved.ok) return fail({ refusals: resolved.error });
   const metadata = readCustodyMetadata(transaction, body);
   if (!metadata.ok) return fail({ refusals: [metadata.error] });
+  const witnessSet = transaction.witnessSet();
   const facts = readTransaction(
     {
       body,
       bodyCbor: serializedBody.toCbor(),
-      witness: transaction.witnessSet().toCore(),
+      witness: witnessSet.toCore(),
+      datums: witnessSet.plutusData()?.values() ?? [],
     },
     resolved.value,
     options,
@@ -460,22 +549,44 @@ export const inspectCustodyTransaction = (
   const operated = outcomes.filter(({ isOperated }) => isOperated);
   const isOperatedAccount = (view: OutputView): boolean =>
     operated.some(({ report }) => isAtAccount(view, report));
-  const externalInputs = facts.inputs
-    .filter(({ output }) => !isOperatedAccount(output))
-    .map(view => externalInputOf(view, scope.deviceKeyHash));
-  const externalOutputs = facts.outputs.flatMap((view, outputIndex) =>
-    view.addressClass.kind === 'other'
-      ? [
-          {
-            outputIndex,
-            address: view.txOut.address,
-            value: view.txOut.value,
-          },
-        ]
-      : [],
+  const isContractCall = isAllowedContractCall(operated, options);
+  const operatedHashes = operated.map(({ report }) => report);
+  const isCalling = isCallingContracts(
+    facts,
+    operatedHashes,
+    options.chainId.networkMagic,
   );
+  const callControlRefusals = checkOwnerCallControl(
+    operated,
+    options,
+    isCalling,
+  );
+  const isCall = isContractCall || callControlRefusals.length > 0;
+  const hasGrantSpend = operated.some(
+    ({ operationFacts }) => operationFacts.isGrantSpend,
+  );
+  const externalViews = facts.inputs.filter(
+    ({ output }) => !isOperatedAccount(output),
+  );
+  const externalInputs = externalViews.map(view =>
+    externalInputOf(view, scope.deviceKeyHash),
+  );
+  const payingInputs = isContractCall
+    ? externalInputs.filter(
+        (_, index) => !isContractScriptOutput(externalViews[index].output),
+      )
+    : externalInputs;
+  const external = readExternalOutputs(facts, options.contractPins ?? []);
+  const externalOutputs = external.value;
+  const contractCalls = isContractCall
+    ? readContractCalls(
+        facts,
+        options.contractPins,
+        options.chainId.networkMagic,
+      )
+    : undefined;
   const feeShares = feeSharesOf({
-    externalInputs,
+    externalInputs: payingInputs,
     externalOutputs,
     fee: body.fee,
   });
@@ -483,19 +594,26 @@ export const inspectCustodyTransaction = (
     ...checkBodyFields(facts),
     ...checkWithdrawalAccounts(facts),
     ...checkForeignStakeEffects(facts, candidates, networkId),
-    ...checkMint(facts),
+    ...checkMint(facts, isCall),
     ...checkRedeemerPointers(facts),
     ...checkSpendWitnesses(facts),
     ...checkLogicUse(
       facts,
       outcomes.flatMap(({ logics }) => logics),
     ),
-    ...checkReferenceScripts(facts, options.chainId.networkMagic),
+    ...checkReferenceScripts(facts, options.chainId.networkMagic, isCall),
+    ...(isCall || hasGrantSpend
+      ? []
+      : checkForeignScripts(facts, operatedHashes)),
+    ...callControlRefusals,
+    ...(contractCalls?.refusals ?? []),
+    ...((isContractCall && isCalling && options.contractPins) ||
+    (options.bindScriptData && body.scriptIntegrityHash !== undefined)
+      ? checkScriptDataBinding(transaction, facts, options.costModels)
+      : []),
+    ...external.refusals,
     ...checkOutputs(facts, networkId),
-    ...checkRecordAccount(
-      operated.map(({ report }) => report),
-      record.value,
-    ),
+    ...checkRecordAccount(operatedHashes, record.value),
     ...outcomes.flatMap(outcome => outcome.refusals),
     ...checkGrantSpendMetadata(operated, metadata.value),
     ...checkLogicDraws(
@@ -543,6 +661,7 @@ export const inspectCustodyTransaction = (
     validity: validityOf(body, options.slotToPosixMs),
     fee: body.fee,
     feeShares,
+    ...(contractCalls ? { contractCalls: contractCalls.value } : {}),
     ...(body.donation === undefined ? {} : { donation: body.donation }),
     ...(metadata.value === undefined ? {} : { metadata: metadata.value }),
   });

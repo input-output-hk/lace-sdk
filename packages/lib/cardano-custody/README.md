@@ -317,11 +317,13 @@ the chain: resolved inputs come from the caller.
   caller's resolutions of every input, reference input and collateral input.
   `options` names the chain, the current time, a slot to POSIX millisecond
   converter for the network, and optionally the account record, the signing
-  device key hash and `allowGrantSpend`. A custody account is any address
-  whose payment credential is a supported account proxy and whose stake
-  credential is an inline script. `classifyCustodyAddress(address)` gives
-  that reading for one address: `account`, `unspendable` (the account
-  proxy with no, a key or a pointer stake part) or `other`.
+  device key hash, `allowGrantSpend`, `allowContractCall`, `contractPins`,
+  `costModels` and `bindScriptData`. A custody account is any address whose
+  payment credential is a supported account proxy and whose stake credential
+  is an inline script.
+  `classifyCustodyAddress(address)` gives that reading for one address:
+  `account`, `unspendable` (the account proxy with no, a key or a pointer
+  stake part) or `other`.
   - On success it reports each account the transaction operates: the spent
     control input and its state, the referenced control UTxO of a grant
     spend, the control output with its state and lovelace, fund and reserve
@@ -334,8 +336,10 @@ the chain: resolved inputs come from the caller.
     removed, slots revoked and removed from the revoked list, the generation,
     next slot and outstanding count before and after, and the logic when it
     changes) and the list of operations. It also reports deposits
-    to other custody accounts, external inputs and outputs, collateral,
-    required signers, the validity bounds, the fee and the fee shares.
+    to other custody accounts, external inputs and outputs (each output with
+    its datum and the label of the pin naming the script it pays, if any),
+    collateral, required signers, the validity bounds, the fee, the fee
+    shares and, for an allowed contract call, `contractCalls`.
   - The fee shares (`feeShares`) attribute the fee: the external payers'
     addresses in ledger input order, the part of the fee they pay (what they
     put in beyond their own change, capped at the fee) and the rest, which
@@ -367,15 +371,17 @@ the chain: resolved inputs come from the caller.
       rule, or is already expired;
     - `custody-unsupported-operation`: a grant spend unless allowed, an allowed
       grant spend that breaks the logic's grant spend rule or spends an input
-      outside the account address (`grant-spend-foreign-input`); an operation
-      without a withdrawal from the logic its control state names
-      (`logic-withdrawal-missing`); a logic run whose draw the account gives up
-      (`logic-draw-leaves-account`, below); a rewrite that changes the logic
-      (`logic-changed`), since Lace does not upgrade accounts; a control UTxO
-      referenced outside a grant spend; a reference input carrying a script
-      other than a parked contract script at its pinned output reference on the
-      network (`foreign-reference-script`); a reward account the withdrawal map
-      names twice, read from the body bytes (`duplicate-withdrawal`); issue and
+      outside the account address (`grant-spend-foreign-input`, unless the
+      call is allowed, below); an operation without a withdrawal from the
+      logic its control state names (`logic-withdrawal-missing`); a logic run
+      whose draw the account gives up (`logic-draw-leaves-account`, below); a
+      rewrite that changes the logic (`logic-changed`), since Lace does not
+      upgrade accounts; a control UTxO referenced outside a grant spend; a
+      reference input carrying a script other than a parked contract script
+      at its pinned output reference on the network
+      (`foreign-reference-script`, unless the call is allowed); a reward
+      account the withdrawal map names twice, read from the body bytes
+      (`duplicate-withdrawal`); issue and
       sweep in one transaction; more than 8 grants issued or swept; a swept
       grant that is not dead, or burns that do not match the swept grants; a
       slot taken off the revoked list without its token burned or a generation
@@ -385,9 +391,25 @@ the chain: resolved inputs come from the caller.
       account that is neither a plain deposit nor a reserve with the datum
       `d87980` and no reference script; vote or combined delegation, any other
       certificate, a withdrawal from a credential that is neither the account's
-      stake script nor a known logic, a mint Lace does not build; a stake
-      operation without the control UTxO spent; or a body field such as votes or
-      sub-transactions;
+      stake script nor a known logic, a mint Lace does not build
+      (`foreign-mint`, unless the call is allowed); outside an allowed call
+      and a grant spend, an input another script locks
+      (`foreign-script-input`) or an attached Plutus script other than the
+      account proxy, a known logic or an operated account's stake script
+      (`foreign-attached-script`); an owner operation that calls other
+      contracts while it changes an account's control state, issues or
+      sweeps grants, or certifies or withdraws on its stake credential
+      (`contract-call-with-state-change`); with contract pins, a called script
+      without a pin for that use (`unknown-contract`), a redeemer or datum
+      that does not decode against its pin (`contract-data-mismatch`), a
+      call inspected without cost models (`missing-cost-models`) or without
+      the cost model of a language it carries (`missing-cost-model`), and a
+      body whose script data hash does not bind the witness set's redeemers
+      and datums (`script-data-hash-mismatch`, `missing-script-data-hash`,
+      `unexpected-script-data-hash`); a stake operation without the control
+      UTxO spent; or a body field such as votes or sub-transactions;
+    - `custody-context-mismatch` also covers contract pins that name one
+      script twice (`duplicate-contract-pin`), refused before anything else;
     - `custody-device-not-listed`: the device is not listed, not the creator
       at creation, or not a required signer;
     - `custody-locked-output`: an output no account builder can spend.
@@ -417,7 +439,9 @@ the chain: resolved inputs come from the caller.
 - Grant spends follow `grant.ak` and the logic's `grant_spend_rule`
   exactly. Inspection computes the value
   spent from the exact account address minus the value paid back to it, per
-  asset class, with addresses compared as Plutus data.
+  asset class, with addresses compared as Plutus data. `valueDeltaOf`,
+  `addValueDeltas` and `negateValueDelta` compose such a net outflow from
+  values, by lower-case asset id and without zero entries.
   `findCustodyScopeViolations` checks a net outflow against a scope. Given
   the fee the account pays, or an estimate no lower than it, it reports that
   fee on each violation whose outflow is lovelace, so the outflow reads as
@@ -433,6 +457,73 @@ the chain: resolved inputs come from the caller.
   under the account policy. The inspector refuses
   each of them as `grant-spend-violation`, so a grant spend it accepts is one
   the logic accepts.
+- `allowContractCall` accepts a transaction that calls other contracts: spends
+  the script UTxOs they lock, mints under their policies, and attaches or
+  references their scripts. It is a contract call on the grant path when
+  `allowGrantSpend` is also set and every operated account is a grant spend,
+  and on the owner path, with or without `allowGrantSpend`, when every
+  operated account spends its control UTxO, which a device signs, and keeps
+  its control as it was: the control state written back unchanged, no grant
+  issued or swept, and no certificate or withdrawal on its stake credential. A
+  call moves value only, so an owner operation that calls beside such a change
+  is refused as `contract-call-with-state-change` for each account it changes;
+  the same change calling nothing is accepted. A creation, or an owner
+  operation beside a grant spend, never calls. On the grant path the call is
+  the one the logic's grant spend rule allows because it reads only output
+  addresses, the value leaving the account and the account's own tokens, and
+  an input at a key address stays refused (`grant-spend-foreign-input`), since
+  it needs another signer. On the owner path a key address input stays what it
+  is today, an external input that may pay the fee. The script inputs pay no
+  part of the fee: they stay among the external inputs (`externalInputs`), but
+  their addresses are not among the fee payers (`feeShares.payers`). Every
+  other transaction keeps refusing foreign script inputs, mints and scripts.
+  The caps fall by the net outflow, so a caller composes the value a call
+  supplies with `valueDeltaOf`, `addValueDeltas` and `negateValueDelta`. A
+  grant that lists recipients must list the called contract's address, and
+  because the logic reads no datum, a script recipient's datum decides where
+  funds go while only the caps bound the loss.
+- `contractPins` restricts an allowed call to pinned contracts. Each pin
+  (`contractPinOf`) names a script once; two pins for one script are refused
+  as `duplicate-contract-pin`. Every spent script input needs a pin with a
+  spend handler, and every foreign policy a pin with a mint handler, else
+  `unknown-contract`. Their redeemers must decode against the pin, and a
+  spent datum (inline, or the witness preimage of its hash) must decode
+  against the pin's datum schema, else `contract-data-mismatch`. A pin
+  without a datum schema leaves the datum unchecked, shown raw. An external
+  output paid to a script with a spend pin that gives a datum schema must
+  carry a datum that decodes, inline or as a hash whose preimage the witness
+  set carries; a bare datum hash, or no datum, is refused as
+  `contract-data-mismatch`. A pinned call that runs another contract also
+  needs `costModels`: the body's script data hash is recomputed from the
+  witness set's redeemers and datums and the language view of every
+  attached and resolved reference script, and must match. The cost models
+  come from the caller and need not be trusted, since a wrong one can only
+  make the hash fail to match. Without pins a call is accepted with its data
+  shown raw and its hash unchecked; the SDK's self-check uses that, a signer
+  passes pins. `contractCalls` reports each spend (input, script hash,
+  label, value, redeemer and datum), each mint (policy, label, assets and
+  redeemer) and the foreign reference inputs read, decoded
+  (`DecodedContractData`) where a pin applies and raw otherwise.
+- `bindScriptData` recomputes the script data hash of every transaction
+  whose body declares one, call or not, under `costModels` (else
+  `missing-cost-models`, `script-data-hash-mismatch`). A signer that sees
+  only the witness set the caller sends needs it: otherwise a caller could
+  resolve a Plutus script input as a key input, leave its redeemer and
+  script out, and add them back after signing. With the redeemers bound,
+  that input surfaces as `redeemer-on-key-input` or `foreign-script-input`.
+  A native-script input, or a key-address input the device signature alone
+  satisfies, carries no redeemer, so outside a chain-checked call it rests
+  on the caller's resolution, which a consent surface labels as reported by
+  the caller. A body that declares no hash can carry no redeemer on chain
+  and needs no cost models. A spend's value and datum and a reference
+  input's address, value and reference script rest on the caller's
+  resolutions, which nothing checks against the chain: an inline datum is the
+  caller's, and a witness preimage is bound only to the datum hash the caller
+  resolves. The called script, its pin and the schemas the data is decoded
+  against also rest on the caller's resolution of the spent input, which
+  nothing checks against the chain, so a consent surface that does not trust
+  its caller must resolve called inputs from the chain itself. The hosted
+  passkey signer does.
 - `compareRequestedGrantScope(requested, actual, chainId)` lists the fields
   where the scope an app declares differs from a grant the transaction
   issues. Recipients must be equal as an ordered list, on the account network
@@ -441,6 +532,47 @@ the chain: resolved inputs come from the caller.
   `parseCustodyRequestedGrantScope` carry a requested scope through the
   signer protocol; the parser accepts only canonical decimal strings,
   lower-case hex and canonical bech32 payment addresses.
+
+### Contract pins
+
+A pin tells a signer which other contract an account may call, so consent can
+name it and decode what it receives. A device signs an owner transaction that
+calls another contract only when the contract is pinned.
+
+- `CardanoContractPin` is a `label` to show, the validator's `scriptHash`, the
+  CIP-57 schemas of its handlers (`spend` with a redeemer and an optional
+  datum, `mint` with a redeemer) and the `definitions` those schemas reach.
+  Only the definitions reachable by `$ref` from the pinned handlers are kept,
+  so a pin stays small and carries no parameter types.
+- `contractPinOf(blueprint, request)` builds a pin from a CIP-57 blueprint.
+  `CardanoContractPinRequest` holds the `validator`, the `label` (not blank),
+  an optional `purpose` and an optional `scriptHash`.
+  - The validator is its blueprint title without the purpose suffix. A v1.1
+    blueprint titles a handler `<module>.<validator>.<purpose>`, and the pin
+    collects its spend and mint handlers, which must share one hash.
+    `purpose` then narrows the pin to one handler. A v1.0 blueprint titles
+    it `<module>.<function>` with no purpose, so `purpose` is required and
+    must agree with the blueprint: a spend validator has a datum, a mint
+    policy has none.
+  - The script hash is required for a parameterised validator, whose hash
+    depends on parameters only the caller applied, and for one the blueprint
+    gives no hash. Otherwise it is the blueprint's, and a given `scriptHash`
+    must equal it.
+- Contract data is decoded against a schema into a labelled tree
+  (`DecodedContractData`): constructors with their alternative title and
+  field names, integers, bytes, lists, tuples, maps, `anyOf` and `$ref`. A
+  schema holding only a title, description or comment is opaque and accepts
+  any data, which stays raw. Any other keyword or data type is refused rather
+  than ignored, so data a schema forbids is never shown as matching it. A
+  mismatch is a `contract-data-mismatch` that names the path where the data
+  parted from the schema, and what was expected there.
+- `contractPinOf` refuses with `malformed-blueprint` (with the offending
+  field), `unknown-validator`, `missing-purpose`, `mismatched-purpose`,
+  `missing-script-hash`, `mismatched-script-hash`, `invalid-script-hash` or
+  `empty-label`.
+- A pin comes from the signer's own build or, for the SDK's local signer,
+  from the app, never from a sign request. `contractPins` under
+  Transaction analysis restricts a call to pinned contracts.
 
 ### Fee sponsor policy
 
@@ -471,22 +603,35 @@ rule, in the service's check order, each with the service's `rule` name
   referenced.
 - Every control UTxO the transaction spends or references, and every control
   output it writes, must name a known logic (`known_logic`).
-- Scripts: inputs and mints may run the proxy only; certificates and votes
-  may name the proxy or an account's stake script; withdrawals and attached
-  scripts may also name a logic a control datum names. A withdrawal map
-  that names a reward account twice is refused, and so is a logic run that
-  draws lovelace (`logic-draw`): the service runs a logic on a withdrawal of
-  zero only.
+- Scripts: in fee mode inputs and mints may run the proxy only, and
+  attached scripts may be the proxy, an account's stake script or a logic a
+  control datum names. Certificates and votes may name the proxy or an
+  account's stake script, and withdrawals may also name a logic a control
+  datum names, in either mode. A withdrawal map that names a reward account
+  twice is refused, and so is a logic run that draws lovelace
+  (`logic-draw`): the service runs a logic on a withdrawal of zero only.
+  Native scripts are refused.
+- Contract calls: in collateral mode an operation may call other PlutusV3
+  contracts. It may spend their UTxOs, mint under their policies and attach
+  or reference their scripts. There is no switch for it: the service
+  evaluates every script before it lends collateral, so a failing call never
+  gets collateral. A script of any other Plutus language is refused
+  (`non-v3-script`), and so is a native script attached or carried as a
+  reference script (`native-script`). What a call mints counts as supply and
+  what it burns as demand, so minted tokens paid out are covered
+  (`no_sponsor_value_elsewhere`). Sponsor inputs and payments to the sponsor
+  stay refused.
 - The script data hash is recomputed from the witness set's redeemers and
   datums and the language views of every attached script and every
   reference script on an input or reference input, a superset of what the
-  ledger counts. Lace attaches and references PlutusV3 scripts only, so both
-  agree.
+  ledger counts. Every script a transaction attaches or references must be
+  PlutusV3, a called contract's included, so both agree.
 - Lace's own checks sit beside the service's: the shared collateral rule
   also refuses a fee the collateral cannot cover at the collateral
   percentage (`fee-exceeds-collateral`), and the script rule also refuses a
-  reference input that carries a script, unless it is a parked script's UTxO
-  on the network carrying exactly that script (`foreign-reference-script`).
+  parked script's UTxO on the network that does not carry exactly its
+  script and, in fee mode, any other reference input that carries a script
+  (`foreign-reference-script`).
 
 Builders run it before they ask the sponsor for a witness to catch defects
 early. It is not a second policy engine: it does not evaluate scripts, it
@@ -513,16 +658,23 @@ does not guarantee that the service will sign.
   chain. It refuses a spend redeemer on an input that no script locks, an
   account proxy witness that nothing needs, a known logic attached without
   a run, a parked script's output reference resolved to another script,
-  and any other reference input that carries a script. A resolution that
-  places a fund input at another script address can still hide it, since
-  inspection does not check which script an input outside the account
-  needs.
+  and any other reference input that carries a script, unless the
+  transaction is an allowed contract call. A resolution that places a fund input
+  at another script address can still hide it, since inspection does not
+  check which script an input outside the account needs, and it does not
+  check that the contents the caller resolves for a called contract's UTxOs
+  are the chain's: the ledger enforces the real ones.
 - Witness-set redeemers are bound to a signature only through the script
-  data hash, which inspection does not recompute. The report reads each
-  account input's spend redeemer from them. Another redeemer set under the
-  same body cannot change what the body does: it can only run a script
-  branch that the device's signature does not authorise. A redeemer list
-  that names one pointer twice is refused.
+  data hash. The report reads each account input's spend redeemer from
+  them. Without `bindScriptData` or a pinned call inspection does not
+  recompute the hash: another redeemer set under the same body cannot change
+  what the body does, it can only run a script branch that the device's
+  signature does not authorise. A redeemer list that names one pointer twice
+  is refused. Otherwise the redeemers and witness datums, which
+  `contractCalls` decodes for consent, are bound by the recomputed hash. The
+  datums of the called contract's UTxOs rest on the caller's resolutions, so
+  they are what the chain holds only where the caller resolves them
+  truthfully.
 - Body-only detection sees every custody spend the contract accepts,
   because each one pays an account token back to the account: an owner
   operation recreates the control UTxO, a grant spend its grant UTxO, and a
@@ -534,6 +686,13 @@ does not guarantee that the service will sign.
 - Lace accepts logic version 1 only, and refuses a change of logic: a device
   may install any registered logic on chain, so an account that names
   another logic is reported `unknown-logic` and never operated.
+- A local devnet runs an account only once the app registers it with
+  `registerCustomCardanoNetwork`, and only with the blueprint this library
+  pins. It always counts as a testnet and shares the testnet device keys
+  and `addr_test` addresses. No parked scripts are known there, so every
+  transaction attaches its scripts. The hosted signer never registers one
+  and refuses it. The logic's reward credential must be registered on the
+  devnet, and the devnet needs its own fee sponsor.
 
 ## Re-pinning the blueprint
 
@@ -561,8 +720,9 @@ does not guarantee that the service will sign.
    Aiken CLI vectors, which the tests must pin for the new build.
 
 To re-pin the fee sponsor, port its rule changes into
-`src/analysis/sponsor-rules.ts`, name the new revision in that file's header
-and in the fee sponsor link above, and copy its refusal details again into
+`src/analysis/sponsor-rules.ts` and `src/analysis/script-data-hash.ts`, name
+the new revision in those files' headers and in the fee sponsor link above,
+and copy its refusal details again into
 `apps/lace-sdk/test/custody/sponsor-detail-catalogue.ts`, so the SDK's tests
 check how it reads typed errors out of them.
 

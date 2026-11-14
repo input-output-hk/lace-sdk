@@ -37,6 +37,10 @@ export {
 } from './filter-franken-utxos';
 export * from './cardano-observables';
 export * from './contract';
+export {
+  registerCustomCardanoNetwork,
+  type CustomCardanoNetwork,
+} from './custom-networks';
 export * from './promoted-targets';
 export * from './reward-timing';
 export * from './value-objects';

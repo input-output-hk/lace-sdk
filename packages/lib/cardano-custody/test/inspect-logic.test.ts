@@ -13,7 +13,17 @@ import { diffCustodyStates } from '../src/analysis/state-change';
 import {
   account,
   buildTransaction,
+  CONTRACT_ADDRESS,
+  CONTRACT_DATA,
+  CONTRACT_HASH,
+  CONTRACT_SCRIPT,
+  CONTRACT_TOKEN,
+  contractCall,
+  contractOrder,
+  contractPin,
+  contractScriptCarrier,
   controlOutput,
+  COST_MODELS,
   creation,
   device,
   deviceRewrite,
@@ -27,6 +37,7 @@ import {
   LOGIC,
   LOGIC_REWARD_ACCOUNT,
   logicRun,
+  ownerContractCall,
   PARKED_LOGIC,
   PARKED_PROXY,
   PARKED_SCRIPTS,
@@ -60,7 +71,12 @@ import {
   transition,
 } from './inspect-helpers';
 
-import type { CustodyAccountState } from '../src';
+import type {
+  CardanoContractPin,
+  CustodyAccountState,
+  CustodyContractDatum,
+  CustodyContractLocation,
+} from '../src';
 import type { TransactionShape } from './custody-transactions';
 import type { CustodyInspectionOptions } from '../src/analysis/inspect';
 
@@ -770,6 +786,44 @@ describe('inspectCustodyTransaction on revision 3', () => {
       ]);
     });
 
+    it('refuses another script on an owner operation unless contract calls are allowed', () => {
+      expect(
+        reasonsOf(
+          inspect(
+            {
+              ...rewrite,
+              referenceInputs: [...PARKED_SCRIPTS, contractScriptCarrier],
+              mint: new Map([[CONTRACT_TOKEN, 1n]]),
+            },
+            { allowGrantSpend: true },
+          ),
+        ),
+      ).toEqual([
+        'custody-unsupported-operation/foreign-mint',
+        'custody-unsupported-operation/foreign-reference-script',
+      ]);
+    });
+
+    it('refuses a parked output reference resolved with the called script on a contract call', () => {
+      const shape = contractCall({ grant: lovelaceGrant });
+      const [input, output] = PARKED_PROXY;
+      expect(
+        reasonsOf(
+          inspect(
+            {
+              ...shape,
+              referenceInputs: shape.referenceInputs!.map(reference =>
+                reference === PARKED_PROXY
+                  ? [input, { ...output, scriptReference: CONTRACT_SCRIPT }]
+                  : reference,
+              ),
+            },
+            { ...GRANT_SPEND, allowContractCall: true },
+          ),
+        ),
+      ).toEqual(['custody-context-mismatch/reference-script-mismatch']);
+    });
+
     it('refuses the parked scripts on a network that pins none there', () => {
       expect(
         reasonsOf(
@@ -873,5 +927,677 @@ describe('inspectCustodyTransaction on revision 3', () => {
         ),
       ),
     ).toEqual(['custody-unsupported-operation/grant-spend']);
+  });
+
+  describe('calls other contracts from an owner operation', () => {
+    const CALL = { allowContractCall: true } as const;
+    const pinned = (...contractPins: CardanoContractPin[]) => ({
+      ...CALL,
+      contractPins,
+      costModels: COST_MODELS,
+    });
+    const BYTES = { title: 'Key', dataType: 'bytes' } as const;
+    const INTEGER = { dataType: 'integer' } as const;
+    const DECODED_DATA = {
+      kind: 'decoded',
+      value: { kind: 'integer', value: CONTRACT_DATA },
+    } as const;
+    const RAW_DATA = { kind: 'raw', data: CONTRACT_DATA } as const;
+    const orderInput = { txId: contractOrder[0].txId, index: 0 };
+    const DATUM_HASH: Cardano.DatumHash =
+      Serialization.PlutusData.fromCore(CONTRACT_DATA).hash();
+    const { mint: _mint, ...spendPin } = contractPin();
+    const { spend: _spend, ...mintPin } = contractPin();
+
+    /** The owner call with the order UTxO carrying its datum by hash. */
+    const hashedOrderCall = (
+      datums?: readonly Cardano.PlutusData[],
+    ): TransactionShape => {
+      const shape = ownerContractCall();
+      const [input, { datum: _datum, ...output }] = contractOrder;
+      const order: Cardano.Utxo = [input, { ...output, datumHash: DATUM_HASH }];
+      return {
+        ...shape,
+        inputs: shape.inputs.map(spent =>
+          spent === contractOrder ? order : spent,
+        ),
+        spendRedeemers: shape.spendRedeemers!.map(redeemer =>
+          redeemer.utxo === contractOrder
+            ? { ...redeemer, utxo: order }
+            : redeemer,
+        ),
+        ...(datums ? { datums } : {}),
+      };
+    };
+
+    /** The owner call with its output to the contract carrying `datum` inline. */
+    const withContractDatum = (datum: Cardano.PlutusData): TransactionShape => {
+      const shape = ownerContractCall();
+      return {
+        ...shape,
+        outputs: shape.outputs.map((output, index) =>
+          index === 1 ? { ...output, datum } : output,
+        ),
+      };
+    };
+
+    it('refuses the call unless contract calls are allowed', () => {
+      expect(reasonsOf(inspect(ownerContractCall()))).toEqual([
+        'custody-unsupported-operation/foreign-mint',
+        'custody-unsupported-operation/foreign-reference-script',
+        'custody-unsupported-operation/foreign-script-input',
+      ]);
+    });
+
+    it('refuses a foreign Plutus script attached to an owner operation', () => {
+      expect(
+        refusalsOf(
+          inspect({
+            ...deviceRewrite(grantedState, grantedState),
+            scripts: [CONTRACT_SCRIPT],
+          }),
+        ),
+      ).toEqual([
+        {
+          code: 'custody-unsupported-operation',
+          reason: 'foreign-attached-script',
+          scriptHash: CONTRACT_HASH,
+        },
+      ]);
+    });
+
+    it('reads a call without pins, its data raw', () => {
+      const inspection = accepted(inspect(ownerContractCall(), CALL));
+      expect(onlyAccount(inspection).operations).toEqual([
+        { kind: 'owner-spend' },
+      ]);
+      expect(inspection.contractCalls).toEqual({
+        spends: [
+          {
+            input: orderInput,
+            scriptHash: CONTRACT_HASH,
+            value: { coins: 5_000_000n },
+            redeemer: RAW_DATA,
+            datum: RAW_DATA,
+          },
+        ],
+        mints: [
+          {
+            policyId: CONTRACT_HASH,
+            assets: new Map([[CONTRACT_TOKEN, 1n]]),
+            redeemer: RAW_DATA,
+          },
+        ],
+        referenceInputs: [
+          {
+            input: { txId: contractScriptCarrier[0].txId, index: 0 },
+            address: CONTRACT_ADDRESS,
+            value: { coins: 10_000_000n },
+            referenceScriptHash: CONTRACT_HASH,
+          },
+        ],
+      });
+      expect(inspection.externalOutputs[0]).toEqual(
+        expect.objectContaining({ outputIndex: 1, datum: RAW_DATA }),
+      );
+    });
+
+    it('accepts a call that attaches the script it runs', () => {
+      expect(
+        accepted(
+          inspect(
+            {
+              ...ownerContractCall(),
+              referenceInputs: PARKED_SCRIPTS,
+              scripts: [CONTRACT_SCRIPT],
+            },
+            CALL,
+          ),
+        ).contractCalls?.referenceInputs,
+      ).toEqual([]);
+    });
+
+    it('reports no contract calls on an owner operation that makes none', () => {
+      expect(accepted(inspect(ownerSpend(), CALL)).contractCalls).toEqual({
+        spends: [],
+        mints: [],
+        referenceInputs: [],
+      });
+      expect(accepted(inspect(ownerSpend())).contractCalls).toBeUndefined();
+    });
+
+    it('never lets a creation call a contract', () => {
+      const shape = creation(initialState);
+      expect(
+        reasonsOf(
+          inspect(
+            {
+              ...shape,
+              mint: new Map([...shape.mint!, [CONTRACT_TOKEN, 1n]]),
+            },
+            CALL,
+          ),
+        ),
+      ).toContain('custody-unsupported-operation/foreign-mint');
+    });
+
+    it('reads a pinned call with its labels and decoded data', () => {
+      const inspection = accepted(
+        inspect(ownerContractCall(), pinned(contractPin())),
+      );
+      expect(inspection.contractCalls?.spends).toEqual([
+        expect.objectContaining({
+          input: orderInput,
+          label: 'Order book',
+          redeemer: DECODED_DATA,
+          datum: DECODED_DATA,
+        }),
+      ]);
+      expect(inspection.contractCalls?.mints).toEqual([
+        expect.objectContaining({
+          policyId: CONTRACT_HASH,
+          label: 'Order book',
+          redeemer: DECODED_DATA,
+        }),
+      ]);
+      expect(inspection.externalOutputs).toEqual([
+        expect.objectContaining({
+          outputIndex: 1,
+          label: 'Order book',
+          datum: DECODED_DATA,
+        }),
+      ]);
+    });
+
+    it.each<[string, CardanoContractPin[], CustodyContractLocation[]]>([
+      [
+        'no pin',
+        [],
+        [
+          { kind: 'input', input: orderInput },
+          { kind: 'mint', policyId: Cardano.PolicyId(CONTRACT_HASH) },
+        ],
+      ],
+      [
+        'a pin without a mint handler',
+        [spendPin],
+        [{ kind: 'mint', policyId: Cardano.PolicyId(CONTRACT_HASH) }],
+      ],
+      [
+        'a pin without a spend handler',
+        [mintPin],
+        [{ kind: 'input', input: orderInput }],
+      ],
+    ])('refuses a call to a script with %s', (_, pins, locations) => {
+      expect(refusalsOf(inspect(ownerContractCall(), pinned(...pins)))).toEqual(
+        locations.map(location => ({
+          code: 'custody-unsupported-operation',
+          reason: 'unknown-contract',
+          location,
+          scriptHash: CONTRACT_HASH,
+        })),
+      );
+    });
+
+    it('refuses an unpinned script beside a pinned one', () => {
+      expect(
+        reasonsOf(
+          inspect(
+            ownerContractCall(),
+            pinned(
+              contractPin({ scriptHash: Hash28ByteBase16('fa'.repeat(28)) }),
+            ),
+          ),
+        ),
+      ).toEqual([
+        'custody-unsupported-operation/unknown-contract',
+        'custody-unsupported-operation/unknown-contract',
+      ]);
+    });
+
+    it.each<{
+      name: string;
+      pin: CardanoContractPin;
+      location: CustodyContractLocation;
+      data: 'datum' | 'redeemer';
+    }>([
+      {
+        name: 'a spend redeemer',
+        pin: contractPin({ spend: { redeemer: BYTES, datum: INTEGER } }),
+        location: { kind: 'input', input: orderInput },
+        data: 'redeemer',
+      },
+      {
+        name: 'a spent datum',
+        pin: contractPin({ spend: { redeemer: INTEGER, datum: BYTES } }),
+        location: { kind: 'input', input: orderInput },
+        data: 'datum',
+      },
+      {
+        name: 'a mint redeemer',
+        pin: contractPin({ mint: { redeemer: BYTES } }),
+        location: { kind: 'mint', policyId: Cardano.PolicyId(CONTRACT_HASH) },
+        data: 'redeemer',
+      },
+    ])(
+      'refuses $name that does not decode against the pin',
+      ({ pin, location, data }) => {
+        expect(
+          refusalsOf(inspect(ownerContractCall(), pinned(pin))),
+        ).toContainEqual({
+          code: 'custody-unsupported-operation',
+          reason: 'contract-data-mismatch',
+          location,
+          scriptHash: CONTRACT_HASH,
+          data,
+          path: '',
+          expected: 'Key as bytes',
+        });
+      },
+    );
+
+    it('refuses an output datum that does not decode against the pin', () => {
+      expect(
+        refusalsOf(
+          inspect(
+            withContractDatum(new Uint8Array([0xaa])),
+            pinned(contractPin()),
+          ),
+        ),
+      ).toEqual([
+        {
+          code: 'custody-unsupported-operation',
+          reason: 'contract-data-mismatch',
+          location: { kind: 'output', index: 1 },
+          scriptHash: CONTRACT_HASH,
+          data: 'datum',
+          path: '',
+          expected: expect.any(String) as string,
+        },
+      ]);
+    });
+
+    it('decodes a spent datum from the preimage the witness set carries', () => {
+      expect(
+        accepted(
+          inspect(hashedOrderCall([CONTRACT_DATA]), pinned(contractPin())),
+        ).contractCalls?.spends[0].datum,
+      ).toEqual(DECODED_DATA);
+    });
+
+    it('refuses a spent datum hash without its preimage when the pin has a datum schema', () => {
+      expect(
+        refusalsOf(inspect(hashedOrderCall(), pinned(contractPin()))),
+      ).toEqual([
+        {
+          code: 'custody-unsupported-operation',
+          reason: 'contract-data-mismatch',
+          location: { kind: 'input', input: orderInput },
+          scriptHash: CONTRACT_HASH,
+          data: 'datum',
+          path: '',
+          expected: 'a datum',
+        },
+      ]);
+    });
+
+    it('shows a spent datum unchecked when the pin has no datum schema', () => {
+      const pin = contractPin({ spend: { redeemer: INTEGER } });
+      expect(
+        accepted(inspect(hashedOrderCall(), pinned(pin))).contractCalls
+          ?.spends[0].datum,
+      ).toEqual({ kind: 'hash', hash: DATUM_HASH });
+      expect(
+        accepted(inspect(ownerContractCall(), pinned(pin))).contractCalls
+          ?.spends[0].datum,
+      ).toEqual(RAW_DATA);
+    });
+
+    it('refuses pins that name one script twice', () => {
+      expect(
+        refusalsOf(
+          inspect(ownerContractCall(), pinned(contractPin(), contractPin())),
+        ),
+      ).toEqual([
+        {
+          code: 'custody-context-mismatch',
+          reason: 'duplicate-contract-pin',
+          scriptHash: CONTRACT_HASH,
+        },
+      ]);
+    });
+
+    it.each<[string, Partial<Cardano.TxOut>, CustodyContractDatum]>([
+      ['an inline datum raw', { datum: CONTRACT_DATA }, RAW_DATA],
+      [
+        'a datum hash as its hash',
+        { datumHash: DATUM_HASH },
+        { kind: 'hash', hash: DATUM_HASH },
+      ],
+    ])('shows %s on an output to a key address', (_, datum, expected) => {
+      const shape = ownerSpend();
+      const inspection = accepted(
+        inspect(
+          {
+            ...shape,
+            outputs: shape.outputs.map((output, index) =>
+              index === 1 ? { ...output, ...datum } : output,
+            ),
+          },
+          pinned(contractPin()),
+        ),
+      );
+      expect(inspection.externalOutputs[0]).toEqual({
+        outputIndex: 1,
+        address: STRANGER_ADDRESS,
+        value: { coins: 3_000_000n },
+        datum: expected,
+      });
+    });
+
+    /** The owner call with its output to the contract carrying `datum` in place of its inline datum. */
+    const withContractOutputDatum = (
+      datum: Partial<Cardano.TxOut>,
+      datums?: readonly Cardano.PlutusData[],
+    ): TransactionShape => {
+      const shape = ownerContractCall();
+      return {
+        ...shape,
+        outputs: shape.outputs.map((output, index) => {
+          if (index !== 1) return output;
+          const { datum: _datum, ...rest } = output;
+          return { ...rest, ...datum };
+        }),
+        ...(datums ? { datums } : {}),
+      };
+    };
+
+    const NO_OUTPUT_DATUM = {
+      code: 'custody-unsupported-operation',
+      reason: 'contract-data-mismatch',
+      location: { kind: 'output', index: 1 },
+      scriptHash: CONTRACT_HASH,
+      data: 'datum',
+      path: '',
+      expected: 'a datum',
+    } as const;
+
+    it('refuses an output to a pinned contract that carries only a datum hash', () => {
+      expect(
+        refusalsOf(
+          inspect(
+            withContractOutputDatum({ datumHash: DATUM_HASH }),
+            pinned(contractPin()),
+          ),
+        ),
+      ).toEqual([NO_OUTPUT_DATUM]);
+    });
+
+    it('decodes an output datum hash from the preimage the witness set carries', () => {
+      expect(
+        accepted(
+          inspect(
+            withContractOutputDatum({ datumHash: DATUM_HASH }, [CONTRACT_DATA]),
+            pinned(contractPin()),
+          ),
+        ).externalOutputs[0].datum,
+      ).toEqual(DECODED_DATA);
+    });
+
+    it('refuses an output to a pinned contract that carries no datum', () => {
+      expect(
+        refusalsOf(inspect(withContractOutputDatum({}), pinned(contractPin()))),
+      ).toEqual([NO_OUTPUT_DATUM]);
+    });
+
+    describe('binds the data consent shows to the body', () => {
+      const declared = buildTransaction(ownerContractCall())
+        .transaction.body()
+        .toCore().scriptIntegrityHash;
+
+      /** The owner call with other witness data under the body's original script data hash. */
+      const reWitnessed = (
+        changes: Partial<TransactionShape>,
+      ): TransactionShape => ({
+        ...ownerContractCall(),
+        costModels: undefined,
+        body: { scriptIntegrityHash: declared },
+        ...changes,
+      });
+
+      it('accepts a pinned call whose body commits to its script data', () => {
+        expect(declared).toBeDefined();
+        expect(
+          accepted(inspect(ownerContractCall(), pinned(contractPin())))
+            .contractCalls?.spends,
+        ).toHaveLength(1);
+      });
+
+      it.each<[string, Partial<TransactionShape>]>([
+        [
+          'spend',
+          {
+            spendRedeemers: ownerContractCall().spendRedeemers!.map(redeemer =>
+              redeemer.utxo === contractOrder
+                ? { ...redeemer, data: 43n }
+                : redeemer,
+            ),
+          },
+        ],
+        ['mint', { mintRedeemer: 43n }],
+      ])(
+        'refuses a swapped %s redeemer under the original hash',
+        (_, changes) => {
+          expect(
+            refusalsOf(inspect(reWitnessed(changes), pinned(contractPin()))),
+          ).toEqual([
+            {
+              code: 'custody-unsupported-operation',
+              reason: 'script-data-hash-mismatch',
+              declared,
+              computed: expect.any(String) as string,
+            },
+          ]);
+        },
+      );
+
+      it('refuses a pinned call whose body commits to no script data', () => {
+        expect(
+          reasonsOf(
+            inspect(
+              { ...ownerContractCall(), costModels: undefined },
+              pinned(contractPin()),
+            ),
+          ),
+        ).toEqual(['custody-unsupported-operation/missing-script-data-hash']);
+      });
+
+      it('refuses a pinned call without cost models', () => {
+        expect(
+          refusalsOf(
+            inspect(ownerContractCall(), {
+              ...pinned(contractPin()),
+              costModels: undefined,
+            }),
+          ),
+        ).toEqual([
+          {
+            code: 'custody-unsupported-operation',
+            reason: 'missing-cost-models',
+          },
+        ]);
+      });
+
+      it('refuses a pinned call without the cost model of a language it carries', () => {
+        expect(
+          refusalsOf(
+            inspect(ownerContractCall(), {
+              ...pinned(contractPin()),
+              costModels: new Map(),
+            }),
+          ),
+        ).toEqual([
+          {
+            code: 'custody-unsupported-operation',
+            reason: 'missing-cost-model',
+            language: Cardano.PlutusLanguageVersion.V3,
+          },
+        ]);
+      });
+
+      it('needs no cost models for an owner operation that calls nothing', () => {
+        expect(
+          accepted(
+            inspect(ownerSpend(), {
+              ...pinned(contractPin()),
+              costModels: undefined,
+            }),
+          ).contractCalls,
+        ).toEqual({ spends: [], mints: [], referenceInputs: [] });
+      });
+
+      it('leaves the hash of a call without pins unchecked', () => {
+        expect(
+          accepted(
+            inspect({ ...ownerContractCall(), costModels: undefined }, CALL),
+          ).contractCalls,
+        ).toBeDefined();
+      });
+    });
+
+    describe('keeps the control of an account that calls', () => {
+      const added = transition(
+        addCustodyDevice(grantedState, OTHER_DEVICE_KEY, fixtureGrants),
+      );
+      const STATE_CHANGE = [
+        {
+          code: 'custody-unsupported-operation',
+          reason: 'contract-call-with-state-change',
+          account,
+        },
+      ];
+
+      /** The call of `ownerContractCall` riding on another owner operation. */
+      const callingOn = (shape: TransactionShape): TransactionShape => {
+        const [, contractOutput] = ownerContractCall().outputs;
+        return {
+          ...shape,
+          inputs: [...shape.inputs, contractOrder],
+          spendRedeemers: [
+            ...shape.spendRedeemers!,
+            { utxo: contractOrder, data: CONTRACT_DATA },
+          ],
+          referenceInputs: [
+            ...(shape.referenceInputs ?? []),
+            contractScriptCarrier,
+          ],
+          outputs: [
+            ...shape.outputs,
+            { ...contractOutput, value: { coins: 5_000_000n } },
+          ],
+        };
+      };
+
+      it('refuses a call beside an added device', () => {
+        const shape = ownerContractCall();
+        expect(
+          refusalsOf(
+            inspect(
+              {
+                ...shape,
+                outputs: [controlOutput(added), ...shape.outputs.slice(1)],
+              },
+              CALL,
+            ),
+          ),
+        ).toEqual(STATE_CHANGE);
+      });
+
+      it('refuses a call beside an issued grant', () => {
+        expect(
+          refusalsOf(
+            inspect(
+              callingOn(grantIssue(grantedState, [grantOf({ slot: 3n })])),
+              CALL,
+            ),
+          ),
+        ).toEqual(STATE_CHANGE);
+      });
+
+      it('refuses an added device that reads a plain foreign reference input', () => {
+        const rewrite = deviceRewrite(grantedState, added);
+        const plain = utxo(0xf3, payout(20_000_000n, SPONSOR_ADDRESS));
+        expect(
+          refusalsOf(
+            inspect(
+              {
+                ...rewrite,
+                referenceInputs: [...(rewrite.referenceInputs ?? []), plain],
+              },
+              CALL,
+            ),
+          ),
+        ).toEqual(STATE_CHANGE);
+      });
+
+      it('accepts an added device that calls nothing when calls are allowed', () => {
+        expect(
+          onlyAccount(
+            accepted(inspect(deviceRewrite(grantedState, added), CALL)),
+          ).operations,
+        ).toEqual([{ kind: 'add-device', device: OTHER_DEVICE_KEY }]);
+      });
+    });
+  });
+});
+
+describe('bindScriptData', () => {
+  const BIND = { bindScriptData: true, costModels: COST_MODELS } as const;
+  const hashed = (): TransactionShape => ({
+    ...ownerSpend(),
+    costModels: COST_MODELS,
+  });
+  const declared = buildTransaction(hashed())
+    .transaction.body()
+    .toCore().scriptIntegrityHash;
+
+  /** The owner spend with one more witness datum under the body's original script data hash. */
+  const reWitnessed = (): TransactionShape => ({
+    ...ownerSpend(),
+    datums: [42n],
+    body: { scriptIntegrityHash: declared },
+  });
+
+  it('accepts an owner operation whose body binds its witness set', () => {
+    expect(declared).toBeDefined();
+    expect(accepted(inspect(hashed(), BIND)).accounts).toHaveLength(1);
+  });
+
+  it('refuses other witness data under the original hash of an operation that calls nothing', () => {
+    expect(refusalsOf(inspect(reWitnessed(), BIND))).toEqual([
+      {
+        code: 'custody-unsupported-operation',
+        reason: 'script-data-hash-mismatch',
+        declared,
+        computed: expect.any(String) as string,
+      },
+    ]);
+  });
+
+  it('refuses a body that declares a hash without cost models', () => {
+    expect(
+      reasonsOf(inspect(hashed(), { ...BIND, costModels: undefined })),
+    ).toEqual(['custody-unsupported-operation/missing-cost-models']);
+  });
+
+  it('needs no cost models for a body that declares no hash', () => {
+    expect(
+      accepted(inspect(ownerSpend(), { ...BIND, costModels: undefined }))
+        .accounts,
+    ).toHaveLength(1);
+  });
+
+  it('leaves the hash of an operation that calls nothing unchecked without it', () => {
+    expect(accepted(inspect(reWitnessed())).accounts).toHaveLength(1);
   });
 });

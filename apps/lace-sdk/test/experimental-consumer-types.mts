@@ -14,6 +14,7 @@ import {
   CardanoCustodyAgentPolicyInvalidError,
   CardanoCustodyAgentWitnessError,
   CardanoCustodyAlreadyRegisteredError,
+  CardanoCustodyContractPinInvalidError,
   CardanoCustodyDataSignatureError,
   CardanoCustodyFundContentionError,
   CardanoCustodyLogicNotRegisteredError,
@@ -28,6 +29,7 @@ import {
   CardanoCustodySponsorError,
   CardanoCustodyStaleGrantError,
   CardanoCustodyUnsupportedSignerError,
+  cardanoCustodyContractPinOf,
   createCardanoCustodyAccount,
   createCardanoCustodyAccountEntity,
   createCardanoCustodySponsorClient,
@@ -57,6 +59,7 @@ import {
   parseCardanoCustodyEnrollment,
   readCardanoCustodyControlDevices,
   readCardanoCustodyUnsettledOperations,
+  registerCustomCardanoNetwork,
   recoverCardanoCustodyAccounts,
   requestCardanoCustodyDeviceKey,
   Serialization,
@@ -72,6 +75,9 @@ import {
   type CardanoCustodyAgentPolicy,
   type CardanoCustodyAgentPolicyGrant,
   type CardanoCustodyAgentWitness,
+  type CardanoCustodyContractPin,
+  type CustomCardanoNetwork,
+  type CardanoCustodyContractPinInvalidReason,
   type CardanoCustodyControlDevices,
   type CardanoCustodyDataPurpose,
   type CardanoCustodyDataSignature,
@@ -248,10 +254,35 @@ const enrollment: CardanoCustodyEnrollment = parseCardanoCustodyEnrollment(
 );
 const deviceSigner: CardanoCustodyDeviceSigner =
   createRemoteCardanoCustodyDeviceSigner(hostedSigner);
+declare const orderBookBlueprint: unknown;
+declare const orderUtxo: Cardano.Utxo;
+declare const fill: Cardano.PlutusData;
+const orderBookPin: CardanoCustodyContractPin = cardanoCustodyContractPinOf(
+  orderBookBlueprint,
+  {
+    validator: 'order_book.order_book',
+    label: 'Order book',
+  },
+);
+const contractPins: CardanoCustodyContractPin[] = [orderBookPin];
+
+const localDevnet: CustomCardanoNetwork = {
+  networkMagic: 42,
+  slotConfig: { slotLength: 1000, zeroSlot: 0, zeroTime: 1_791_331_200_000 },
+};
+registerCustomCardanoNetwork(localDevnet);
+const pinRefusal = (
+  error: unknown,
+): CardanoCustodyContractPinInvalidReason | undefined =>
+  error instanceof CardanoCustodyContractPinInvalidError
+    ? error.reason
+    : undefined;
+void pinRefusal;
 const localDeviceSigner: CardanoCustodyDeviceSigner =
   createLocalCardanoCustodyDeviceSigner({
     keySource: cardanoKeySource,
     origin: 'https://wallet.example',
+    contractPins,
   });
 const creation: Result<CardanoCustodyAccountCreation, Error> =
   await createCardanoCustodyAccount(custodyWallet, {
@@ -373,6 +404,12 @@ if (creation.isOk()) {
     slots: [agentGrant.slot],
   };
   void sweep;
+  const call: CardanoCustodyOperation = {
+    type: 'owner-spend',
+    outputs: [],
+    contract: { inputs: [{ utxo: orderUtxo, redeemer: fill }] },
+  };
+  void call;
   if (spend.isOk()) {
     const agentWitness: CardanoCustodyAgentWitness = {
       vkey: 'ab'.repeat(32),

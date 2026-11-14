@@ -11,6 +11,10 @@ import {
 
 import {
   buildTransaction,
+  CONTRACT_ADDRESS,
+  CONTRACT_DATA,
+  contractCall,
+  contractOrder,
   controlOutput,
   device,
   DEVICE_ADDRESS,
@@ -23,6 +27,7 @@ import {
   identity,
   inspectionOptions,
   otherIdentity,
+  ownerContractCall,
   payout,
   SPONSOR_ADDRESS,
   sponsorFee,
@@ -113,6 +118,28 @@ const accountPaid = (
       fundOutput(20_000_000n - FEE - paid),
     ],
     ...changes,
+  };
+};
+
+/**
+ * An owner operation in collateral mode that also spends a contract's
+ * order UTxO and pays its lovelace back to the contract, less 100,000
+ * lovelace that pays half the fee.
+ */
+const scriptInputPaid = (): TransactionShape => {
+  const shape = accountPaid(grantedState);
+  return {
+    ...shape,
+    inputs: [...shape.inputs, contractOrder],
+    spendRedeemers: [
+      ...shape.spendRedeemers!,
+      { utxo: contractOrder, data: CONTRACT_DATA },
+    ],
+    outputs: [
+      shape.outputs[0],
+      fundOutput(19_900_000n),
+      payout(4_900_000n, CONTRACT_ADDRESS),
+    ],
   };
 };
 
@@ -291,6 +318,59 @@ describe('fee shares and owner spends', () => {
       externalShare: 0n,
       accountShare: FEE,
     });
+  });
+
+  it('makes no payer of a contract a grant spend calls, whatever it puts in', () => {
+    const inspection = inspect(
+      contractCall({
+        grant: fixtureGrants[0],
+        fromContract: 3_000_000n,
+        orderLovelace: 100_000_000n,
+      }),
+      {
+        allowGrantSpend: true,
+        allowContractCall: true,
+        deviceKeyHash: undefined,
+      },
+    );
+    expect(inspection.externalInputs.map(({ address }) => address)).toEqual([
+      CONTRACT_ADDRESS,
+    ]);
+    expect(inspection.feeShares).toEqual(ACCOUNT_PAYS_ALL);
+  });
+
+  it('refuses a script input on the owner path unless contract calls are allowed', () => {
+    const shape = scriptInputPaid();
+    const { transaction, resolvedInputs } = buildTransaction(shape);
+    const result = inspectCustodyTransaction(
+      transaction,
+      resolvedInputs,
+      inspectionOptions(),
+    );
+    expect(result.ok ? [] : result.error.refusals).toEqual([
+      {
+        code: 'custody-unsupported-operation',
+        reason: 'foreign-script-input',
+        input: { txId: contractOrder[0].txId, index: 0 },
+      },
+    ]);
+  });
+
+  it('makes no payer of a contract an owner spend calls, whatever it puts in', () => {
+    const inspection = inspect(scriptInputPaid(), { allowContractCall: true });
+    expect(operationsOf(inspection)).toEqual([]);
+    expect(inspection.externalInputs.map(({ address }) => address)).toEqual([
+      CONTRACT_ADDRESS,
+    ]);
+    expect(inspection.feeShares).toEqual(ACCOUNT_PAYS_ALL);
+  });
+
+  it('names an owner spend that pays a contract call from the account', () => {
+    const inspection = inspect(ownerContractCall(), {
+      allowContractCall: true,
+    });
+    expect(operationsOf(inspection)).toEqual([{ kind: 'owner-spend' }]);
+    expect(inspection.feeShares).toEqual(ACCOUNT_PAYS_ALL);
   });
 
   it('names a treasury donation from the account a spend', () => {

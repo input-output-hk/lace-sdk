@@ -174,18 +174,21 @@ export const checkWithdrawalAccounts = (
   );
 };
 
-const isSameOutpoint = (a: Cardano.TxIn, b: Cardano.TxIn): boolean =>
+/** Whether two inputs name the same output, ignoring the case of the id. */
+export const isSameOutpoint = (a: Cardano.TxIn, b: Cardano.TxIn): boolean =>
   a.txId.toLowerCase() === b.txId.toLowerCase() && a.index === b.index;
 
 /**
  * Reference inputs that carry a reference script must be the contract's
  * parked scripts on the inspected network: the output reference a supported
  * version pins, resolved with exactly the script it pins there. Any other
- * reference script is code Lace has not pinned.
+ * reference script is code Lace has not pinned, unless the transaction is
+ * an allowed contract call, which may reference the scripts it runs.
  */
 export const checkReferenceScripts = (
   facts: TransactionFacts,
   networkMagic: Cardano.NetworkMagic,
+  isContractCall: boolean,
 ): CustodyRefusal[] => {
   const parked = SUPPORTED_CUSTODY_CONTRACT_VERSIONS.flatMap(
     version => version.referenceScripts[networkMagic] ?? [],
@@ -204,7 +207,7 @@ export const checkReferenceScripts = (
               },
             ];
       }
-      return output.hasReferenceScript
+      return output.hasReferenceScript && !isContractCall
         ? [
             {
               code: 'custody-unsupported-operation',
@@ -272,11 +275,14 @@ export const checkForeignStakeEffects = (
 };
 
 /**
- * Mints of other policies, and custody mints of a shape no mint redeemer
- * accepts: one state NFT name, or grant names of one account that all issue
- * or all burn.
+ * Mints of other policies, unless the transaction is an allowed contract
+ * call, and custody mints of a shape no mint redeemer accepts: one state
+ * NFT name, or grant names of one account that all issue or all burn.
  */
-export const checkMint = (facts: TransactionFacts): CustodyRefusal[] => {
+export const checkMint = (
+  facts: TransactionFacts,
+  isContractCall: boolean,
+): CustodyRefusal[] => {
   const byPolicy = new Map<string, [Cardano.AssetId, bigint][]>();
   for (const entry of facts.mint) {
     const policyId = policyIdOf(entry[0]);
@@ -292,7 +298,9 @@ export const checkMint = (facts: TransactionFacts): CustodyRefusal[] => {
           quantity,
         }),
       );
-    if (!versionOfPolicy(policyId)) return refuseEach('foreign-mint');
+    if (!versionOfPolicy(policyId)) {
+      return isContractCall ? [] : refuseEach('foreign-mint');
+    }
     const shape = mintShapeOf(entries);
     if (shape.kind === 'invalid') return refuseEach('unsupported-mint');
     return shape.kind === 'mixed'

@@ -20,6 +20,9 @@ import {
   collateralFunding,
   collateralUtxo,
   compareInputs,
+  CONTRACT_ADDRESS,
+  CONTRACT_HASH,
+  CONTRACT_SCRIPT,
   controlUtxo,
   currentLogic,
   custodyAccount,
@@ -35,6 +38,8 @@ import {
   lovelaceGrant,
   MEASURED,
   otherGranteeKeyHash,
+  OTHER_CONTRACT_HASH,
+  OTHER_CONTRACT_SCRIPT,
   otherRecipientAddress,
   parkedScriptUtxos,
   protocolParameters,
@@ -44,6 +49,7 @@ import {
   TESTNET_BYRON_ADDRESS,
   transactionOf,
   unparkedChainId,
+  utxo,
   version,
 } from './fixtures';
 
@@ -53,6 +59,7 @@ import type {
   CardanoCustodyBuildRequest,
   CardanoCustodyBuildResult,
   CardanoCustodyCollateralFunding,
+  CardanoCustodyContractCall,
   RedeemerExecutionUnits,
 } from '@lace-contract/cardano-context';
 import type * as Crypto from '@lace-lib/cardano-crypto';
@@ -90,12 +97,14 @@ const spendRequest = (
     slot,
     feeBound,
     excludedInputs,
+    contract,
     funding = collateralFunding(),
   }: {
     grantee?: Crypto.Ed25519KeyHashHex;
     slot?: bigint;
     feeBound?: bigint;
     excludedInputs?: Cardano.TxIn[];
+    contract?: CardanoCustodyContractCall;
     funding?: CardanoCustodyCollateralFunding;
   } = {},
 ): CardanoCustodyBuildRequest => ({
@@ -108,6 +117,7 @@ const spendRequest = (
     ...(slot !== undefined && { slot }),
     ...(feeBound !== undefined && { feeBound }),
     ...(excludedInputs && { excludedInputs }),
+    ...(contract && { contract }),
   },
   funding,
 });
@@ -1441,6 +1451,23 @@ describe('custody grant spends', () => {
       // funds explain it, so no reseeded build follows.
       expect(evaluated).toHaveLength(1);
     });
+
+    it('refuses as over the fund input cap, fitting none, a spend without a call whose logic alone passes the execution limit', async () => {
+      const { run } = scenario({
+        chain: {
+          evaluate: evaluateByRedeemer(MEASURED, MEASURED, {
+            memory: 15_000_000,
+            steps: 100_000_000,
+          }),
+        },
+      });
+      expect(expectFailure(await run())).toEqual({
+        code: 'grant-spend',
+        reason: 'fund-input-cap',
+        maxFundInputs: 0,
+        requiredFundInputs: 1,
+      });
+    });
   });
 
   describe('fee bound', () => {
@@ -1519,6 +1546,730 @@ describe('custody grant spends', () => {
         code: 'script-evaluation-failed',
         message: expect.stringContaining('SpendWithGrant failed') as unknown,
       });
+    });
+  });
+
+  describe('contract calls', () => {
+    const POOL_TOKEN = Cardano.AssetId(`${'77'.repeat(28)}706f6f6c`);
+    const POOL_DATUM: Cardano.PlutusData = 42n;
+    const SWAP_REDEEMER: Cardano.PlutusData = 7n;
+    const SWAP_REDEEMER_CBOR = '07';
+    const POOL_COINS = 50_000_000n;
+
+    /** The pool UTxO a swap spends: lovelace and pool tokens under an inline datum. */
+    const poolUtxo = utxo(700, {
+      address: CONTRACT_ADDRESS,
+      value: { coins: POOL_COINS, assets: new Map([[POOL_TOKEN, 1000n]]) },
+      datum: POOL_DATUM,
+    });
+
+    /** The pool's continuing output once `coins` lovelace went in and `tokens` came out. */
+    const poolOutput = (coins = 5_000_000n, tokens = 100n): Cardano.TxOut => ({
+      address: CONTRACT_ADDRESS,
+      value: {
+        coins: POOL_COINS + coins,
+        assets: new Map([[POOL_TOKEN, 1000n - tokens]]),
+      },
+      datum: POOL_DATUM,
+    });
+
+    /** The pool's validator bytes under PlutusV2, a language a call may not run. */
+    const CONTRACT_SCRIPT_V2: Cardano.PlutusScript = {
+      ...CONTRACT_SCRIPT,
+      version: Cardano.PlutusLanguageVersion.V2,
+    };
+
+    /** A UTxO of the pool that carries a native script, which a call may not read. */
+    const nativeCarrier = utxo(706, {
+      address: CONTRACT_ADDRESS,
+      value: { coins: 10_000_000n },
+      scriptReference: {
+        __type: Cardano.ScriptType.Native,
+        kind: Cardano.NativeScriptKind.RequireAllOf,
+        scripts: [],
+      },
+    });
+
+    /** A pool UTxO that carries the PlutusV2 script, which a call may not spend. */
+    const v2Carrier = utxo(707, {
+      address: CONTRACT_ADDRESS,
+      value: { coins: 5_000_000n },
+      scriptReference: CONTRACT_SCRIPT_V2,
+      datum: POOL_DATUM,
+    });
+
+    /** The UTxO that parks the pool's script, outside every account. */
+    const scriptCarrier = utxo(701, {
+      address: CONTRACT_ADDRESS,
+      value: { coins: 10_000_000n },
+      scriptReference: CONTRACT_SCRIPT,
+    });
+
+    const swap = (
+      witness: Pick<
+        CardanoCustodyContractCall,
+        'referenceInputs' | 'scripts'
+      > = {
+        scripts: [CONTRACT_SCRIPT],
+      },
+    ): CardanoCustodyContractCall => ({
+      inputs: [{ utxo: poolUtxo, redeemer: SWAP_REDEEMER }],
+      ...witness,
+    });
+
+    const swapRequest = (
+      contract: CardanoCustodyContractCall = swap(),
+      outputs: Cardano.TxOut[] = [poolOutput()],
+    ) => spendRequest(outputs, { contract });
+
+    const ORDER_NAME = Cardano.AssetName('6f72646572');
+    const RECEIPT_NAME = Cardano.AssetName('72656365697074');
+    const ORDER_TOKEN = Cardano.AssetId.fromParts(
+      Cardano.PolicyId(CONTRACT_HASH),
+      ORDER_NAME,
+    );
+    const RECEIPT_TOKEN = Cardano.AssetId.fromParts(
+      Cardano.PolicyId(OTHER_CONTRACT_HASH),
+      RECEIPT_NAME,
+    );
+
+    /** A call that mints an order token and five receipts, each policy under its own redeemer. */
+    const mintCall: CardanoCustodyContractCall = {
+      mint: [
+        {
+          policyId: Cardano.PolicyId(CONTRACT_HASH),
+          assets: new Map([[ORDER_NAME, 1n]]),
+          redeemer: 1n,
+        },
+        {
+          policyId: Cardano.PolicyId(OTHER_CONTRACT_HASH),
+          assets: new Map([[RECEIPT_NAME, 5n]]),
+          redeemer: 2n,
+        },
+      ],
+      scripts: [CONTRACT_SCRIPT, OTHER_CONTRACT_SCRIPT],
+    };
+
+    /** The order output a minting call pays: lovelace and the minted order token. */
+    const orderOutput = (coins = 2_000_000n): Cardano.TxOut => ({
+      address: CONTRACT_ADDRESS,
+      value: { coins, assets: new Map([[ORDER_TOKEN, 1n]]) },
+      datum: POOL_DATUM,
+    });
+
+    /** Answers the call's swap redeemer with `budget` and every other with `MEASURED`. */
+    const evaluateSwapAt =
+      (budget: Cardano.ExUnits) =>
+      (tx: Serialization.Transaction): RedeemerExecutionUnits[] =>
+        (tx.witnessSet().redeemers()?.toCore() ?? []).map(
+          ({ purpose, index, data }) => ({
+            purpose,
+            index,
+            budget:
+              Serialization.PlutusData.fromCore(data).toCbor() ===
+              SWAP_REDEEMER_CBOR
+                ? budget
+                : MEASURED,
+          }),
+        );
+
+    const invalidCall = (message: string): CardanoCustodyBuildError => ({
+      code: 'invalid-operation',
+      reason: 'invalid-contract-call',
+      message,
+    });
+
+    it.each<
+      [string, Pick<CardanoCustodyContractCall, 'referenceInputs' | 'scripts'>]
+    >([
+      ['attached', { scripts: [CONTRACT_SCRIPT] }],
+      ['referenced', { referenceInputs: [scriptCarrier] }],
+    ])(
+      'spends a pool UTxO under its redeemer and pays its continuing output, with the script %s',
+      async (how, witness) => {
+        const { run, control, grantUtxos } = scenario();
+        const result = expectSuccess(await run(swapRequest(swap(witness))));
+        const body = bodyOf(result);
+
+        expect(redeemersByInput(result)).toEqual(
+          new Map([
+            [keyOf(grantUtxos[0][0]), SPEND_WITH_GRANT],
+            [keyOf(fundUtxo(1, 0n)[0]), FUND],
+            [keyOf(poolUtxo[0]), SWAP_REDEEMER_CBOR],
+          ]),
+        );
+        expect(body.referenceInputs?.map(keyOf)).toEqual(
+          [
+            control[0],
+            ...parkedScriptUtxos.map(([input]) => input),
+            ...(how === 'referenced' ? [scriptCarrier[0]] : []),
+          ]
+            .sort(compareInputs)
+            .map(keyOf),
+        );
+        expect(transactionOf(result).witnessSet().toCore().scripts).toEqual(
+          how === 'attached' ? [CONTRACT_SCRIPT] : undefined,
+        );
+        expect(body.requiredExtraSignatures).toEqual([granteeKeyHash]);
+        expect(result.resolvedInputs).toEqual(
+          expect.arrayContaining([
+            poolUtxo,
+            ...(how === 'referenced' ? [scriptCarrier] : []),
+          ]),
+        );
+        const [, paid, change] = body.outputs;
+        expect(paid).toEqual(poolOutput());
+        expect(change).toEqual({
+          address: identity.address,
+          value: {
+            coins: 20_000_000n - 5_000_000n - result.fee,
+            assets: new Map([[POOL_TOKEN, 100n]]),
+          },
+        });
+      },
+    );
+
+    it('lowers the cap by the net outflow, not by the gross payment to the pool', async () => {
+      const { run } = scenario();
+      const result = expectSuccess(await run(swapRequest()));
+      expect(recreatedOf(result).grant.scope.cap).toBe(
+        50_000_000n - 5_000_000n - result.fee - MARGIN,
+      );
+    });
+
+    it('keeps the cap when the call pays the account more than the spend costs', async () => {
+      const { run } = scenario();
+      const result = expectSuccess(
+        await run(swapRequest(swap(), [poolOutput(-10_000_000n, 0n)])),
+      );
+      expect(recreatedOf(result).grant.scope.cap).toBe(50_000_000n);
+      expect(bodyOf(result).outputs.at(-1)).toEqual({
+        address: identity.address,
+        value: { coins: expect.any(BigInt) as unknown as bigint },
+      });
+    });
+
+    it('refuses before any build a call whose net outflow passes the per call cap', async () => {
+      const { run, provider } = scenario();
+      const error = expectFailure(
+        await run(swapRequest(swap(), [poolOutput(25_000_000n, 0n)])),
+      );
+      expect(capViolationsOf(error)).toEqual([
+        {
+          code: 'per-call-cap-exceeded',
+          outflow: 25_000_000n,
+          limit: 20_000_000n,
+        },
+      ]);
+      expect(provider.evaluateTx).not.toHaveBeenCalled();
+    });
+
+    describe('of a token grant scoped to the pool token', () => {
+      const poolTokenGrant = tokenGrant({
+        asset: {
+          policyId: HexBlob('77'.repeat(28)),
+          assetName: HexBlob('706f6f6c'),
+        },
+        lovelacePerCallCap: 10_000_000n,
+        lovelaceCap: 20_000_000n,
+      });
+
+      it.each<[string, Cardano.TxOut, bigint]>([
+        ['keeps the cap when the call supplies', poolOutput(5_000_000n), 50n],
+        [
+          'lowers the cap when the call takes',
+          poolOutput(-3_000_000n, -4n),
+          46n,
+        ],
+      ])('%s the scope asset', async (_what, output, cap) => {
+        const holder = fundUtxo(2, 2_000_000n, {
+          value: { coins: 2_000_000n, assets: new Map([[POOL_TOKEN, 10n]]) },
+        });
+        const { run } = scenario({
+          grants: [poolTokenGrant],
+          funds: [fundUtxo(1, 20_000_000n), holder],
+        });
+        const result = expectSuccess(await run(swapRequest(swap(), [output])));
+        expect(recreatedOf(result).grant.scope.cap).toBe(cap);
+      });
+    });
+
+    it('selects the fund UTxO holding the scope token a call burns and lowers the cap by the burn', async () => {
+      const lpFund = fundUtxo(2, 2_000_000n, {
+        value: { coins: 2_000_000n, assets: new Map([[ORDER_TOKEN, 10n]]) },
+      });
+      const { run } = scenario({
+        grants: [
+          tokenGrant({
+            asset: {
+              policyId: HexBlob(CONTRACT_HASH),
+              assetName: HexBlob(ORDER_NAME),
+            },
+          }),
+        ],
+        funds: [fundUtxo(1, 20_000_000n), lpFund],
+      });
+      const withdraw: CardanoCustodyContractCall = {
+        ...swap(),
+        mint: [
+          {
+            policyId: Cardano.PolicyId(CONTRACT_HASH),
+            assets: new Map([[ORDER_NAME, -4n]]),
+            redeemer: 1n,
+          },
+        ],
+      };
+      const result = expectSuccess(
+        await run(
+          spendRequest([poolOutput(-3_000_000n, 0n)], { contract: withdraw }),
+        ),
+      );
+      expect(inputKeysOf(result)).toContain(keyOf(lpFund[0]));
+      expect(inputKeysOf(result)).not.toContain(
+        keyOf(fundUtxo(1, 20_000_000n)[0]),
+      );
+      expect(bodyOf(result).mint).toEqual(new Map([[ORDER_TOKEN, -4n]]));
+      expect(recreatedOf(result).grant.scope.cap).toBe(46n);
+    });
+
+    it('mints under two policies, each with its own redeemer at its policy index', async () => {
+      const { run } = scenario();
+      const result = expectSuccess(
+        await run(spendRequest([orderOutput()], { contract: mintCall })),
+      );
+      const body = bodyOf(result);
+      expect(body.mint).toEqual(
+        new Map([
+          [ORDER_TOKEN, 1n],
+          [RECEIPT_TOKEN, 5n],
+        ]),
+      );
+      const sortedPolicies = [CONTRACT_HASH, OTHER_CONTRACT_HASH].sort();
+      const redeemerOfPolicy = new Map([
+        [CONTRACT_HASH as string, '01'],
+        [OTHER_CONTRACT_HASH as string, '02'],
+      ]);
+      const mintRedeemers = (
+        transactionOf(result).witnessSet().redeemers()?.toCore() ?? []
+      ).filter(({ purpose }) => purpose === Cardano.RedeemerPurpose.mint);
+      expect(
+        mintRedeemers.map(({ index, data }) => [
+          index,
+          Serialization.PlutusData.fromCore(data).toCbor(),
+        ]),
+      ).toEqual(
+        sortedPolicies.map((policyId, index) => [
+          index,
+          redeemerOfPolicy.get(policyId),
+        ]),
+      );
+      expect(transactionOf(result).witnessSet().toCore().scripts).toEqual([
+        CONTRACT_SCRIPT,
+        OTHER_CONTRACT_SCRIPT,
+      ]);
+      expect(body.outputs.at(-1)?.value.assets).toEqual(
+        new Map([[RECEIPT_TOKEN, 5n]]),
+      );
+      expect(recreatedOf(result).grant.scope.cap).toBe(
+        50_000_000n - 2_000_000n - result.fee - MARGIN,
+      );
+    });
+
+    it.each<[Cardano.PlutusData, string]>([
+      [SWAP_REDEEMER, SWAP_REDEEMER_CBOR],
+      [0n, '00'],
+    ])(
+      'spends a script UTxO that carries a datum hash under redeemer %s, with its datum in the witness set',
+      async (redeemer, redeemerCbor) => {
+        const locked = utxo(702, {
+          address: CONTRACT_ADDRESS,
+          value: { coins: 10_000_000n },
+          datumHash: Serialization.PlutusData.fromCore(POOL_DATUM).hash(),
+        });
+        const { run } = scenario();
+        const result = expectSuccess(
+          await run(
+            spendRequest(
+              [{ address: CONTRACT_ADDRESS, value: { coins: 12_000_000n } }],
+              {
+                contract: {
+                  inputs: [{ utxo: locked, redeemer, datum: POOL_DATUM }],
+                  scripts: [CONTRACT_SCRIPT],
+                },
+              },
+            ),
+          ),
+        );
+        expect(redeemersByInput(result).get(keyOf(locked[0]))).toBe(
+          redeemerCbor,
+        );
+        expect(transactionOf(result).witnessSet().toCore().datums).toEqual([
+          POOL_DATUM,
+        ]);
+        expect(recreatedOf(result).grant.scope.cap).toBe(
+          50_000_000n - 2_000_000n - result.fee - MARGIN,
+        );
+      },
+    );
+
+    it('spends a script UTxO that carries its own script, with nothing attached or referenced', async () => {
+      const carrying = utxo(702, {
+        address: CONTRACT_ADDRESS,
+        value: { coins: 10_000_000n },
+        scriptReference: CONTRACT_SCRIPT,
+        datum: POOL_DATUM,
+      });
+      const { run, control } = scenario();
+      const result = expectSuccess(
+        await run(
+          spendRequest(
+            [{ address: CONTRACT_ADDRESS, value: { coins: 12_000_000n } }],
+            {
+              contract: {
+                inputs: [{ utxo: carrying, redeemer: SWAP_REDEEMER }],
+              },
+            },
+          ),
+        ),
+      );
+      expect(redeemersByInput(result).get(keyOf(carrying[0]))).toBe(
+        SWAP_REDEEMER_CBOR,
+      );
+      expect(
+        transactionOf(result).witnessSet().toCore().scripts,
+      ).toBeUndefined();
+      expect(bodyOf(result).referenceInputs?.map(keyOf)).toEqual(
+        [control[0], ...parkedScriptUtxos.map(([input]) => input)]
+          .sort(compareInputs)
+          .map(keyOf),
+      );
+      expect(result.resolvedInputs).toEqual(expect.arrayContaining([carrying]));
+    });
+
+    it('builds a call whose script measures above its seed', async () => {
+      const heavy = { memory: 3_000_000, steps: 1_000_000_000 };
+      const { run } = scenario({ chain: { evaluate: evaluateSwapAt(heavy) } });
+      const result = expectSuccess(await run(swapRequest()));
+      const declared = spendRedeemersOf(result).find(
+        ({ data }) =>
+          Serialization.PlutusData.fromCore(data).toCbor() ===
+          SWAP_REDEEMER_CBOR,
+      );
+      expect(declared?.executionUnits).toEqual({
+        memory: 3_300_000,
+        steps: 1_100_000_000,
+      });
+    });
+
+    it('does not blame the fund inputs for a call whose own script passes the execution limit', async () => {
+      const { run } = scenario({
+        chain: {
+          evaluate: evaluateSwapAt({ memory: 13_000_000, steps: 100_000_000 }),
+        },
+      });
+      expect(expectFailure(await run(swapRequest()))).toMatchObject({
+        code: 'transaction-limits',
+        exceeded: ['executionMemory'],
+      });
+    });
+
+    it('refuses a fee above the bound, not the fund inputs, when the call alone passes the execution limit', async () => {
+      const { run } = scenario({
+        chain: {
+          evaluate: evaluateSwapAt({ memory: 13_000_000, steps: 100_000_000 }),
+        },
+      });
+      expect(
+        expectFailure(
+          await run(
+            spendRequest([poolOutput()], {
+              contract: swap(),
+              feeBound: 700_000n,
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: 'grant-spend', reason: 'fee-above-bound' });
+    });
+
+    it("counts a call's budgets as fixed when it refuses too many fund inputs", async () => {
+      const funds = Array.from({ length: 12 }, (_, index) =>
+        fundUtxo(1 + index, 1_000_000n),
+      );
+      const { run } = scenario({
+        grants: [lovelaceGrant({ perCallCap: 30_000_000n })],
+        funds,
+        chain: {
+          evaluate: tx =>
+            (tx.witnessSet().redeemers()?.toCore() ?? []).map(
+              ({ purpose, index, data }) => ({
+                purpose,
+                index,
+                budget:
+                  purpose === Cardano.RedeemerPurpose.mint
+                    ? { memory: 2_500_000, steps: 100_000_000 }
+                    : Serialization.PlutusData.fromCore(data).toCbor() === FUND
+                    ? { memory: 1_050_000, steps: 100_000_000 }
+                    : MEASURED,
+              }),
+            ),
+        },
+      });
+      expect(
+        expectFailure(
+          await run(
+            spendRequest([payment(7_000_000n), orderOutput()], {
+              contract: mintCall,
+            }),
+          ),
+        ),
+      ).toEqual({
+        code: 'grant-spend',
+        reason: 'fund-input-cap',
+        maxFundInputs: 6,
+        requiredFundInputs: 12,
+      });
+    });
+
+    it.each<[string, CardanoCustodyContractCall, string]>([
+      [
+        'nothing to call',
+        {},
+        'A contract call names no input, mint, script or reference',
+      ],
+      [
+        'a reference input of an account fund',
+        { ...swap(), referenceInputs: [fundUtxo(1, 20_000_000n)] },
+        `UTxO ${keyOf(fundUtxo(1, 20_000_000n)[0])} is the account's own`,
+      ],
+      [
+        'a reference input of the spent grant',
+        { ...swap(), referenceInputs: [grantUtxo(lovelaceGrant())] },
+        `UTxO ${keyOf(grantUtxo(lovelaceGrant())[0])} is the account's own`,
+      ],
+      [
+        'an input at a key address',
+        {
+          inputs: [
+            {
+              utxo: utxo(703, {
+                address: recipientAddress,
+                value: { coins: 5_000_000n },
+              }),
+              redeemer: SWAP_REDEEMER,
+            },
+          ],
+        },
+        'Input 0 is not locked by a script',
+      ],
+      [
+        'an input of the account',
+        {
+          inputs: [
+            { utxo: fundUtxo(704, 5_000_000n), redeemer: SWAP_REDEEMER },
+          ],
+        },
+        'Input 0 belongs to a custody account',
+      ],
+      [
+        'a datum-hash input without its datum',
+        {
+          inputs: [
+            {
+              utxo: utxo(705, {
+                address: CONTRACT_ADDRESS,
+                value: { coins: 5_000_000n },
+                datumHash: Serialization.PlutusData.fromCore(1n).hash(),
+              }),
+              redeemer: SWAP_REDEEMER,
+              datum: POOL_DATUM,
+            },
+          ],
+        },
+        'Input 0 needs the datum its hash names',
+      ],
+      [
+        'a datum for an inline datum input',
+        {
+          inputs: [
+            { utxo: poolUtxo, redeemer: SWAP_REDEEMER, datum: POOL_DATUM },
+          ],
+        },
+        'Input 0 carries no datum hash for its datum',
+      ],
+      [
+        'a UTxO it both spends and references',
+        { ...swap(), referenceInputs: [poolUtxo] },
+        `UTxO ${keyOf(poolUtxo[0])} is named twice`,
+      ],
+      [
+        'a script attached twice',
+        { ...swap(), scripts: [CONTRACT_SCRIPT, CONTRACT_SCRIPT] },
+        `Script ${CONTRACT_HASH} is attached twice`,
+      ],
+      [
+        'an attached custody account validator',
+        { ...swap(), scripts: [version.accountValidator] },
+        `Script ${version.accountValidatorHash} is a custody contract script`,
+      ],
+      [
+        'an attached custody logic',
+        { ...swap(), scripts: [version.logics[0].script] },
+        `Script ${version.logics[0].hash} is a custody contract script`,
+      ],
+      [
+        'a script a reference input also carries',
+        {
+          ...swap({ referenceInputs: [scriptCarrier] }),
+          scripts: [CONTRACT_SCRIPT],
+        },
+        `Script ${CONTRACT_HASH} is also carried by an input of the transaction`,
+      ],
+      [
+        'a script a call input also carries',
+        {
+          inputs: [
+            {
+              utxo: utxo(702, {
+                address: CONTRACT_ADDRESS,
+                value: { coins: 5_000_000n },
+                scriptReference: CONTRACT_SCRIPT,
+                datum: POOL_DATUM,
+              }),
+              redeemer: SWAP_REDEEMER,
+            },
+          ],
+          scripts: [CONTRACT_SCRIPT],
+        },
+        `Script ${CONTRACT_HASH} is also carried by an input of the transaction`,
+      ],
+      [
+        'an attached script that is not PlutusV3',
+        { ...swap(), scripts: [CONTRACT_SCRIPT_V2] },
+        `Script ${Serialization.Script.fromCore(
+          CONTRACT_SCRIPT_V2,
+        ).hash()} is not PlutusV3`,
+      ],
+      [
+        'a reference input that carries a native script',
+        { ...swap(), referenceInputs: [nativeCarrier] },
+        `UTxO ${keyOf(nativeCarrier[0])} carries a script that is not PlutusV3`,
+      ],
+      [
+        'a call input that carries a script that is not PlutusV3',
+        {
+          inputs: [{ utxo: v2Carrier, redeemer: SWAP_REDEEMER }],
+          scripts: [CONTRACT_SCRIPT],
+        },
+        `UTxO ${keyOf(v2Carrier[0])} carries a script that is not PlutusV3`,
+      ],
+      [
+        'a script nothing in the call needs',
+        { ...swap(), scripts: [CONTRACT_SCRIPT, OTHER_CONTRACT_SCRIPT] },
+        `Script ${OTHER_CONTRACT_HASH} is needed by no input or mint of the call`,
+      ],
+      [
+        'an input the spend also references',
+        {
+          inputs: [{ utxo: parkedScriptUtxos[0], redeemer: SWAP_REDEEMER }],
+        },
+        `UTxO ${keyOf(parkedScriptUtxos[0][0])} is both spent and referenced`,
+      ],
+      [
+        'a mint of custody account tokens',
+        {
+          mint: [
+            {
+              policyId: Cardano.PolicyId(version.accountValidatorHash),
+              assets: new Map([[ORDER_NAME, 1n]]),
+              redeemer: 1n,
+            },
+          ],
+        },
+        'A contract call cannot mint custody account tokens',
+      ],
+      [
+        'a policy named twice',
+        { mint: [mintCall.mint![0], mintCall.mint![0]] },
+        `Policy ${CONTRACT_HASH} is named twice`,
+      ],
+      [
+        'a mint of no quantity',
+        {
+          mint: [{ ...mintCall.mint![0], assets: new Map([[ORDER_NAME, 0n]]) }],
+        },
+        `Policy ${CONTRACT_HASH} names no asset or a zero quantity`,
+      ],
+    ])(
+      'refuses before any evaluation a call with %s',
+      async (_what, contract, message) => {
+        const { run, provider } = scenario();
+        expect(
+          expectFailure(
+            await run(
+              spendRequest([poolOutput()], {
+                contract,
+              }),
+            ),
+          ),
+        ).toEqual(invalidCall(message));
+        expect(provider.evaluateTx).not.toHaveBeenCalled();
+      },
+    );
+
+    it("refuses before any evaluation a call that names another grantee's grant UTxO", async () => {
+      const grants = [
+        lovelaceGrant(),
+        lovelaceGrant({}, 1n, { grantee: otherGranteeKeyHash }),
+      ];
+      const { run, provider, grantUtxos } = scenario({ grants });
+      expect(
+        expectFailure(
+          await run(
+            swapRequest({ ...swap(), referenceInputs: [grantUtxos[1]] }),
+          ),
+        ),
+      ).toEqual(
+        invalidCall(`UTxO ${keyOf(grantUtxos[1][0])} is the account's own`),
+      );
+      expect(provider.evaluateTx).not.toHaveBeenCalled();
+    });
+
+    it('reads a reference input the spend already reads once', async () => {
+      const { run, control } = scenario();
+      const result = expectSuccess(
+        await run(
+          swapRequest(swap({ referenceInputs: [control, scriptCarrier] })),
+        ),
+      );
+      expect(bodyOf(result).referenceInputs?.map(keyOf)).toEqual(
+        [
+          control[0],
+          ...parkedScriptUtxos.map(([input]) => input),
+          scriptCarrier[0],
+        ]
+          .sort(compareInputs)
+          .map(keyOf),
+      );
+    });
+
+    it('passes the shared inspection only as an allowed contract call', async () => {
+      const { run } = scenario();
+      const result = expectSuccess(await run(swapRequest()));
+      const inspect = (allowContractCall: boolean) =>
+        inspectCustodyTransaction(
+          transactionOf(result),
+          result.resolvedInputs,
+          {
+            chainId,
+            now: Date.now(),
+            slotToPosixMs: slot => slot * 1000,
+            accountRecord: result.accountRecord,
+            allowGrantSpend: true,
+            allowContractCall,
+          },
+        );
+      expect(inspect(true).ok).toBe(true);
+      expect(inspect(false).ok).toBe(false);
     });
   });
 });

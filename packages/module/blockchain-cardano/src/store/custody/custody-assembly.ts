@@ -39,10 +39,20 @@ import type {
 } from '@lace-lib/cardano-custody';
 import type { TxEvaluator } from '@lace-lib/cardano-tx-builder';
 
-/** An input of a custody transaction, with its spend redeemer when a script locks it. */
+/**
+ * An input of a custody transaction, with its spend redeemer when a script
+ * locks it, and the datum of a script UTxO that carries only its hash.
+ */
 interface CustodyInput {
   readonly utxo: Cardano.Utxo;
   readonly redeemer?: Cardano.PlutusData;
+  readonly datum?: Cardano.PlutusData;
+}
+
+/** Tokens minted (positive) or burned (negative) under one Plutus policy, with its redeemer. */
+export interface CustodyMint {
+  readonly assets: Cardano.TokenMap;
+  readonly redeemer: Cardano.PlutusData;
 }
 
 /** A withdrawal from a script reward account, with the redeemer that runs the script. */
@@ -57,8 +67,9 @@ export interface CustodyTransactionPlan {
   readonly inputs: readonly CustodyInput[];
   /**
    * UTxOs the transaction reads without spending, fully resolved: a
-   * referenced control UTxO and the parked UTxOs whose reference scripts
-   * witness the contract scripts the plan does not attach.
+   * referenced control UTxO, the parked UTxOs whose reference scripts
+   * witness the contract scripts the plan does not attach, and what a
+   * contract call reads.
    */
   readonly referenceInputs?: readonly Cardano.Utxo[];
   /**
@@ -90,11 +101,8 @@ export interface CustodyTransactionPlan {
     readonly utxo: Cardano.Utxo;
     readonly returnAddress: Cardano.PaymentAddress;
   };
-  /** Tokens minted (positive) or burned (negative) under one policy. */
-  readonly mint?: {
-    readonly assets: Cardano.TokenMap;
-    readonly redeemer: Cardano.PlutusData;
-  };
+  /** One entry per policy the transaction mints or burns under. */
+  readonly mint?: readonly CustodyMint[];
   readonly registration?: {
     readonly stakeCredential: Cardano.Credential;
     readonly deposit: bigint;
@@ -393,12 +401,15 @@ export class ExecutionEstimateShortfall extends Error {
  * The transaction needs a fee above the most it may be balanced at. `fee`
  * is the fee it needs, or, when even the fee of its body without execution
  * is above that most, that fee. `evaluatedRedeemers` holds the budgets the
- * fee was priced at when an evaluation priced it.
+ * fee was priced at when an evaluation priced it, and `evaluatedInputs` the
+ * inputs of the evaluated transaction in the ledger's order, which spend
+ * redeemers index.
  */
 export class MaxBalancedFeeExceeded extends Error {
   public constructor(
     readonly fee: bigint,
     readonly evaluatedRedeemers: readonly Cardano.Redeemer[] = [],
+    readonly evaluatedInputs: readonly Cardano.TxIn[] = [],
   ) {
     super(
       `The transaction needs a fee of ${fee} lovelace, above the most it may be balanced at`,
@@ -704,13 +715,20 @@ const buildPlan = async (
     })
     .addRequiredSigner(plan.requiredSigner);
   if (chain.logger) builder.setLogger(chain.logger);
-  for (const { utxo, redeemer } of plan.inputs) {
-    builder.addInput(utxo, redeemer ? { redeemer } : undefined);
+  for (const { utxo, redeemer, datum } of plan.inputs) {
+    builder.addInput(
+      utxo,
+      redeemer !== undefined
+        ? { redeemer, ...(datum !== undefined && { datum }) }
+        : undefined,
+    );
   }
   for (const utxo of referenceInputs) builder.addReferenceInput(utxo);
   for (const output of plan.outputs) builder.addOutput(output);
   for (const script of plan.scripts) builder.attachScript(script);
-  if (plan.mint) builder.mintAssets(plan.mint.assets, plan.mint.redeemer);
+  for (const { assets, redeemer } of plan.mint ?? []) {
+    builder.mintAssets(assets, redeemer);
+  }
   if (plan.registration) {
     const { stakeCredential, deposit, redeemer } = plan.registration;
     builder.addNewStakeAddressCertificate(stakeCredential, deposit, {
@@ -793,12 +811,18 @@ const buildFeePaidByFirstOutput = async (
   }
 };
 
+/** Inputs in the ledger's set order: by transaction id, then by index. */
+const ledgerOrderOf = (inputs: readonly Cardano.TxIn[]): Cardano.TxIn[] =>
+  [...inputs].sort((a, b) =>
+    a.txId === b.txId ? a.index - b.index : a.txId < b.txId ? -1 : 1,
+  );
+
 /** How many redeemers a plan's transaction carries. */
 const redeemerCountOf = (plan: CustodyTransactionPlan): number =>
   plan.inputs.filter(({ redeemer }) => redeemer !== undefined).length +
-  [plan.mint, plan.registration, plan.delegation].filter(
-    part => part !== undefined,
-  ).length +
+  (plan.mint?.length ?? 0) +
+  [plan.registration, plan.delegation].filter(part => part !== undefined)
+    .length +
   (plan.withdrawals?.length ?? 0);
 
 export interface AssembleWithFundsParams {
@@ -925,6 +949,7 @@ export const assembleWithFunds = async ({
           throw new MaxBalancedFeeExceeded(
             error.requiredFee,
             error.evaluatedRedeemers,
+            ledgerOrderOf(planned.inputs.map(({ utxo: [input] }) => input)),
           );
         }
         // A seed lowered for the most fee may undershoot what the scripts

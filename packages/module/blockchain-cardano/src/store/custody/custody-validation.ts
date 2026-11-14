@@ -1,9 +1,12 @@
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
 import {
+  addValueDeltas,
   encodeCustodyAccountState,
   encodeCustodyGrant,
   findCustodySponsorRuleViolations,
   inspectCustodyTransaction,
+  negateValueDelta,
+  valueDeltaOf,
 } from '@lace-lib/cardano-custody';
 import {
   TransactionLimitsExceededError,
@@ -26,6 +29,7 @@ import type {
   CustodyContractVersion,
   CustodyGrant,
   CustodySponsorRuleContext,
+  CustodyValueDelta,
 } from '@lace-lib/cardano-custody';
 
 /** What a custody build meant to produce, checked against the final bytes. */
@@ -63,11 +67,20 @@ interface CustodyBuildExpectation {
     readonly after: CustodyGrant;
   };
   /**
+   * Present when a grant spend or an owner spend calls other contracts,
+   * which inspection then allows. `supplied` is the value the call brings
+   * into the transaction: what its inputs hold and what it mints, less what
+   * it burns.
+   */
+  readonly contractCall?: {
+    readonly supplied: CustodyValueDelta;
+  };
+  /**
    * The value the account pays away: the requested outputs and the fee,
-   * less what the transaction withdraws into the account. Tokens of the
-   * account itself, which a transaction mints or burns, are not paid away.
-   * Absent at creation, the only build the sponsor pays for, when the
-   * account spends nothing.
+   * less what the transaction withdraws into the account and what a
+   * contract call supplies. Tokens of the account itself, which a
+   * transaction mints or burns, are not paid away. Absent at creation, the
+   * only build the sponsor pays for, when the account spends nothing.
    */
   readonly outflow?: {
     readonly requested: Cardano.Value;
@@ -187,6 +200,24 @@ const checkAccountOutputs = (
   if (!isSpentAsPlanned) unexpected('does not spend the intended grant');
 };
 
+/**
+ * The value expected to leave the account, by lower-case asset id and
+ * without empty entries: the requested outputs and the fee, less the
+ * withdrawal and what a contract call supplies. The account inputs, the
+ * call's inputs and its mint balance the outputs, the fee and the
+ * account's change, so whatever the call supplies leaves the account less.
+ */
+const expectedOutflowOf = (
+  { requested, withdrawal }: NonNullable<CustodyBuildExpectation['outflow']>,
+  fee: bigint,
+  supplied: CustodyValueDelta | undefined,
+): CustodyValueDelta =>
+  addValueDeltas([
+    valueDeltaOf(requested),
+    { lovelace: fee - withdrawal, assets: new Map() },
+    ...(supplied ? [negateValueDelta(supplied)] : []),
+  ]);
+
 /** Checks the value leaving the account, its own tokens aside. */
 const checkOutflow = (
   { netOutflow }: CustodyAccountInspection,
@@ -194,21 +225,24 @@ const checkOutflow = (
   expectation: CustodyBuildExpectation,
 ): void => {
   if (!expectation.outflow) return;
-  const { requested, withdrawal } = expectation.outflow;
-  const assets = requested.assets ?? new Map<Cardano.AssetId, bigint>();
+  const expected = expectedOutflowOf(
+    expectation.outflow,
+    fee,
+    expectation.contractCall?.supplied,
+  );
   const accountPolicy: string = expectation.record.accountValidatorHash;
   const leaving = [...netOutflow.assets].filter(
     ([assetId]) => Cardano.AssetId.getPolicyId(assetId) !== accountPolicy,
   );
-  const isRequestedOutflow =
-    netOutflow.lovelace === requested.coins + fee - withdrawal &&
-    leaving.length === assets.size &&
-    [...assets].every(
+  const isExpectedOutflow =
+    netOutflow.lovelace === expected.lovelace &&
+    leaving.length === expected.assets.size &&
+    leaving.every(
       ([assetId, quantity]) =>
-        netOutflow.assets.get(assetId.toLowerCase() as Cardano.AssetId) ===
+        expected.assets.get(assetId.toLowerCase() as Cardano.AssetId) ===
         quantity,
     );
-  if (!isRequestedOutflow) unexpected('pays out more than requested');
+  if (!isExpectedOutflow) unexpected('pays out more than requested');
 };
 
 /**
@@ -240,6 +274,7 @@ export const finalizeCustodyBuild = (
     slotToPosixMs: chain.clock.slotStart,
     accountRecord: expectation.record,
     allowGrantSpend: expectation.grantSpend !== undefined,
+    allowContractCall: expectation.contractCall !== undefined,
     ...(expectation.deviceKeyHash && {
       deviceKeyHash: expectation.deviceKeyHash,
     }),
@@ -302,5 +337,6 @@ export const finalizeCustodyBuild = (
     accountRecord: expectation.record,
     fee,
     invalidHereafter: validity.invalidHereafter!.slot,
+    costModels: chain.protocolParameters.costModels,
   };
 };

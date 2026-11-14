@@ -1,6 +1,7 @@
 import { Cardano } from '@lace-lib/cardano-core';
 import {
   createCustodyAccountRecord,
+  decodeCustodyGrant,
   encodeCustodyAccountRedeemer,
   encodeCustodyLogicRedeemer,
 } from '@lace-lib/cardano-custody';
@@ -26,7 +27,10 @@ import {
   accountState,
   chainId,
   collateralFunding,
+  CONTRACT_ADDRESS,
+  CONTRACT_SCRIPT,
   controlUtxo,
+  custodyAccount,
   deviceKeyHash,
   eraSummaries,
   EXPIRY_MS,
@@ -79,6 +83,7 @@ const funding: CardanoCustodyCollateralFunding = collateralFunding();
 const fixture = {} as {
   built: CardanoCustodyBuildResult;
   issued: CardanoCustodyBuildResult;
+  call: CardanoCustodyBuildResult;
   spend: {
     transaction: Serialization.Transaction;
     resolvedInputs: Cardano.Utxo[];
@@ -205,6 +210,52 @@ beforeAll(async () => {
   };
 });
 
+/** The pool UTxO a grant spend's contract call spends, and what the call pays back to the pool. */
+const POOL_COINS = 50_000_000n;
+const poolUtxo = utxo(700, {
+  address: CONTRACT_ADDRESS,
+  value: { coins: POOL_COINS },
+  datum: 42n,
+});
+const poolOutput: Cardano.TxOut = {
+  address: CONTRACT_ADDRESS,
+  value: { coins: POOL_COINS + 5_000_000n },
+  datum: 42n,
+};
+
+/** A grant spend that pays 5 ADA into a pool whose UTxO it spends. */
+beforeAll(async () => {
+  const grant = lovelaceGrant();
+  const utxos = [
+    controlUtxo(accountState({ nextSlot: 1n, outstanding: 1n })),
+    grantUtxo(grant),
+    fundUtxo(1, 20_000_000n),
+  ];
+  const { provider } = fakeProvider({ utxosAt: () => utxos });
+  fixture.call = expectSuccess(
+    await runBuild(
+      {
+        requestId: 'call',
+        accountId,
+        operation: {
+          type: 'grant-spend',
+          grantee: granteeKeyHash,
+          outputs: [poolOutput],
+          contract: {
+            inputs: [{ utxo: poolUtxo, redeemer: 7n }],
+            scripts: [CONTRACT_SCRIPT],
+          },
+        },
+        funding,
+      },
+      {
+        provider,
+        store: { settledUtxos: utxos, account: custodyAccount(null as never) },
+      },
+    ),
+  );
+});
+
 type CustodyBuildExpectation = Parameters<typeof finalizeCustodyBuild>[2];
 
 const expectation = (
@@ -252,6 +303,19 @@ describe('finalizeCustodyBuild', () => {
         expectation(),
       ),
     ).toEqual(fixture.built);
+  });
+
+  it('carries the cost models it was built under, for the device signer', () => {
+    expect(
+      finalizeCustodyBuild(
+        {
+          transaction: transactionOf(fixture.built),
+          resolvedInputs: fixture.built.resolvedInputs,
+        },
+        chain(),
+        expectation(),
+      ).costModels,
+    ).toBe(protocolParameters.costModels);
   });
 
   it('refuses another resulting state', () => {
@@ -534,5 +598,96 @@ describe('finalizeCustodyBuild', () => {
     } finally {
       limits.error = undefined;
     }
+  });
+
+  describe('a grant spend that calls a contract', () => {
+    const callExpectation = (
+      overrides: Partial<CustodyBuildExpectation> = {},
+    ): CustodyBuildExpectation => {
+      const [recreated] = transactionOf(fixture.call).body().toCore().outputs;
+      const after = decodeCustodyGrant(recreated.datum!);
+      if (!after.ok) throw new Error('grant datum');
+      return expectation({
+        control: undefined,
+        grantSpend: { slot: 0n, after: after.value },
+        contractCall: { supplied: { lovelace: POOL_COINS, assets: new Map() } },
+        signer: granteeKeyHash,
+        deviceKeyHash: undefined,
+        outflow: { requested: poolOutput.value, withdrawal: 0n },
+        ...overrides,
+      });
+    };
+
+    it('accepts the outflow net of what the call supplies', () => {
+      expect(
+        finalizeCustodyBuild(
+          {
+            transaction: transactionOf(fixture.call),
+            resolvedInputs: fixture.call.resolvedInputs,
+          },
+          chain(),
+          callExpectation(),
+        ),
+      ).toEqual(fixture.call);
+    });
+
+    it('inspects without allowing a contract call when the operation carries none', () => {
+      expect(
+        refusalOf(
+          callExpectation({ contractCall: undefined }),
+          undefined,
+          fixture.call,
+        ),
+      ).toMatchObject({
+        code: 'inspection-refused',
+        refusals: [
+          expect.objectContaining({
+            code: 'custody-unsupported-operation',
+            reason: 'grant-spend-foreign-input',
+          }),
+        ] as unknown,
+      });
+    });
+
+    it('refuses a transaction that pays the pool more than requested net of the call', () => {
+      expect(
+        refusalOf(
+          callExpectation({
+            outflow: {
+              requested: { coins: poolOutput.value.coins - 1_000_000n },
+              withdrawal: 0n,
+            },
+          }),
+          undefined,
+          fixture.call,
+        ),
+      ).toEqual({
+        code: 'build-failed',
+        message: 'The built transaction pays out more than requested',
+      });
+    });
+
+    it('refuses an outflow above the one net of the call', () => {
+      for (const supplied of [
+        { lovelace: POOL_COINS + 1n, assets: new Map() },
+        {
+          lovelace: POOL_COINS,
+          assets: new Map([
+            [Cardano.AssetId(`${'77'.repeat(28)}706f6f6c`), 5n],
+          ]),
+        },
+      ]) {
+        expect(
+          refusalOf(
+            callExpectation({ contractCall: { supplied } }),
+            undefined,
+            fixture.call,
+          ),
+        ).toEqual({
+          code: 'build-failed',
+          message: 'The built transaction pays out more than requested',
+        });
+      }
+    });
   });
 });

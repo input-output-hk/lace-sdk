@@ -9,7 +9,8 @@
 // stable-omits: CardanoCustodySideEffect
 // stable-omits: CardanoCustodyActivityMetadata, CardanoCustodyBuildError
 // stable-omits: CardanoCustodyBuildRequest, CardanoCustodyBuildResult
-// stable-omits: CardanoCustodyCollateralFunding, CardanoCustodyCreateOperation
+// stable-omits: CardanoCustodyCollateralFunding, CardanoCustodyContractCall
+// stable-omits: CardanoCustodyCreateOperation
 // stable-omits: CardanoCustodyCreatorIndexProbeError
 // stable-omits: CardanoCustodyCreatorIndexProbeRequest
 // stable-omits: CardanoCustodyCreatorIndexProbeResult
@@ -39,7 +40,9 @@
 // stable-omits: NightDesignationStateAwaitingConfirmation
 // stable-omits: NightDesignationStateBuilding, NightDesignationStateError
 // stable-omits: NightDesignationStateIdle, NightDesignationStateProcessing
-// stable-omits: NightDesignationStateSuccess, SignCardanoCustodyDataPayload
+// stable-omits: NightDesignationStateSuccess
+// stable-omits: SerializedCardanoCustodyCostModels
+// stable-omits: SignCardanoCustodyDataPayload
 // stable-omits: SignCardanoCustodyTxPayload, SignCardanoDataPayload
 // stable-omits: SignCardanoTxPayload, WithMnemonicWords
 // stable-omits: cardanoCustodyActions, cardanoCustodySelectors
@@ -60,6 +63,7 @@
 // stable-omits: nightDesignationIndexReducers, nightDesignationIndexSelectors
 // stable-omits: parseCardanoCustodyChainId, readCardanoCustodyControlUtxo
 // stable-omits: selectHydraDepositActivityStates
+// stable-omits: serializeCardanoCustodyCostModels
 // stable-omits: signCardanoCustodyDataWithWords
 // stable-omits: signCardanoCustodyTransactionWithWords
 // stable-omits: toHydraDepositActivityStates

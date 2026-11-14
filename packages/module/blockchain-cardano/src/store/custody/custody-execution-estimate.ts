@@ -3,7 +3,8 @@ import type { Cardano } from '@lace-lib/cardano-core';
 /**
  * How many times one custody transaction runs each proxy handler, once per
  * script input and mint policy, and the stake script, once per certificate
- * or withdrawal; and the path its single logic run takes.
+ * or withdrawal; the path its single logic run takes; and the redeemers of
+ * other contracts a spend calls.
  */
 interface CustodyHandlerRuns {
   readonly device?: number;
@@ -22,9 +23,14 @@ interface CustodyHandlerRuns {
    * with the grants issued and swept and the fund inputs it checks.
    */
   readonly logic?: 'agent' | 'arrival' | 'owner';
+  /** Spend and mint redeemers of other contracts a contract call runs. */
+  readonly contractRedeemers?: number;
 }
 
-type ProxyHandler = Exclude<keyof CustodyHandlerRuns, 'logic'>;
+type ProxyHandler = Exclude<
+  keyof CustodyHandlerRuns,
+  'contractRedeemers' | 'logic'
+>;
 
 /**
  * Net memory units of one run of each handler: the largest figure the
@@ -98,6 +104,18 @@ const CUSTODY_ESTIMATE_STEPS_PER_MEMORY_UNIT = 400;
  */
 const CUSTODY_RESEED_MARGIN_PERCENT = 10;
 
+/**
+ * What one redeemer of another contract is expected to measure. Lace knows
+ * nothing of the script, so the seed is a generous share of the
+ * per-transaction limit: a seventh of Preprod's memory. A call that
+ * measures above it is reseeded once at the measurement, as a custody run
+ * is; one that measures below it only lowers the fee evaluation settles at.
+ */
+const CONTRACT_REDEEMER_ESTIMATE: Cardano.ExUnits = {
+  memory: 2_000_000,
+  steps: 800_000_000,
+};
+
 const withReseedMargin = (units: number): number =>
   Math.ceil((units * (100 + CUSTODY_RESEED_MARGIN_PERCENT)) / 100);
 
@@ -117,8 +135,8 @@ const logicNetMemory = ({
 /**
  * The execution units a transaction that runs `runs` is expected to
  * measure: the handlers' and the logic's net memory units times the
- * estimate factor, and steps in proportion. It is not capped at the
- * per-transaction limit.
+ * estimate factor, and steps in proportion, plus the seed of each redeemer
+ * of another contract. It is not capped at the per-transaction limit.
  */
 export const custodyExecutionEstimate = (
   runs: CustodyHandlerRuns,
@@ -130,7 +148,13 @@ export const custodyExecutionEstimate = (
     logicNetMemory(runs),
   );
   const memory = netMemory * CUSTODY_EXECUTION_ESTIMATE_FACTOR;
-  return { memory, steps: memory * CUSTODY_ESTIMATE_STEPS_PER_MEMORY_UNIT };
+  const contractRedeemers = runs.contractRedeemers ?? 0;
+  return {
+    memory: memory + contractRedeemers * CONTRACT_REDEEMER_ESTIMATE.memory,
+    steps:
+      memory * CUSTODY_ESTIMATE_STEPS_PER_MEMORY_UNIT +
+      contractRedeemers * CONTRACT_REDEEMER_ESTIMATE.steps,
+  };
 };
 
 /**

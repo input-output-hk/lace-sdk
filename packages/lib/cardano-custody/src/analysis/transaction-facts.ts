@@ -37,6 +37,10 @@ export interface TransactionFacts {
   readonly upperBoundMs: number | undefined;
   /** Hashes of the witness-set scripts. */
   readonly witnessScriptHashes: ReadonlySet<string>;
+  /** Hashes of the witness-set Plutus scripts, of any language. */
+  readonly witnessPlutusScriptHashes: ReadonlySet<string>;
+  /** The witness-set datums, by lower-case datum hash. */
+  readonly witnessDatums: ReadonlyMap<string, Cardano.PlutusData>;
   /**
    * Every reward account the body's withdrawal map names, in the order of
    * its bytes and repeats included. The decoded body keeps one entry per
@@ -166,12 +170,22 @@ const withdrawalAccountsOf = (bodyCbor: HexBlob): Cardano.RewardAccount[] => {
   return accounts;
 };
 
+/**
+ * The facts of a transaction. Witness datums come serialized, so each is
+ * hashed over the bytes it was sent in, as the ledger hashes it.
+ */
 export const readTransaction = (
   {
     body,
     bodyCbor,
     witness,
-  }: { body: Cardano.TxBody; bodyCbor: HexBlob; witness: Cardano.Witness },
+    datums,
+  }: {
+    body: Cardano.TxBody;
+    bodyCbor: HexBlob;
+    witness: Cardano.Witness;
+    datums: readonly Serialization.PlutusData[];
+  },
   resolved: ResolvedBody,
   options: CustodyInspectionOptions,
 ): TransactionFacts => {
@@ -184,6 +198,10 @@ export const readTransaction = (
     ),
   );
   const { invalidBefore, invalidHereafter } = body.validityInterval ?? {};
+  const scripts = witness.scripts ?? [];
+  /** The hash of a script. */
+  const scriptHashOf = (script: Cardano.Script) =>
+    Serialization.Script.fromCore(script).hash();
   return {
     body,
     ...resolved,
@@ -205,10 +223,14 @@ export const readTransaction = (
       invalidHereafter === undefined
         ? undefined
         : options.slotToPosixMs(invalidHereafter),
-    witnessScriptHashes: new Set(
-      (witness.scripts ?? []).map(script =>
-        Serialization.Script.fromCore(script).hash(),
-      ),
+    witnessScriptHashes: new Set(scripts.map(scriptHashOf)),
+    witnessPlutusScriptHashes: new Set(
+      scripts
+        .filter(script => script.__type === Cardano.ScriptType.Plutus)
+        .map(scriptHashOf),
+    ),
+    witnessDatums: new Map(
+      datums.map(datum => [datum.hash().toLowerCase(), datum.toCore()]),
     ),
     withdrawalAccounts: withdrawalAccountsOf(bodyCbor),
   };
@@ -231,6 +253,15 @@ export const paymentCredentialOf = (
     view.address?.asEnterprise() ??
     view.address?.asPointer()
   )?.getPaymentCredential();
+
+/**
+ * Whether an output is locked by a script of another contract: its payment
+ * credential is a script and its address belongs to no custody account.
+ * Spending one runs that contract's validator, so no key of its owner signs.
+ */
+export const isContractScriptOutput = (view: OutputView): boolean =>
+  view.addressClass.kind === 'other' &&
+  paymentCredentialOf(view)?.type === Cardano.CredentialType.ScriptHash;
 
 export const stakeCredentialOf = (
   certificate: Cardano.Certificate,

@@ -44,6 +44,7 @@ import {
 } from './outputs';
 import { diffCustodyStates } from './state-change';
 import {
+  isContractScriptOutput,
   redeemerData,
   scriptHashOfRewardAccount,
   stakeCredentialOf,
@@ -1188,11 +1189,21 @@ const checkStateChange = (
   return refusals;
 };
 
+/** Whether the caller allows a contract call: both options are set. */
+const allowsContractCall = ({
+  allowGrantSpend,
+  allowContractCall,
+}: CustodyInspectionOptions): boolean =>
+  allowGrantSpend === true && allowContractCall === true;
+
 /**
  * Grant spends are refused unless the caller allows them. An allowed one is
  * refused for every rule of the logic's grant spend rule it breaks, so an
  * accepted grant spend is one the contract accepts, and for any input
  * outside the account address: an agent spends from the account alone.
+ * A contract call the caller allows may also spend UTxOs locked by other
+ * contracts, which their validators release; an input at a key address
+ * would need another signer and stays refused.
  */
 const checkGrantSpends = (
   {
@@ -1234,7 +1245,14 @@ const checkGrantSpends = (
   ),
   ...(scope.options.allowGrantSpend && spends.length > 0
     ? facts.inputs
-        .filter(({ output }) => !isAtAccount(output, account))
+        .filter(
+          ({ output }) =>
+            !isAtAccount(output, account) &&
+            !(
+              allowsContractCall(scope.options) &&
+              isContractScriptOutput(output)
+            ),
+        )
         .map(
           ({ input }): CustodyRefusal => ({
             code: 'custody-unsupported-operation',
@@ -1426,6 +1444,95 @@ export const withOperations = (
     operations: operationsOf(operationFacts, shares[index]),
   }));
 };
+
+/** Whether a device signs the account's operation: it spends the control UTxO. */
+const isOwnerOperation = ({
+  report,
+  operationFacts,
+}: AccountOutcome): boolean =>
+  report.controlInput !== undefined && !operationFacts.isGrantSpend;
+
+/** Whether two lists hold the same items in the same order. */
+const isSameList = <T>(a: readonly T[], b: readonly T[]): boolean =>
+  a.length === b.length && a.every((item, index) => item === b[index]);
+
+/** Whether a control state is written back exactly as it was spent. */
+const isSameState = (
+  before: CustodyAccountState,
+  after: CustodyAccountState,
+): boolean =>
+  before.logic === after.logic &&
+  before.grantGeneration === after.grantGeneration &&
+  before.nextSlot === after.nextSlot &&
+  before.outstanding === after.outstanding &&
+  isSameList(before.devices, after.devices) &&
+  isSameList(before.revoked, after.revoked);
+
+/**
+ * Whether an owner operation leaves the account's control as it found it:
+ * the control state written back unchanged, no grant issued or swept, and
+ * no certificate or withdrawal on its stake credential. Only value moves.
+ */
+const keepsControl = ({
+  operationFacts: { stateChange, issued, swept, stake },
+}: AccountOutcome): boolean =>
+  stateChange !== undefined &&
+  isSameState(stateChange.before, stateChange.after) &&
+  issued.length === 0 &&
+  swept.length === 0 &&
+  stake.certificates.length === 0 &&
+  stake.withdrawal === undefined;
+
+/** Whether every account the transaction operates is an owner operation. */
+const isOwnerPath = (operated: readonly AccountOutcome[]): boolean =>
+  operated.length > 0 && operated.every(isOwnerOperation);
+
+/**
+ * Whether the transaction is a contract call the caller allows. On the
+ * grant path both options are set and every account it operates is a
+ * grant spend, so no owner operation ever rides on it. On the owner path
+ * `allowContractCall` is set and every account it operates spends its
+ * control UTxO, so a device consents to the call, and keeps its control
+ * as it was, so the call moves value only; a creation, or an operation
+ * that rides beside a grant spend, never calls a contract.
+ */
+export const isAllowedContractCall = (
+  operated: readonly AccountOutcome[],
+  options: CustodyInspectionOptions,
+): boolean =>
+  operated.length > 0 &&
+  ((allowsContractCall(options) &&
+    operated.every(({ operationFacts }) => operationFacts.isGrantSpend)) ||
+    (options.allowContractCall === true &&
+      isOwnerPath(operated) &&
+      operated.every(keepsControl)));
+
+/**
+ * An owner operation that calls other contracts while it changes an
+ * account's control is refused for each such account, rather than as the
+ * foreign scripts it runs: consent to a call shows value moving, never a
+ * device, grant or stake change beside it.
+ *
+ * @param isCalling - whether the transaction runs or reads another
+ *   contract: a foreign script input, mint, attached script or reference
+ *   input
+ */
+export const checkOwnerCallControl = (
+  operated: readonly AccountOutcome[],
+  options: CustodyInspectionOptions,
+  isCalling: boolean,
+): CustodyRefusal[] =>
+  options.allowContractCall === true && isCalling && isOwnerPath(operated)
+    ? operated
+        .filter(outcome => !keepsControl(outcome))
+        .map(
+          ({ operationFacts: { account } }): CustodyRefusal => ({
+            code: 'custody-unsupported-operation',
+            reason: 'contract-call-with-state-change',
+            account,
+          }),
+        )
+    : [];
 
 /**
  * A logic run that draws lovelace must leave it at the account. Lovelace
