@@ -230,7 +230,8 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
         const body: Cardano.HydratedTxBody = {
           ...(inputSource === Cardano.InputSource.collaterals
             ? {
-                collateralReturn: outputs.length > 0 ? outputs[0] : undefined,
+                collateralReturn:
+                  outputs.length > 0 ? outputs[0].txOut : undefined,
                 collaterals: inputs,
                 fee: BigInt(0),
                 inputs: [],
@@ -243,14 +244,20 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
                 collaterals,
                 fee: blockfrostTxCBOR.body.fee,
                 inputs,
-                outputs,
+                outputs: outputs.map(({ txOut }) => txOut),
               }),
           certificates: blockfrostTxCBOR.body.certificates ?? [],
           directDeposits: blockfrostTxCBOR.body.directDeposits,
           donation: blockfrostTxCBOR.body.donation,
           guards: blockfrostTxCBOR.body.guards,
           mint: blockfrostTxCBOR.body.mint
-            ? new Map([...blockfrostTxCBOR.body.mint].sort())
+            ? new Map(
+                // Code-unit order on the asset id — byte-stable across devices
+                // and locales, which localeCompare is not.
+                [...blockfrostTxCBOR.body.mint].sort(([a], [b]) =>
+                  a < b ? -1 : a > b ? 1 : 0,
+                ),
+              )
             : undefined,
           proposalProcedures: blockfrostTxCBOR.body.proposalProcedures,
           validityInterval: blockfrostTxCBOR.body.validityInterval
@@ -294,6 +301,10 @@ export class BlockfrostActivityProvider extends BlockfrostProvider {
         return Ok({
           ...hydratedTx,
           blockTime: txDetails.block_time,
+          ...(inputSource === Cardano.InputSource.collaterals &&
+          outputs.length > 0
+            ? { collateralReturnIndex: outputs[0].index }
+            : {}),
         } satisfies ExtendedTxDetails);
       }),
       catchError(error => of(Err(error))),

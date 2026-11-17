@@ -125,20 +125,24 @@ export const mapTransactionToActivity = ({
 
   // Semantics on `CardanoActivityUtxoMetadata.producedOwnOutpoints`.
   // Indexed per on-chain position BEFORE filtering. A phase-2 failure's only
-  // materialised output is its collateral return, whose ledger index
-  // (|outputs|) hydration does not preserve — so record no evidence rather
-  // than a wrong outpoint; empty falls through per the field's contract.
-  const producedOwnOutpoints: Cardano.TxIn[] =
-    txDetails.inputSource === Cardano.InputSource.collaterals
-      ? []
-      : (() => {
-          const ownAddresses = new Set<string>(accountAddresses);
-          return txDetails.body.outputs.flatMap((output, index) =>
-            ownAddresses.has(output.address)
-              ? [{ txId: txDetails.id, index }]
-              : [],
-          );
-        })();
+  // materialised output is its collateral return, whose ledger index the
+  // hydrated body cannot carry — `collateralReturnIndex` does; without it,
+  // record no evidence rather than a wrong outpoint (empty falls through per
+  // the field's contract).
+  const producedOwnOutpoints: Cardano.TxIn[] = (() => {
+    const ownAddresses = new Set<string>(accountAddresses);
+    if (txDetails.inputSource === Cardano.InputSource.collaterals) {
+      const { collateralReturn } = txDetails.body;
+      return collateralReturn &&
+        txDetails.collateralReturnIndex !== undefined &&
+        ownAddresses.has(collateralReturn.address)
+        ? [{ txId: txDetails.id, index: txDetails.collateralReturnIndex }]
+        : [];
+    }
+    return txDetails.body.outputs.flatMap((output, index) =>
+      ownAddresses.has(output.address) ? [{ txId: txDetails.id, index }] : [],
+    );
+  })();
 
   return from(txSummaryInspector(txDetails)).pipe(
     mergeMap(async ({ summary }) => {

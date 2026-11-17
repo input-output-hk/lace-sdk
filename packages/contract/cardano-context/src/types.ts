@@ -341,6 +341,16 @@ export type DiscoverAddressesProps = {
 
 export type ExtendedTxDetails = Cardano.HydratedTx & {
   blockTime: number;
+  /**
+   * Outpoint index of `body.collateralReturn`, so the return can be referenced
+   * as a `Cardano.TxIn`. A `Cardano.TxOut` carries no position of its own.
+   *
+   * Set only for phase-2 failures (`inputSource === collaterals`) that produced
+   * a collateral return, and not derivable downstream: the ledger places the
+   * return at `|declared outputs|`, but the hydrated body reports `outputs: []`
+   * for these transactions, so that count is already gone.
+   */
+  collateralReturnIndex?: number;
 };
 
 /** The parts of a transaction the features read to classify its activity. */

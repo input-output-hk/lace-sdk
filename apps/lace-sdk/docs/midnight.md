@@ -1,9 +1,9 @@
 # Midnight in the Lace SDK
 
 The `@laceio/sdk/midnight` entry runs Lace's Midnight wallet engine without a user interface. It syncs the
-unshielded, shielded and DUST wallets of every in-memory Midnight account on the active network, persists their
-state through the loaded storage module, and unlocks their keys with a password the application supplies instead
-of an authentication prompt. On top of that engine it exposes the wallet operations:
+unshielded, shielded and DUST wallets of every in-memory Midnight account on the active network, saves their
+checkpoints through page mode's storage module or Worker mode's storage backend, and unlocks their keys with a
+password the application supplies instead of an authentication prompt. On top of that engine it exposes the wallet operations:
 deriving accounts, reading balances and history, building, signing, proving and submitting transactions, DUST
 registration, message signing and the dApp connector's transaction primitives.
 
@@ -73,6 +73,13 @@ export default {
 
 ## Configure
 
+For browser apps, use [Worker mode](#worker-mode): it moves engine work off the UI thread, and tabs attached to the
+same SharedWorker share the account engines and checkpoint store. Page mode runs each SDK instance's engines in its
+calling context and can block the browser UI. Keep it for Node.js or integrations that guarantee a single instance.
+
+The example below uses page mode with in-memory storage, suitable for Node.js or a controlled single instance.
+For a browser integration, set the module's `worker` option as shown in [Worker mode](#worker-mode).
+
 ```typescript
 import {
   createInMemoryWalletEntity,
@@ -136,7 +143,7 @@ wallet.dispatch('wallets.addWallet', entity);
 - **`batchUpdates`** sets how many synced events the engine applies per WASM chunk and the pause between chunks;
   `{ size: 12, spacing: 4 }` by default.
 - **`createAttestedProver`** is the trusted host adapter for a TEE prover; see [Attested proving](#attested-proving).
-- **`worker`** runs the engines in a SharedWorker the app's pages share instead of on this page; see
+- **`worker`** is recommended for browser apps. It runs the engines in a SharedWorker the app's pages share; see
   [Worker mode](#worker-mode).
 
 The module's store init applies these on startup: the networks the loadout can sync, each network's default proof
@@ -146,10 +153,13 @@ server, then the endpoint overrides. A proof server the user selected afterwards
 
 - `FEATURE_FLAG_MIDNIGHT` loads the engine. `FEATURE_FLAG_MIDNIGHT_UNSHIELDED` publishes the unshielded address
   and balances to the `addresses` and `tokens` state. `FEATURE_FLAG_NETWORK_TYPE` selects testnet or mainnet.
-- The engine persists its synced state, several megabytes per account, through the storage module in `modules`:
-  `m.storageInMemory` keeps it for the process, `m.storageWebIndexeddb` keeps it across sessions in a browser. With
-  `m.storageWebIndexeddb`, run the engine in one tab per origin, or in [Worker mode](#worker-mode) (see
-  [Limits](#limits)).
+- In page mode, the engine saves its checkpoints, several megabytes per account, through the storage module in
+  `modules`: `m.storageInMemory` keeps them for the SDK instance, `m.storageWebIndexeddb` across browser sessions.
+  In Worker mode, `worker: true` keeps checkpoints in worker memory, and `worker: { storage: 'indexeddb' }` persists
+  them across browser sessions. The page's storage module still holds the wallet's own state.
+- The IndexedDB checkpoint collection supports one writer: one SharedWorker or one page-mode SDK instance.
+  Multiple independent page-mode instances, or concurrent page-mode and Worker-mode writers, are unsupported
+  even when they sync different accounts. See [Limits](#limits) for the consequences.
 - Every SDK loadout, not only Midnight's, carries the analytics store: it mints a random user id and persists it
   under the `analytics` key of that storage. The SDK's analytics provider reports nothing.
 
@@ -249,10 +259,10 @@ The rules the engine enforces:
 
 ### Worker mode
 
-`worker` moves the engines off the page. The SDK starts one SharedWorker that every page of the app's origin
-shares, and runs each account's engine there: sync, building, signing, proving and submitting. The page stays
-responsive while the engine works. The helpers take the same arguments and return the same results and errors in
-both modes, and transaction values are the same opaque values.
+Worker mode is the recommended browser setup. `worker` moves the engines off the page into a SharedWorker:
+sync, building, signing, proving and submitting. Pages attached to the same worker share its engines and checkpoint
+store, so engine work does not block their UI thread. The helpers take the same arguments and return the same
+results and errors in both modes, and transaction values are the same opaque values.
 
 ```typescript
 import { createMidnightModule } from '@laceio/sdk/midnight';
@@ -268,7 +278,7 @@ const workerModule = createMidnightModule({
   browser ends the worker when the app's last page closes, and the next start syncs again.
   `worker: { storage: 'indexeddb' }` keeps it in the origin's IndexedDB, in the same collection that page mode uses
   with `m.storageWebIndexeddb`. The storage module in `modules` still holds the wallet's own state on each page. That
-  collection takes one writer per origin: Worker mode or one page-mode tab, never both at once (see [Limits](#limits)).
+  collection takes one writer: one SharedWorker or one page-mode SDK instance, never both at once (see [Limits](#limits)).
 - **One engine per account.** A page that runs an account whose engine already runs in the worker attaches to it.
   The page's password must open the account's keys, or its calls return an `Error` naming the account. Its
   endpoints, proof server and storage kind must match the running engine's, or its calls return
@@ -303,7 +313,8 @@ const workerModule = createMidnightModule({
   or later, and Chrome for Android 148 or later. It also needs a secure context: the app is served over HTTPS or from
   localhost, not over plain HTTP. Elsewhere, Node.js and React Native included, every call that needs the engine
   returns `MidnightWorkerUnsupportedError`, and `observeMidnightBalances` ends with it. There is no fallback to the
-  page: create the module without `worker` there.
+  page. In Node.js, create the module without `worker`. A browser integration that uses page mode must accept its UI
+  cost and ensure a single instance; lack of SharedWorker support does not make concurrent page-mode writers safe.
 - **Proving.** The worker proves through a proof server given by URL. `createAttestedProver` cannot run in the
   worker, so combining it with `worker` makes `createMidnightModule` throw
   `MidnightAttestedProverUnsupportedError`. For `getMidnightProvingProvider`, the page looks up the circuit's key
@@ -766,6 +777,22 @@ SDK's API and can change with a wallet SDK update.
   wallets take minutes to sync; keep both off any UI thread and show progress.
 - **Provers.** A delegated prover, attested or not, receives every transaction and circuit it proves. In-process and
   paired-device proving are not supported.
+- **Concurrent IndexedDB checkpoint writers.** Use one SharedWorker with `worker: { storage: 'indexeddb' }`, or one
+  page-mode SDK instance with `m.storageWebIndexeddb`. Multiple independent page-mode instances, including two tabs,
+  and concurrent page-mode and Worker-mode writers to that collection are unsupported. There are two separate risks:
+
+  - Even for different accounts or wallets, independent stores can overwrite the collection index from stale cached
+    copies and lose entries. An account then syncs again from the start, or deletion and resync cleanup leave its
+    checkpoint on disk.
+  - For the same account, independent engines can also overwrite each other's checkpoint, replacing saved progress
+    with another engine's state.
+
+  Both risks existed with multiple page-mode instances before Worker mode. The SDK does not enforce this limit or
+  coordinate independent writers. Tabs attached to the same SharedWorker share its store and account engines.
+  When changing modes, stop the old writers, including open tabs, before starting the new mode against the same collection.
+  The checkpoints hold no keys or passwords. `worker: true` and page mode with `m.storageInMemory` do not persist
+  checkpoints in IndexedDB.
+
 - **Worker mode.**
   - The page loads no ledger WebAssembly: the engine's code loads only in the worker, and the build refuses an
     import of the Midnight entry that would bring it back. The page still runs what is not the engine: deriving
@@ -780,12 +807,6 @@ SDK's API and can change with a wallet SDK update.
   - When the app's last page closes, the browser ends the worker with no final save. A submission still in flight
     then has an unknown outcome, and with `storage: 'indexeddb'` a wallet deletion that waited for such a submission
     leaves that account's synced state behind.
-  - With IndexedDB, one origin must have one writer of the engines' synced state: Worker mode with
-    `storage: 'indexeddb'`, or page mode with `m.storageWebIndexeddb` in one tab. Page mode with
-    `m.storageWebIndexeddb` in two tabs, or in one tab while Worker mode with `storage: 'indexeddb'` runs, are two
-    writers of the state's one index: one can drop the other's entries, so an account syncs again from the start, or
-    a deleted account's synced state stays on disk. The synced state holds no keys and no password. `worker: true`
-    and `m.storageInMemory` write no IndexedDB. Nothing enforces one writer yet.
   - A wrong password returns a plain `Error`: the SDK has no named authentication error.
   - A `startTimeout` above 120 seconds does not extend the worker's own bound on an engine start: such a start
     returns `MidnightWalletNotReadyError` naming 120 seconds. The bound covers restoring the account up to the

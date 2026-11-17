@@ -157,6 +157,74 @@ describe('BlockfrostActivityProvider', () => {
       expect(txDetails.blockTime).toEqual(txDetailsResponse.block_time);
     });
 
+    // Payload shape verified against the real phase-2-failed preprod tx
+    // 9d9757188cab05a6a1a4cb3d34d69cabd63faedf9fb0e436144c3b36d34625b5:
+    // Blockfrost serves the collateral return as the tx's ACTUAL output —
+    // unflagged (`collateral: false`), at its ledger index (= |declared
+    // outputs|) — and the consumed collateral inputs likewise unflagged.
+    it('hydrates a phase-2 failure: collateral return with its ledger index, no regular outputs', async () => {
+      const invalidTxDetailsResponse: Responses['tx_content'] = {
+        ...txDetailsResponse,
+        valid_contract: false,
+      };
+      const invalidTxUtxosResponse: Responses['tx_content_utxo'] = {
+        hash: txUtxosResponse.hash,
+        inputs: [txUtxosResponse.inputs[0]],
+        outputs: [
+          {
+            ...txUtxosResponse.outputs[1],
+            output_index: 1,
+          },
+        ],
+      };
+
+      mockResponses(request, [
+        [`txs/${txId}`, { data: invalidTxDetailsResponse }],
+        [`txs/${txId}/cbor`, { data: txCborResponse }],
+        [`txs/${txId}/utxos`, { data: invalidTxUtxosResponse }],
+      ]);
+
+      const txDetails = (
+        await firstValueFrom(provider.getTransactionDetails(txId))
+      ).unwrap();
+
+      expect(txDetails.inputSource).toEqual(Cardano.InputSource.collaterals);
+      expect(txDetails.body.outputs).toHaveLength(0);
+      expect(txDetails.body.inputs).toHaveLength(0);
+      expect(txDetails.body.collaterals).toHaveLength(1);
+      expect(txDetails.body.collateralReturn?.address).toEqual(
+        invalidTxUtxosResponse.outputs[0].address,
+      );
+      expect(txDetails.body.fee).toEqual(0n);
+      expect(txDetails.collateralReturnIndex).toEqual(1);
+    });
+
+    it('leaves collateralReturnIndex unset when a phase-2 failure produced no collateral return', async () => {
+      const invalidTxDetailsResponse: Responses['tx_content'] = {
+        ...txDetailsResponse,
+        valid_contract: false,
+      };
+      const noReturnUtxosResponse: Responses['tx_content_utxo'] = {
+        hash: txUtxosResponse.hash,
+        inputs: [txUtxosResponse.inputs[0]],
+        outputs: [],
+      };
+
+      mockResponses(request, [
+        [`txs/${txId}`, { data: invalidTxDetailsResponse }],
+        [`txs/${txId}/cbor`, { data: txCborResponse }],
+        [`txs/${txId}/utxos`, { data: noReturnUtxosResponse }],
+      ]);
+
+      const txDetails = (
+        await firstValueFrom(provider.getTransactionDetails(txId))
+      ).unwrap();
+
+      expect(txDetails.inputSource).toEqual(Cardano.InputSource.collaterals);
+      expect(txDetails.body.collateralReturn).toBeUndefined();
+      expect(txDetails.collateralReturnIndex).toBeUndefined();
+    });
+
     it('copies treasury donation from the parsed cbor into the body', async () => {
       // Same tx as txCborResponse but with a treasury donation (map key 22) of 1_000_000 lovelace.
       const txCborWithDonation: Responses['tx_content_cbor'] = {

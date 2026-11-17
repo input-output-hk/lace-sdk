@@ -348,12 +348,17 @@ describe('mapTransactionToActivity', () => {
       }
     });
 
-    // A phase-2 failure created nothing but its collateral return, and
-    // hydration does not preserve that output's ledger index — so even an
-    // own-address collateral return records nothing. A wrong outpoint would
-    // withhold the cache key until the account's next transaction; recording
-    // body.outputs would wait forever on outputs the chain never produced.
-    it('records no produced outpoints when the chain consumed collateral, even for an own collateral return', async () => {
+    // A phase-2 failure created nothing but its collateral return; recording
+    // body.outputs for it would leave cardano-sync waiting forever on outputs
+    // the chain never produced. The collateral return itself DID materialise,
+    // at the ledger index the provider carries on `collateralReturnIndex`, so
+    // it is the one outpoint whose absence from a fetch still proves a
+    // trailing provider.
+    it('records only the own collateral return when the chain consumed collateral', async () => {
+      const declaredOutput = {
+        address: Cardano.PaymentAddress(mockAccountAddresses[0]),
+        value: { coins: 5000000n },
+      };
       mockTxSummaryInspector.mockReturnValue(
         of({ summary: summaryOf({ coins: -1000n }) }),
       );
@@ -364,9 +369,10 @@ describe('mapTransactionToActivity', () => {
           txDetails: {
             ...mockTxDetails,
             inputSource: Cardano.InputSource.collaterals,
+            collateralReturnIndex: 1,
             body: {
               ...mockTxDetails.body,
-              outputs: [ownOutput],
+              outputs: [declaredOutput],
               collaterals: [],
               collateralReturn: {
                 address: Cardano.PaymentAddress(mockAccountAddresses[0]),
@@ -393,9 +399,77 @@ describe('mapTransactionToActivity', () => {
               Cardano: { producedOwnOutpoints: unknown };
             }
           ).Cardano.producedOwnOutpoints,
-        ).toEqual([]);
+        ).toEqual([{ txId: mockTxDetails.id, index: 1 }]);
       }
     });
+
+    // A collateral return at a foreign address proves nothing about this
+    // account's UTxO set, and one whose index is missing (legacy hydration)
+    // must record no evidence rather than a wrong outpoint — a wrong outpoint
+    // would withhold the cache key until the account's next transaction.
+    it.each([
+      [
+        'the collateral return pays a foreign address',
+        {
+          collateralReturnIndex: 1,
+          collateralReturnAddress:
+            'addr_test1qzuk9c0qaq8ustvatan8xelmp3wjn9n99c78004dsfjwvs4h5kpytryyph0d9vyzj9g9e5rwsnxc2djcandyywdvu8kq54t0f8',
+        },
+      ],
+      [
+        'the collateral return index is not carried',
+        {
+          collateralReturnIndex: undefined,
+          collateralReturnAddress: mockAccountAddresses[0],
+        },
+      ],
+    ])(
+      'records no produced outpoints when %s',
+      async (_, { collateralReturnIndex, collateralReturnAddress }) => {
+        mockTxSummaryInspector.mockReturnValue(
+          of({ summary: summaryOf({ coins: -1000n }) }),
+        );
+
+        const result = await firstValueFrom(
+          mapTransactionToActivity({
+            accountId: AccountId('account1'),
+            txDetails: {
+              ...mockTxDetails,
+              inputSource: Cardano.InputSource.collaterals,
+              collateralReturnIndex,
+              body: {
+                ...mockTxDetails.body,
+                outputs: [],
+                collaterals: [],
+                collateralReturn: {
+                  address: Cardano.PaymentAddress(collateralReturnAddress),
+                  value: { coins: 3000000n },
+                },
+              },
+            } as ExtendedTxDetails,
+            accountAddresses: mockAccountAddresses.map(addr =>
+              CardanoPaymentAddress(addr),
+            ),
+            rewardAccount: CardanoRewardAccount(mockRewardAccount),
+            protocolParameters: mockProtocolParameters,
+            resolveInput: mockResolveInput,
+            logger,
+            enabledExtensionActivities: allExtensionActivities,
+          }),
+        );
+
+        expect(result.isOk()).toBe(true);
+        if (result.isOk()) {
+          expect(
+            (
+              result.value.blockchainSpecific as {
+                Cardano: { producedOwnOutpoints: unknown };
+              }
+            ).Cardano.producedOwnOutpoints,
+          ).toEqual([]);
+        }
+      },
+    );
 
     // A phase-2 failure consumes the COLLATERALS; its `body.inputs` were never
     // spent and stay in the account's UTxO set. Recording them would leave

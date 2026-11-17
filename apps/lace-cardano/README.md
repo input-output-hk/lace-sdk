@@ -32,7 +32,7 @@ Import each area from its subpath; nothing is exported from the package's root.
 | `@laceio/cardano/crypto`         | BIP32-Ed25519 keys and derivation, Ed25519 signatures, Blake2b                                               |
 | `@laceio/cardano/util`           | Opaque string types, hex and bech32 helpers, serialization of plain objects                                  |
 | `@laceio/cardano/key-management` | Key agents from recovery words, accounts from a public key, derivation paths, CIP-8 data signing             |
-| `@laceio/cardano/tx-builder`     | `TransactionBuilder`, its coin selectors, and the fee and minimum ada rules                                  |
+| `@laceio/cardano/tx-builder`     | `TransactionBuilder` and `SubTransactionBuilder`, the coin selectors, and the fee and minimum ada rules      |
 | `@laceio/cardano/dapp-connector` | The wallet side of CIP-30, CIP-95 and CIP-142                                                                |
 
 The subpaths resolve under every TypeScript `moduleResolution` setting, and
@@ -62,6 +62,11 @@ console.log(tx.getId(), tx.body().fee(), tx.body().outputs().length);
   subpath holds, and how to move to it from the `@cardano-sdk` packages.
 - [Use the Cardano domain layer without a wallet](https://sdk.lace.io/docs/guides/cardano-domain-layer/): decode a
   transaction, derive an address, compute minimum ada, sign on a Ledger device.
+- [The Dijkstra era](https://sdk.lace.io/docs/learn/cardano-dijkstra/): sub transactions and batches, guards, direct
+  deposits, account balance intervals, Plutus V4 and the pool BLS key, with recipes that
+  [build, sign and batch a sub transaction](https://sdk.lace.io/docs/guides/recipes/sub-transaction/),
+  [guard a transaction and deposit into a reward account](https://sdk.lace.io/docs/guides/recipes/guards-and-deposits/)
+  and [read a Dijkstra transaction](https://sdk.lace.io/docs/guides/recipes/read-dijkstra-transaction/).
 - API reference, one page per subpath: [core](https://sdk.lace.io/docs/reference/cardano-core/),
   [crypto](https://sdk.lace.io/docs/reference/cardano-crypto/), [util](https://sdk.lace.io/docs/reference/cardano-util/),
   [key-management](https://sdk.lace.io/docs/reference/cardano-key-management/),

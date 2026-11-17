@@ -261,16 +261,24 @@ export const BlockfrostToCardanoSDK = {
     const inputs = utxoResponse.inputs
       .filter(input => !input.collateral && !input.reference)
       .map(BlockfrostToCardanoSDK.hydratedTxIn);
-    const outputPromises: Cardano.TxOut[] = utxoResponse.outputs
-      .filter(output => !output.collateral)
-      .map(output => {
-        const foundScript = txContent?.body.outputs.find(
-          o => o.address === output.address,
-        );
+    // `collateral: true` marks a DECLARED, never-materialised collateral
+    // return on a valid tx. A phase-2 failure's collateral return is the tx's
+    // ACTUAL output and arrives unflagged, carrying its ledger `output_index`
+    // (= |declared outputs|) — kept alongside the TxOut, which cannot hold it.
+    const outputs: { txOut: Cardano.TxOut; index: number }[] =
+      utxoResponse.outputs
+        .filter(output => !output.collateral)
+        .map(output => {
+          const foundScript = txContent?.body.outputs.find(
+            o => o.address === output.address,
+          );
 
-        return BlockfrostToCardanoSDK.txOut(output, foundScript);
-      });
+          return {
+            txOut: BlockfrostToCardanoSDK.txOut(output, foundScript),
+            index: output.output_index,
+          };
+        });
 
-    return { collaterals, inputs, outputs: outputPromises };
+    return { collaterals, inputs, outputs };
   },
 };
