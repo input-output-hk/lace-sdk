@@ -27,7 +27,7 @@ const BUF_INF_POS = Buffer.from('7ff0000000000000', 'hex');
 
 /** A simple writer for Concise Binary Object Representation (CBOR) encoded data. */
 export class CborWriter {
-  #buffer = Buffer.from([]);
+  #chunks: Buffer[] = [];
 
   /**
    * Writes the provided value as a tagged bignum encoding, as described in RFC7049 section 2.4.2.
@@ -49,7 +49,7 @@ export class CborWriter {
     const buffer = Buffer.from(str, 'hex');
     this.writeTag(tag);
     this.#writeTypeValue(CborMajorType.ByteString, buffer.length);
-    this.#buffer = Buffer.concat([this.#buffer, buffer]);
+    this.#chunks.push(buffer);
 
     return this;
   }
@@ -72,7 +72,7 @@ export class CborWriter {
    */
   writeByteString(value: Uint8Array): CborWriter {
     this.#writeTypeValue(CborMajorType.ByteString, value.length);
-    this.#buffer = Buffer.concat([this.#buffer, value]);
+    this.#chunks.push(Buffer.from(value));
 
     return this;
   }
@@ -83,11 +83,9 @@ export class CborWriter {
    * @param value The string.
    */
   writeTextString(value: string): CborWriter {
-    this.#writeTypeValue(
-      CborMajorType.Utf8String,
-      Buffer.from(value, 'utf8').length,
-    );
-    this.#buffer = Buffer.concat([this.#buffer, Buffer.from(value, 'utf8')]);
+    const bytes = Buffer.from(value, 'utf8');
+    this.#writeTypeValue(CborMajorType.Utf8String, bytes.length);
+    this.#chunks.push(bytes);
 
     return this;
   }
@@ -98,7 +96,7 @@ export class CborWriter {
    * @param value The value to write.
    */
   writeEncodedValue(value: Uint8Array): CborWriter {
-    this.#buffer = Buffer.concat([this.#buffer, value]);
+    this.#chunks.push(Buffer.from(value));
 
     return this;
   }
@@ -207,7 +205,7 @@ export class CborWriter {
         this.writeEncodedValue(b4.valueOf());
       } else {
         const b8 = Buffer.allocUnsafe(8);
-        b8.writeFloatBE(value, 0);
+        b8.writeDoubleBE(value, 0);
         this.#pushUInt8(DOUBLE);
         this.writeEncodedValue(b8.valueOf());
       }
@@ -243,17 +241,29 @@ export class CborWriter {
 
   /** Returns a new array containing the encoded value encoded as a hex string. */
   encodeAsHex(): HexBlob {
-    return this.#buffer.toString('hex') as unknown as HexBlob;
+    return this.#joined().toString('hex') as unknown as HexBlob;
   }
 
   /** Returns a new array containing the encoded value. */
   encode(): Uint8Array {
-    return new Uint8Array(this.#buffer);
+    return new Uint8Array(this.#joined());
   }
 
   /** Resets the writer to have no data. */
   reset() {
-    this.#buffer = Buffer.from([]);
+    this.#chunks = [];
+  }
+
+  /**
+   * Joins the chunks written so far into one buffer, kept as the only chunk so
+   * that encoding again does not join them again.
+   */
+  #joined(): Buffer {
+    if (this.#chunks.length !== 1) {
+      this.#chunks = [Buffer.concat(this.#chunks)];
+    }
+
+    return this.#chunks[0];
   }
 
   /**
@@ -291,7 +301,7 @@ export class CborWriter {
     const b = Buffer.allocUnsafe(1);
     b.writeUInt8(value, 0);
 
-    this.#buffer = Buffer.concat([this.#buffer, b]);
+    this.#chunks.push(b);
   }
 
   /**
@@ -303,7 +313,7 @@ export class CborWriter {
     const b = Buffer.allocUnsafe(2);
     b.writeUInt16BE(value, 0);
 
-    this.#buffer = Buffer.concat([this.#buffer, b]);
+    this.#chunks.push(b);
   }
 
   /**
@@ -315,6 +325,6 @@ export class CborWriter {
     const b = Buffer.allocUnsafe(4);
     b.writeUInt32BE(value, 0);
 
-    this.#buffer = Buffer.concat([this.#buffer, b]);
+    this.#chunks.push(b);
   }
 }

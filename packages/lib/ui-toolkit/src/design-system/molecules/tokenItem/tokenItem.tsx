@@ -162,6 +162,7 @@ export const TokenItem = ({
           <View pointerEvents="none">
             <RadioButton
               isChecked={isChecked}
+              isDisabled={isDisabled}
               onRadioValueChange={onRadioValueChange}
               testID={`${testID}-radio-button`}
             />

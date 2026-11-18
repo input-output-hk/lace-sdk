@@ -1,6 +1,6 @@
 {
   "name": "@laceio/cardano",
-  "version": "0.2.0-canary.1",
+  "version": "0.2.0-canary.2",
   "private": false,
   "description": "The Cardano domain layer Lace builds on: ledger types and CBOR, cryptography, key management, the transaction builder and the CIP-30 dApp connector.",
   "repository": {

@@ -64,8 +64,13 @@ export const decodeHalf = (data: Uint8Array): number => {
  *
  * @param value A single-precision float to be encoded as a half-precision floating-point number.
  * @returns A Uint8Array containing the 16-bit half-precision floating-point number in big-endian format.
+ * @throws LossOfPrecisionException When the value has no exact half-precision representation.
  */
 export const encodeHalf = (value: number): Uint8Array => {
+  if (Math.fround(value) !== value) {
+    throw new LossOfPrecisionException(LOSS_OF_PRECISION_MSG);
+  }
+
   const u32 = Buffer.allocUnsafe(4);
   u32.writeFloatBE(value, 0);
   const u = u32.readUInt32BE(0);

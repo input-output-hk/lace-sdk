@@ -132,10 +132,7 @@ export const AddAssetsTemplate = ({
             rate={item.rate}
             conversion={item.conversion}
             isPriceStale={item.isPriceStale}
-            onRadioValueChange={
-              shouldShowNfts ? handleShowRadioValueChange : undefined
-            }
-            onPress={!shouldShowNfts ? handleShowRadioValueChange : undefined}
+            onRadioValueChange={handleShowRadioValueChange}
             isChecked={isChecked}
             shielded={isShielded}
             isLoading={isLoading}
@@ -144,7 +141,7 @@ export const AddAssetsTemplate = ({
         </View>
       );
     },
-    [onAssetsSelectionChanged, selectedTokens, shouldShowNfts, isLoading],
+    [onAssetsSelectionChanged, selectedTokens, isLoading],
   );
 
   const keyExtractor = (item: TokenUIData) => item?.tokenId;

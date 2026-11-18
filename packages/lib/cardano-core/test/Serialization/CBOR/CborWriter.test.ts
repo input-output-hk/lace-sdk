@@ -1,4 +1,4 @@
-import { CborTag, CborWriter } from '../../../src/Serialization';
+import { CborReader, CborTag, CborWriter } from '../../../src/Serialization';
 
 // Data points taken from https://tools.ietf.org/html/rfc7049#appendix-A
 // Additional pairs generated using http://cbor.me/
@@ -241,6 +241,38 @@ describe('CborWriter', () => {
       ).toEqual('fa7f7fffff');
     });
 
+    it('writes a single-precision float when a half-precision one would lose bits', async () => {
+      expect(new CborWriter().writeFloat(100_000).encodeAsHex()).toEqual(
+        'fa47c35000',
+      );
+      expect(new CborWriter().writeFloat(1 + 2 ** -20).encodeAsHex()).toEqual(
+        'fa3f800008',
+      );
+    });
+
+    it('writes a double-precision float when no smaller float holds the value exactly', async () => {
+      expect(new CborWriter().writeFloat(1.1).encodeAsHex()).toEqual(
+        'fb3ff199999999999a',
+      );
+      expect(new CborWriter().writeFloat(-4.1).encodeAsHex()).toEqual(
+        'fbc010666666666666',
+      );
+      expect(new CborWriter().writeFloat(1e300).encodeAsHex()).toEqual(
+        'fb7e37e43c8800759c',
+      );
+      expect(new CborWriter().writeFloat(1 + 2 ** -30).encodeAsHex()).toEqual(
+        'fb3ff0000000400000',
+      );
+    });
+
+    it('writes floats that read back as the value written', async () => {
+      for (const value of [0.1, 1.1, 1 + 2 ** -30, 1 + 2 ** -20, 1e300, -4.1]) {
+        const hex = new CborWriter().writeFloat(value).encodeAsHex();
+
+        expect(new CborReader(hex).readDouble()).toEqual(value);
+      }
+    });
+
     it('can write null values', async () => {
       expect(new CborWriter().writeNull().encodeAsHex()).toEqual('f6');
     });
@@ -458,6 +490,102 @@ describe('CborWriter', () => {
       writer.writeEndMap();
 
       expect(writer.encodeAsHex()).toEqual('bf616161412002404101ff');
+    });
+  });
+
+  describe('Encoding', () => {
+    it('keeps writing after an encode', async () => {
+      const writer = new CborWriter();
+
+      writer.writeStartArray(2).writeInt(1);
+
+      expect(writer.encodeAsHex()).toEqual('8201');
+
+      writer.writeInt(2);
+
+      expect(writer.encodeAsHex()).toEqual('820102');
+      expect(writer.encode()).toEqual(new Uint8Array([0x82, 0x01, 0x02]));
+    });
+
+    it('is not changed by a later change to an array it was given', async () => {
+      const bytes = new Uint8Array([1, 2]);
+      const encoded = new Uint8Array([0x03]);
+      const writer = new CborWriter();
+
+      writer.writeByteString(bytes).writeEncodedValue(encoded);
+      bytes[0] = 0xff;
+      encoded[0] = 0xff;
+
+      expect(writer.encodeAsHex()).toEqual('42010203');
+    });
+
+    it('is not changed by a change to an array it returned', async () => {
+      const writer = new CborWriter().writeInt(1);
+
+      writer.encode()[0] = 0xff;
+
+      expect(writer.encodeAsHex()).toEqual('01');
+    });
+
+    it('writes nothing after a reset', async () => {
+      const writer = new CborWriter().writeInt(1);
+
+      writer.encodeAsHex();
+      writer.reset();
+
+      expect(writer.encodeAsHex()).toEqual('');
+
+      writer.writeInt(2);
+
+      expect(writer.encodeAsHex()).toEqual('02');
+    });
+
+    it('copies what it wrote once, when it first encodes it', async () => {
+      const concat = vi.spyOn(Buffer, 'concat');
+      const copiedBytes = () =>
+        concat.mock.results.reduce(
+          (total, { value }) => total + (value as Buffer).length,
+          0,
+        );
+
+      try {
+        const writer = new CborWriter().writeStartArray(10_000);
+        for (let i = 0; i < 10_000; ++i) {
+          writer.writeInt(i).writeByteString(new Uint8Array(32));
+        }
+
+        expect(copiedBytes()).toEqual(0);
+
+        const encoded = writer.encode();
+
+        expect(copiedBytes()).toEqual(encoded.length);
+
+        writer.encodeAsHex();
+        writer.encode();
+
+        expect(copiedBytes()).toEqual(encoded.length);
+
+        writer.writeInt(1);
+        writer.encode();
+
+        expect(copiedBytes()).toEqual(2 * encoded.length + 1);
+      } finally {
+        concat.mockRestore();
+      }
+    });
+
+    it('writes many items', async () => {
+      const writer = new CborWriter().writeStartArray(100_000);
+
+      for (let i = 0; i < 100_000; ++i) writer.writeInt(i % 24);
+
+      const encoded = writer.encode();
+
+      expect(encoded.length).toEqual(100_005);
+      expect(Buffer.from(encoded.subarray(0, 5)).toString('hex')).toEqual(
+        '9a000186a0',
+      );
+      expect(encoded[100_004]).toEqual(99_999 % 24);
     });
   });
 });
