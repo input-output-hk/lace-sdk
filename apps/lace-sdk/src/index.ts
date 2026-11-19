@@ -287,6 +287,24 @@ export { HexBlob } from '@lace-lib/cardano-util';
 // Cardano chain IDs and CBOR serialization
 export { Cardano, Serialization } from '@lace-lib/cardano-core';
 
+// RxJS utilities of @cardano-sdk/util-rxjs
+export {
+  TrackerSubject,
+  blockingWithLatestFrom,
+  concatAndCombineLatest,
+  finalizeWithLatest,
+  passthrough,
+  poll,
+  shareRetryBackoff,
+  toEmpty,
+} from '@lace-lib/cardano-util-rxjs';
+export type {
+  BehaviorObservable,
+  ObservableType,
+  PollProps,
+  ReconnectionConfig,
+} from '@lace-lib/cardano-util-rxjs';
+
 // Swap provider (Steelswap + shared swap types)
 export * from './swap';
 

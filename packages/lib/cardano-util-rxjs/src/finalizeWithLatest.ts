@@ -2,6 +2,10 @@ import { finalize, tap } from 'rxjs';
 
 import type { Observable } from 'rxjs';
 
+/**
+ * Like `finalize`, but calls `callback` with the last value the source emitted,
+ * or null when it emitted none.
+ */
 export const finalizeWithLatest =
   <T>(callback: (latest: T | null) => void) =>
   (value$: Observable<T>) => {

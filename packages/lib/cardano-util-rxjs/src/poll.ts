@@ -19,17 +19,31 @@ import type { Logger } from 'ts-log';
 
 const POLL_UNTIL_RETRY = Symbol('POLL_UNTIL_RETRY');
 
+/** What `poll` samples, when, and how it retries. */
 export interface PollProps<T> {
+  /** Reads the current value. */
   sample: () => Promise<T>;
+  /** How a failed sample, or one `pollUntil` refuses, is retried. */
   retryBackoffConfig: RetryBackoffConfig;
+  /** Samples again on each emission; by default samples once. */
   trigger$?: Observable<unknown>;
+  /** Compares consecutive values, so an unchanged one is not emitted again; strict equality by default. */
   equals?: (t1: T, t2: T) => boolean;
+  /** How a new trigger treats a sample in flight; `switchMap`, which cancels it, by default. */
   combinator?: typeof switchMap;
+  /** Stops polling when it emits. */
   cancel$?: Observable<unknown>;
+  /** Whether a sampled value is final; one that is not is emitted and sampled again. Every value by default. */
   pollUntil?: (v: T) => boolean;
+  /** Receives the sample errors and retries. */
   logger: Logger;
 }
 
+/**
+ * Samples a value on every `trigger$` emission, retrying failed samples with
+ * backoff, and emits each value that differs from the previous one until
+ * `cancel$` emits.
+ */
 export const poll = <T>({
   sample,
   retryBackoffConfig,

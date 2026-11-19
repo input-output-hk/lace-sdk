@@ -19,9 +19,19 @@ import type { Observable, OperatorFunction } from 'rxjs';
 
 const EMPTY_DEPENDENCY = Symbol('EMPTY');
 
+/**
+ * Like `withLatestFrom`, pairing each source value with the latest value of
+ * `dependency$`, but holds the source values until `dependency$` first emits
+ * instead of dropping them.
+ */
 export function blockingWithLatestFrom<T, O>(
   dependency$: Observable<O>,
 ): OperatorFunction<T, [T, O]>;
+/**
+ * Like `withLatestFrom`, combining each source value with the latest value of
+ * `dependency$` through `combinator`, but holds the source values until
+ * `dependency$` first emits instead of dropping them.
+ */
 export function blockingWithLatestFrom<T, O, R>(
   dependency$: Observable<O>,
   combinator: (...value: [T, O]) => R,

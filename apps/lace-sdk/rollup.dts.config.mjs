@@ -327,7 +327,10 @@ for (const entry of entries) injectAugmentationImports(entry);
 
 // The declarations carry the types they take from these packages, so the SDK
 // does not depend on them.
-const INLINED_TYPE_PACKAGES = ['@midnight-ntwrk/dapp-connector-api'];
+const INLINED_TYPE_PACKAGES = [
+  '@midnight-ntwrk/dapp-connector-api',
+  'backoff-rxjs',
+];
 
 const isInlinedTypePackage = source =>
   INLINED_TYPE_PACKAGES.some(

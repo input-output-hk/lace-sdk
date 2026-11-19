@@ -2,9 +2,8 @@
 dist
 dist-web
 dist-canary
-dist-extension
-dist-approval
 dist-native
+dist-guest
 build
 coverage
 reports

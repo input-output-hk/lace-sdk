@@ -16,7 +16,7 @@ interface AuthorizedDAppsSheetProps {
     category: string;
     icon: string;
     blockchain?: BlockchainIconName;
-    onDAppRemove: () => void;
+    onDAppRemove?: () => void;
   }>;
   testID?: string;
 }

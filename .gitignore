@@ -48,9 +48,8 @@ dist
 dist-web/
 dist-canary/
 apps/lace-sdk/tsconfig.dts-gen.generated.json
-dist-extension/
-dist-approval/
 dist-native/
+dist-guest/
 
 # cache
 .nx
@@ -91,12 +90,6 @@ npm-debug.*
 web-build/
 cache/
 apps/lace-mobile-e2e/artifacts
-# perf harness outputs: archived builds, raw traces, network fixtures, seeded profiles, machine-local canary history
-apps/lace-next/perfs/artifacts/
-apps/lace-next/perfs/extension/traces/
-apps/lace-next/perfs/extension/fixtures/
-apps/lace-next/perfs/extension/profiles/
-apps/lace-next/perfs/extension/canary-history.json
 .junie/
 /android/
 # expo prebuild output (scoped to apps so ci/android + ci/ios stay tracked)
@@ -117,7 +110,6 @@ apps/lace-next-storybook/reports/
 
 # Generated validation payloads belong in local reports or CI artifacts.
 apps/lace-next-storybook/evidence/
-apps/lace-next-e2e/evidence/
 apps/lace-next-mobile-e2e/evidence/
 docs/testing/lw-15593-*/
 docs/testing/lw-15593-*.json
