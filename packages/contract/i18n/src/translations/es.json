@@ -808,7 +808,6 @@
   "dapp-connector.cardano.authorize.details.utxos": "Tus UTXOs",
   "dapp-connector.cardano.authorize.details.balance": "Tu saldo de billetera",
   "dapp-connector.cardano.authorize.details.addresses": "Tus direcciones de billetera, incluyendo cuentas de recompensas",
-  "dapp-connector.cardano.authorize.source-account": "Cuenta de origen",
   "dapp-connector.cardano.authorize.status.trusted": "Solo conectar con DApps de confianza",
   "dapp-connector.cardano.authorize.status.blocked": "Esta DApp está en la lista negra",
   "dapp-connector.cardano.authorize.status.unsecured": "Este sitio no es seguro",

@@ -153,6 +153,13 @@ export interface CreateLedgerTransportProps {
 const transportTypedError = (error?: any) =>
   new errors.TransportError('Ledger transport failed', error);
 
+// ledgerjs assigns the same user-rejection meaning to pre-v8 and v8 statuses.
+const isDeviceRejection = (error: unknown): boolean =>
+  typeof error === 'object' &&
+  error !== null &&
+  'code' in error &&
+  (error.code === 0x6e_09 || error.code === 0x69_85);
+
 const hasRegistrationOrRetirementCerts = (
   certificates: Certificate[] | null | undefined,
 ): boolean => {
@@ -783,7 +790,7 @@ export class LedgerKeyAgent extends KeyAgentBase {
       const xPubHex = `${extendedPublicKey.publicKeyHex}${extendedPublicKey.chainCodeHex}`;
       return Crypto.Bip32PublicKeyHex(xPubHex);
     } catch (error: any) {
-      if (error.code === 28_169) {
+      if (isDeviceRejection(error)) {
         throw new errors.AuthenticationError(
           'Failed to export extended account public key',
           error,
@@ -1017,7 +1024,7 @@ export class LedgerKeyAgent extends KeyAgentBase {
         ),
       );
     } catch (error: any) {
-      if (error.code === 28_169) {
+      if (isDeviceRejection(error)) {
         throw new errors.AuthenticationError(
           'Transaction signing aborted',
           error,
@@ -1106,7 +1113,7 @@ export class LedgerKeyAgent extends KeyAgentBase {
         signature: coreUtils.bytesToHex(coseSign1),
       };
     } catch (error: any) {
-      if (error.code === 28_169) {
+      if (isDeviceRejection(error)) {
         throw new errors.AuthenticationError(
           'Transaction signing aborted',
           error,

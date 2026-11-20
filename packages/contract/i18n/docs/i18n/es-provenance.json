@@ -492,7 +492,6 @@
   "dapp-connector.cardano.authorize.details.utxos": "unknown",
   "dapp-connector.cardano.authorize.details.balance": "unknown",
   "dapp-connector.cardano.authorize.details.addresses": "unknown",
-  "dapp-connector.cardano.authorize.source-account": "unknown",
   "dapp-connector.cardano.authorize.status.trusted": "unknown",
   "dapp-connector.cardano.authorize.status.blocked": "unknown",
   "dapp-connector.cardano.authorize.status.unsecured": "unknown",

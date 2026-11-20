@@ -118,3 +118,4 @@ docs/testing/lw-15593/**/*.raw.*
 # EAS local-signing file: carries plain-text signing passwords; CI writes it
 # on runners only — a local copy must never be committable.
 apps/lace-next/credentials.json
+apps/lace-mobile/credentials.json

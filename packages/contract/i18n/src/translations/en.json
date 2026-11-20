@@ -808,7 +808,6 @@
   "dapp-connector.cardano.authorize.details.utxos": "Your wallet UTXOs",
   "dapp-connector.cardano.authorize.details.balance": "Your wallet balance",
   "dapp-connector.cardano.authorize.details.addresses": "Your wallet addresses, including reward accounts",
-  "dapp-connector.cardano.authorize.source-account": "Source Account",
   "dapp-connector.cardano.authorize.status.trusted": "Only connect to trusted DApps",
   "dapp-connector.cardano.authorize.status.blocked": "This is a blacklisted DApp",
   "dapp-connector.cardano.authorize.status.unsecured": "This site is unsecured",

@@ -808,7 +808,6 @@
   "dapp-connector.cardano.authorize.details.utxos": "ウォレットのUTXO",
   "dapp-connector.cardano.authorize.details.balance": "ウォレット残高",
   "dapp-connector.cardano.authorize.details.addresses": "報酬アカウントを含むウォレットアドレス",
-  "dapp-connector.cardano.authorize.source-account": "送信元アカウント",
   "dapp-connector.cardano.authorize.status.trusted": "信頼できるDAppにのみ接続してください",
   "dapp-connector.cardano.authorize.status.blocked": "このDAppはブラックリストに登録されています",
   "dapp-connector.cardano.authorize.status.unsecured": "このサイトは保護されていません",
