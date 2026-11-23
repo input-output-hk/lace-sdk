@@ -34,6 +34,7 @@ import type {
   OpaqueMidnightFinalizedTx,
   OpaqueMidnightRecipe,
 } from '@lace-module/midnight-sync/sdk';
+import type { Logger } from 'ts-log';
 
 type LockRequest = {
   readonly agent: string;
@@ -309,6 +310,8 @@ type FakeSharedWorkerOptions = {
     locks: SharedWorkerLocks,
     worker: number,
   ) => SharedWorkerLocks;
+  /** The logger each worker runs with; by default none. */
+  readonly logger?: Logger;
 };
 
 type FakeWorker = {
@@ -337,6 +340,7 @@ export const installFakeBrowser = (
     isClassicOnly = false,
     loadHost = async () => host,
     workerLocks = locks => locks,
+    logger = dummyLogger,
   }: FakeSharedWorkerOptions = {},
 ) => {
   const locks = createLockManager();
@@ -371,7 +375,7 @@ export const installFakeBrowser = (
       locks: workerLocks(locks.view(worker.agent), workers.length),
       buffer: Buffer,
       loadHost,
-      logger: dummyLogger,
+      logger,
     });
     return worker;
   };

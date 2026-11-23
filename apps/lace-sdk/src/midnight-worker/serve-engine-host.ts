@@ -3,6 +3,7 @@ import {
   exposeMessengerApi,
   generalizeBackgroundMessenger,
   isFactoryCallMessage,
+  isKeepAliveMessage,
   newMessageId,
 } from '@lace-lib/extension-messaging';
 import { filter, of, take } from 'rxjs';
@@ -79,6 +80,57 @@ export type ServeMidnightEngineHostProps = {
   readonly messenger: BackgroundMessenger;
   readonly channels: MidnightClientChannels;
   readonly logger: Logger;
+};
+
+/**
+ * What a client's channel replays once the worker has read a page's frame. Messenger replays the last frame of a
+ * channel to a reader that joins late, and an attach or an authority request carries the password; no reader acts
+ * on this frame. The worker's own port listener emits it: the messenger exists first, so its listener has handed
+ * the frame to every reader by then.
+ */
+const READ_FRAME = Object.freeze({});
+
+const methodOf = (call: unknown): unknown =>
+  typeof call === 'object' && call !== null
+    ? (call as { readonly method?: unknown }).method
+    : undefined;
+
+const describedFrame = (value: unknown): unknown => {
+  if (typeof value !== 'object' || value === null || !('messageId' in value))
+    return value;
+  const { messageId, request, factoryCall } = value as {
+    readonly messageId?: unknown;
+    readonly request?: unknown;
+    readonly factoryCall?: unknown;
+  };
+  return { messageId, method: methodOf(request) ?? methodOf(factoryCall) };
+};
+
+/**
+ * The logger to hand Messenger in the worker. Messenger logs a page's frames whole, and an attach or an authority
+ * request carries the password, so each frame reaches `logger` as its message id and method alone.
+ *
+ * @param logger - Receives Messenger's diagnostics.
+ */
+export const withoutFrameContents = (logger: Logger): Logger => {
+  const described = (values: unknown[]) => values.map(describedFrame);
+  return {
+    trace: (...values: unknown[]) => {
+      logger.trace(...described(values));
+    },
+    debug: (...values: unknown[]) => {
+      logger.debug(...described(values));
+    },
+    info: (...values: unknown[]) => {
+      logger.info(...described(values));
+    },
+    warn: (...values: unknown[]) => {
+      logger.warn(...described(values));
+    },
+    error: (...values: unknown[]) => {
+      logger.error(...described(values));
+    },
+  };
 };
 
 // A request arrives decoded from the page, and the host copies and later zeroes the password it is given.
@@ -207,6 +259,7 @@ export const serveMidnightEngineHost = ({
   channels,
   logger,
 }: ServeMidnightEngineHostProps): void => {
+  const messengerLogger = withoutFrameContents(logger);
   runtime.onConnect.addListener((port: MessengerPort) => {
     const clientId = clientIdOfChannel(port.name);
     // A port the messenger refused reaches this listener too, and finds the channel taken.
@@ -214,8 +267,9 @@ export const serveMidnightEngineHost = ({
     const channel = generalizeBackgroundMessenger(
       ChannelName(port.name),
       messenger,
-      logger,
+      messengerLogger,
     );
+    const { message$ } = messenger.getChannel(channel.channel);
     const streamsChannels = new Set<ChannelName>();
     const streamsCalls = channel.message$.subscribe(({ data }) => {
       if (
@@ -241,8 +295,11 @@ export const serveMidnightEngineHost = ({
         api$: of(hostForClient(host, clientId)),
         properties: MIDNIGHT_ENGINE_HOST_PROPERTIES,
       },
-      { messenger: answering, logger },
+      { messenger: answering, logger: messengerLogger },
     );
+    port.onMessage.addListener(data => {
+      if (!isKeepAliveMessage(data)) message$.next({ data: READ_FRAME, port });
+    });
     channel.disconnect$
       .pipe(
         filter(({ remaining }) => remaining.length === 0),

@@ -1,4 +1,3 @@
-export * from './analyticsConsent';
 export * from './onboardingStart';
 export * from './onboardingCreateWallet';
 export * from './onboardingDesktopLogin';

@@ -110,6 +110,27 @@ describe('createBackgroundMessenger', () => {
     });
   });
 
+  describe('message replay', () => {
+    it("replays a channel's last message to a reader that subscribes after it arrived, so a request sent as the port connects is not lost", () => {
+      const runtime = createMockRuntime();
+      const bg = createBackgroundMessenger({ logger, runtime });
+      const port = createMockPort('test-channel');
+      connectPort(runtime, port);
+      const onMessageCb = (
+        port.onMessage.addListener as unknown as MockOnMessage
+      ).mock.calls[0][0];
+      const data = { messageId: '1', request: { args: [], method: 'foo' } };
+
+      onMessageCb(data, port);
+      const received: PortMessage[] = [];
+      bg.getChannel(ChannelName('test-channel')).message$.subscribe(message =>
+        received.push(message),
+      );
+
+      expect(received).toEqual([{ data, port }]);
+    });
+  });
+
   describe('keepAlive ping handling', () => {
     it('acks the keepAlive ping back on the same port and does NOT broadcast to message$', () => {
       const runtime = createMockRuntime();

@@ -1,3 +1,5 @@
+import { inspect } from 'node:util';
+
 import * as fixture from '@lace-contract/midnight-context/src/stub-data';
 import { CollectionStore } from '@lace-contract/storage';
 import { toSerializableObject } from '@lace-lib/cardano-util';
@@ -46,6 +48,7 @@ import type {
   MidnightSessionStreams,
 } from '@lace-module/midnight-sync/sdk';
 import type * as MidnightSyncSdkEngine from '@lace-module/midnight-sync/sdk-engine';
+import type { Logger } from 'ts-log';
 
 const { hostDependencies } = vi.hoisted(() => ({
   hostDependencies: [] as unknown[],
@@ -175,7 +178,53 @@ const serveWithRecordedChannels = () => {
         .filter(source$ => source$.observed).length,
     };
   };
-  return { host, sources, openPage, closePage, leftoversOf };
+  const replayedOn = (clientId: string) => {
+    const frames: unknown[] = [];
+    handedOut
+      .get(engineChannelOf(clientId))
+      ?.at(-1)
+      ?.message$.subscribe(({ data }) => frames.push(data))
+      .unsubscribe();
+    return frames;
+  };
+  return { host, sources, openPage, closePage, leftoversOf, replayedOn };
+};
+
+const SECRET = [0x5e, 0xc2, 0xe7, 0x9a, 0x55, 0x30, 0x4d, 0xb1];
+const SECRET_HEX = Buffer.from(SECRET).toString('hex');
+const secret = () => new Uint8Array(SECRET);
+const holdsSecret = (value: unknown) =>
+  inspect(value, { depth: Number.POSITIVE_INFINITY }).includes(SECRET_HEX);
+
+/** Each call of the worker that carries a password, as a page sends it. */
+const passwordCalls = (remote: MidnightEngineHost) => {
+  const authority = () => ({
+    account: fixture.midnightAccount,
+    password: secret(),
+  });
+  return [
+    async () => remote.attach(attachRequest(CLIENT, secret())),
+    async () =>
+      remote.resetAccount({
+        clientId: CLIENT,
+        accountId: fixture.accountId,
+        storage: 'memory',
+        authority: authority(),
+      }),
+    async () =>
+      remote.resyncAll({
+        clientId: CLIENT,
+        storage: 'memory',
+        authority: authority(),
+      }),
+    async () =>
+      remote.deleteWallet({
+        clientId: CLIENT,
+        walletId: fixture.walletId,
+        storage: 'memory',
+        authority: authority(),
+      }),
+  ];
 };
 
 const NOTHING_LEFT = {
@@ -986,5 +1035,94 @@ describe('test:lace-sdk-build-checks', () => {
     const indexedDb = dependencies.createStore('indexeddb');
     expect(indexedDb).toBeInstanceOf(CollectionStore);
     expect(indexedDb).not.toBe(memory);
+  });
+
+  describe("a page's password", () => {
+    it("is in no frame a reader that joins the page's channel late receives, after an attach or any authority request", async () => {
+      const { host, openPage, replayedOn } = serveWithRecordedChannels();
+      const { remote } = await openPage(CLIENT);
+
+      const replayed: unknown[] = [];
+      for (const call of passwordCalls(remote)) {
+        await call();
+        replayed.push(...replayedOn(CLIENT));
+      }
+
+      expect(replayed).toHaveLength(4);
+      expect(replayed.filter(holdsSecret)).toEqual([]);
+      expect(
+        [
+          host.attach.mock.calls.at(-1)?.[0].password,
+          host.resetAccount.mock.calls[0][0].authority?.password,
+          host.resyncAll.mock.calls[0][0].authority?.password,
+          host.deleteWallet.mock.calls[0][0].authority?.password,
+        ].map(password => [...(password ?? [])]),
+      ).toEqual([SECRET, SECRET, SECRET, SECRET]);
+    });
+
+    it('reaches no logger of the worker or the page, when the host serves the call or refuses it', async () => {
+      const logged: unknown[][] = [];
+      const record = (...values: unknown[]) => {
+        logged.push(values);
+      };
+      const logger: Logger = {
+        trace: record,
+        debug: record,
+        info: record,
+        warn: record,
+        error: record,
+      };
+      const { host, asHost } = createFakeEngineHost();
+      installFakeBrowser(asHost(), { logger });
+      const { host: remote } = connectMidnightEngineWorker({ logger })(CLIENT);
+      const calls = passwordCalls(remote);
+
+      for (const call of calls) await call();
+      for (const method of [
+        'attach',
+        'resetAccount',
+        'resyncAll',
+        'deleteWallet',
+      ] as const)
+        host[method].mockRejectedValueOnce(
+          new Error('The password does not open the account'),
+        );
+      const refusals = await Promise.all(
+        calls.map(async call => call().catch((error: unknown) => error)),
+      );
+
+      expect(refusals).toEqual(
+        Array.from(
+          { length: 4 },
+          () =>
+            expect.objectContaining({
+              message: 'The password does not open the account',
+            }) as unknown,
+        ),
+      );
+      expect(logged.filter(holdsSecret)).toEqual([]);
+      expect(
+        logged.filter(values => inspect(values).includes('attach')),
+      ).not.toEqual([]);
+    });
+
+    it("leaves every call of the page answered when its frames arrive back to back, though the worker drops each frame from the page's channel once read", async () => {
+      const { host, asHost } = createFakeEngineHost();
+      installFakeBrowser(asHost());
+      const { host: remote } = connectMidnightEngineWorker()(CLIENT);
+      await remote.attach(attachRequest(CLIENT));
+      const caller = { clientId: CLIENT, accountId: fixture.accountId };
+
+      const answers = await Promise.all(
+        Array.from({ length: 8 }, async () =>
+          remote.submit({ ...caller, transaction: workerFinalizedTx() }),
+        ),
+      );
+
+      expect(answers).toEqual(
+        Array.from({ length: 8 }, () => ({ txId: 'worker-tx' })),
+      );
+      expect(host.submit).toHaveBeenCalledTimes(8);
+    });
   });
 });

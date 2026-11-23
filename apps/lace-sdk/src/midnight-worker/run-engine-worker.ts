@@ -7,6 +7,7 @@ import { MIDNIGHT_WORKER_FAILED } from './engine-host-api';
 import {
   createMidnightClientChannels,
   serveMidnightEngineHost,
+  withoutFrameContents,
 } from './serve-engine-host';
 
 import type {
@@ -113,7 +114,7 @@ export const runMidnightEngineWorker = async ({
   });
   const channels = createMidnightClientChannels();
   const messenger = createBackgroundMessenger({
-    logger,
+    logger: withoutFrameContents(logger),
     runtime,
     isConnectionAuthorized: channels.isAdmitted,
   });
