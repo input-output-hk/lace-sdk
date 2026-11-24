@@ -58,6 +58,8 @@ void rootEntry.deriveSymmetricSecret;
 // @ts-expect-error Hydra Head recognition is canary.
 void cardanoEntry.findAccountHydraHeads;
 // @ts-expect-error Hydra Head recognition is canary.
+void cardanoEntry.buildHydraRecoverTx;
+// @ts-expect-error Hydra Head recognition is canary.
 void cardanoEntry.hydraHeadsIndexSelectors;
 // @ts-expect-error Hydra Head recognition is canary.
 void cardanoEntry.toHydraHeadPositions;

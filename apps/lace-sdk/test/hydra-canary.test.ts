@@ -27,6 +27,7 @@ import type {
 import type { Cardano } from '@lace-lib/cardano-core';
 
 const HYDRA_NAMES = [
+  'buildHydraRecoverTx',
   'classifyHydraTxByAddresses',
   'decodeHydraDepositDatum',
   'decodeHydraHeadState',

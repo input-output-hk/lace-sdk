@@ -214,6 +214,27 @@ export interface HydraAccountDeposit {
 }
 
 /**
+ * What the recover transaction of a deposit holds. The deposit validator
+ * accepts it when the transaction spends `deposit` with `redeemer`, runs
+ * `script`, starts its validity strictly after `deadline` and places
+ * `outputs`, in this order, before any other output.
+ */
+export interface HydraDepositRecovery {
+  /** The deposit UTxO the recover spends. */
+  readonly deposit: Cardano.Utxo;
+  /** Hex policy id of the head state token of the head the deposit targets. */
+  readonly headId: string;
+  /** Last instant the head may absorb the deposit, in epoch milliseconds. */
+  readonly deadline: number;
+  /** The deposit validator of the release, a Plutus V3 script. */
+  readonly script: Cardano.PlutusScript;
+  /** The `Recover` redeemer, naming how many outputs the recover restores. */
+  readonly redeemer: Cardano.PlutusData;
+  /** The committed outputs, ordered by the output references they spent. */
+  readonly outputs: readonly Cardano.TxOut[];
+}
+
+/**
  * Head state machine state. `initial` exists only in the first generation,
  * where heads are opened by a collect step. `fanningOut` is a second
  * generation head distributing its funds over several transactions.

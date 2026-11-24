@@ -2260,6 +2260,7 @@ export class TransactionBuilder {
       scriptIntegrityHash,
       deriveCollateralFields,
       subTransactions: this.subTransactions,
+      firstChangeIndex: this.transaction.body().outputs().length,
     });
 
     return {

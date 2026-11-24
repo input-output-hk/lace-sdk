@@ -1659,6 +1659,37 @@ describe('TransactionBuilder Plutus support', () => {
     );
   });
 
+  it('keeps an output added at the change address as added when it refunds the saving', async () => {
+    const scriptInput = mkUtxo(236, 0, 20_000_000n, dummyScriptAddr);
+    const collateral = mkUtxo(237, 0, 10_000_000n, changeAddr);
+    const paidBack: Cardano.TxOut = {
+      address: changeAddr,
+      value: { coins: 15_000_000n },
+    };
+
+    const tx = await new TransactionBuilder(
+      Cardano.NetworkMagics.Preprod,
+      protocolParameters,
+    )
+      .setChangeAddress(changeAddr)
+      .setUnspentOutputs([])
+      .addInput(scriptInput, { redeemer: unitDatum })
+      .attachScript(dummyScript)
+      .addOutput(paidBack)
+      .setCollateralUtxos([collateral])
+      .setCollateralChangeAddress(changeAddr)
+      .setPlutusContext({
+        costModels,
+        txEvaluator: makeEvaluator({ memory: 100, steps: 100_000 }),
+      })
+      .build();
+
+    const { outputs, fee } = tx.toCore().body;
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0]).toEqual(paidBack);
+    expect(outputs[1].value.coins).toBe(5_000_000n - fee);
+  });
+
   // Regression (LW-15113): the collateral coverage target is the true max fee
   // (size + script), not a blunt 5-ADA floor. A ~5-ADA UTxO covers the target
   // with a valid return, so ONLY it is reserved and the second candidate is

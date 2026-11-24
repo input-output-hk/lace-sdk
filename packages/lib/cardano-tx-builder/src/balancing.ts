@@ -455,7 +455,12 @@ export const balanceTransaction = ({
  * EXACT body that will ship: post-evaluation redeemers, the real
  * `scriptIntegrityHash`, the collateral inputs and fields selected for the
  * fee, and the largest change output at `changeAddress` credited with the fee
- * saving. Because the collateral's size depends on the fee (a smaller fee
+ * saving. The change the balancer appended, the outputs from
+ * `firstChangeIndex` on, takes the saving first, so an output the caller added
+ * stays as the evaluated transaction held it, as a script that checks the
+ * outputs needs; only without appended change does the largest output the
+ * caller added at `changeAddress` take it. Because the collateral's size
+ * depends on the fee (a smaller fee
  * can need fewer collateral inputs, or more of the reserved ones to fund a
  * collateral-return output, and shrinks the collateral, which can add such an
  * output) and the fee depends on the body's size, it
@@ -489,6 +494,7 @@ export const correctFeeAfterEvaluation = ({
   scriptIntegrityHash,
   deriveCollateralFields,
   subTransactions,
+  firstChangeIndex,
 }: {
   balancedTx: Cardano.Tx;
   evaluatedRedeemers: Cardano.Redeemer[];
@@ -498,6 +504,7 @@ export const correctFeeAfterEvaluation = ({
   scriptIntegrityHash?: Cardano.TxBody['scriptIntegrityHash'];
   deriveCollateralFields: (fee: Cardano.Lovelace) => CollateralBodyFields;
   subTransactions?: readonly Serialization.SubTransaction[];
+  firstChangeIndex: number;
 }): {
   outputs: Cardano.TxOut[];
   fee: Cardano.Lovelace;
@@ -507,16 +514,22 @@ export const correctFeeAfterEvaluation = ({
   const witness = { ...balancedTx.witness, redeemers: evaluatedRedeemers };
 
   const baseOutputs = balancedTx.body.outputs;
-  let changeIndex = -1;
-  for (let index = 0; index < baseOutputs.length; index++) {
-    if (
-      baseOutputs[index].address === changeAddress &&
-      (changeIndex < 0 ||
-        baseOutputs[index].value.coins > baseOutputs[changeIndex].value.coins)
-    ) {
-      changeIndex = index;
+  const largestAtChangeAddress = (from: number): number => {
+    let found = -1;
+    for (let index = from; index < baseOutputs.length; index++) {
+      if (
+        baseOutputs[index].address === changeAddress &&
+        (found < 0 ||
+          baseOutputs[index].value.coins > baseOutputs[found].value.coins)
+      ) {
+        found = index;
+      }
     }
-  }
+    return found;
+  };
+  const appendedChangeIndex = largestAtChangeAddress(firstChangeIndex);
+  const changeIndex =
+    appendedChangeIndex < 0 ? largestAtChangeAddress(0) : appendedChangeIndex;
 
   // Build the exact body shipped at `fee` and return its required minimum fee.
   // `collateralReturn: undefined` clears any pre-balance seeded return before

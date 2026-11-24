@@ -3,8 +3,9 @@
  * (ADR 66): the primitives that recognise Hydra activity on Cardano layer 1,
  * where an account stands in each head at a given instant and what the card
  * of each head says, the status of its deposit activities at a given
- * instant, and the Cardano context data that tracks the funds an account has
- * locked in Hydra heads. The indexed state itself is read through
+ * instant, the transaction that recovers a deposit past its deadline, and
+ * the Cardano context data that tracks the funds an account has locked in
+ * Hydra heads. The indexed state itself is read through
  * `wallet.stateObservables.hydraHeadsIndex`; `fromHydraHeadsIndexSnapshot`
  * reads an account's snapshot into what the positions and cards take, so a
  * consumer shows Lace's figures from the same implementation as the apps.
@@ -64,6 +65,11 @@ export type {
   HydraValue,
   HydraWaitingDeposits,
 } from '@lace-lib/hydra-head';
+export { buildHydraRecoverTx } from './build-hydra-recover-tx';
+export type {
+  BuildHydraRecoverTxProps,
+  WalletWithHydraRecovery,
+} from './build-hydra-recover-tx';
 export {
   FEATURE_FLAG_HYDRA_HEADS,
   fromHydraHeadsIndexSnapshot,

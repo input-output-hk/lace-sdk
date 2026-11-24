@@ -2687,6 +2687,7 @@
   "lace-next.activity-detail.confirmations": "承認数",
   "lace-next.activity-detail.view-explorer": "エクスプローラーで表示",
   "lace-next.activity-detail.explorer-error": "エクスプローラーを開けませんでした",
+  "lace-next.activity-detail.assets-unavailable": "一部のアセットの詳細を取得できません。",
   "lace-next.portfolio.tab.assets": "資産",
   "lace-next.portfolio.loading": "読み込み中…",
   "lace-next.portfolio.loading-activity": "アクティビティを読み込み中…",

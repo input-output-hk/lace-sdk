@@ -2692,6 +2692,7 @@
   "lace-next.activity-detail.confirmations": "Confirmations",
   "lace-next.activity-detail.view-explorer": "View in explorer",
   "lace-next.activity-detail.explorer-error": "Could not open the explorer",
+  "lace-next.activity-detail.assets-unavailable": "Some asset details are unavailable.",
   "lace-next.portfolio.tab.assets": "Tokens",
   "lace-next.portfolio.loading": "Loading…",
   "lace-next.portfolio.loading-activity": "Loading activity…",

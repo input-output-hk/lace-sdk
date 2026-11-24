@@ -131,6 +131,24 @@ export const createPlutusContext = async (
     );
   }
 
+  return createProviderPlutusContext(cardanoProvider, chainId);
+};
+
+/**
+ * The {@link PlutusContext} of `createPlutusContext`, from a Cardano provider
+ * and the chain it serves: the chain's current cost models and the provider
+ * backed evaluator.
+ *
+ * @returns `Ok` with the context, or `Err` when the provider cannot read the
+ *   protocol parameters. It never rejects.
+ */
+export const createProviderPlutusContext = async (
+  cardanoProvider: Pick<
+    CardanoProvider,
+    'evaluateTx' | 'getProtocolParameters'
+  >,
+  chainId: Cardano.ChainId,
+): Promise<Result<PlutusContext, Error>> => {
   try {
     const protocolParameters = await firstValueFrom(
       cardanoProvider.getProtocolParameters({ chainId }),

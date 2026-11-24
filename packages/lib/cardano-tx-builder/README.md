@@ -4,7 +4,11 @@ The transaction builder the wallet builds every Cardano transaction with.
 
 `TransactionBuilder` collects outputs, certificates, withdrawals, metadata, mints and script inputs, then selects
 inputs, balances the transaction and prices its fee for the signatures it will carry. Transactions that run Plutus
-scripts are evaluated, given their script data hash and backed by collateral. Two coin selectors pick the inputs:
+scripts are evaluated, given their script data hash and backed by collateral. When the evaluated execution units cost
+less than the fee balancing reserved, the saving goes to a change output the balancer added, rather than to an output
+added with `addOutput` or `transferValue` at the change address, so a script that checks that output sees it as the
+evaluation did; only a transaction without such change refunds the saving to the largest output at the change
+address. Two coin selectors pick the inputs:
 `RoundRobinRandomCoinSelector`, the default, and `LargeFirstCoinSelector`, which balancing falls back to when the
 default cannot cover the target.
 

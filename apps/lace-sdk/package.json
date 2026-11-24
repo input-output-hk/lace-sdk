@@ -45,7 +45,7 @@
     "dist"
   ],
   "dependencies": {
-    "@laceio/cardano": "0.2.0-canary.2",
+    "@laceio/cardano": "0.2.0-canary.3",
     "@reduxjs/toolkit": "^2.6.1",
     "bignumber.js": "9.0.1",
     "lodash": "^4.17.21",
@@ -61,6 +61,7 @@
     "type-fest": "4.41.0"
   },
   "devDependencies": {
+    "@blaze-cardano/uplc": "0.4.3",
     "@lace-lib/util-dev-cardano": "*",
     "@rolldown/plugin-node-polyfills": "^1.0.3",
     "rolldown": "^1.0.0-rc.9",

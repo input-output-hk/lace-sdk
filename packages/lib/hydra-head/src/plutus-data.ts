@@ -1,5 +1,5 @@
 import { Cardano, Serialization } from '@lace-lib/cardano-core';
-import { Hash28ByteBase16 } from '@lace-lib/cardano-crypto';
+import { Hash28ByteBase16, Hash32ByteBase16 } from '@lace-lib/cardano-crypto';
 import { HexBlob } from '@lace-lib/cardano-util';
 import { isCborWithinLimits } from '@lace-lib/core';
 
@@ -317,4 +317,93 @@ export const readTxOut = (
   const value = readValue(fields[1]);
   if (!address || !value) return undefined;
   return { ...address, value };
+};
+
+/** Byte length of a datum hash. */
+const HASH_32_LENGTH = 32;
+
+/** Output datum of a ledger API `TxOut`, as the fields of a ledger output. */
+type OutputDatum = Pick<Cardano.TxOut, 'datum' | 'datumHash'>;
+
+/**
+ * Reads a ledger API `OutputDatum`: no datum (0), a datum hash (1) or an
+ * inline datum (2).
+ */
+const readOutputDatum = (
+  data: Serialization.PlutusData,
+): OutputDatum | undefined => {
+  const constr = readAnyConstr(data);
+  if (!constr) return undefined;
+  const { alternative, fields } = constr;
+  if (alternative === 0n && fields.length === 0) return {};
+  if (alternative === 1n && fields.length === 1) {
+    const hash = fields[0].asBoundedBytes();
+    return hash?.length === HASH_32_LENGTH
+      ? { datumHash: Hash32ByteBase16(HexBlob.fromBytes(hash)) }
+      : undefined;
+  }
+  if (alternative === 2n && fields.length === 1) {
+    return { datum: fields[0].toCore() };
+  }
+  return undefined;
+};
+
+/**
+ * Reads the reference script of a ledger API `TxOut`, `Maybe ScriptHash`:
+ * the script hash (0) or none (1).
+ */
+const readReferenceScriptHash = (
+  data: Serialization.PlutusData,
+): { readonly hash?: string } | undefined => {
+  if (readConstr(data, 1n, 0)) return {};
+  const [hash] = readConstr(data, 0n, 1) ?? [];
+  const scriptHash = hash && readHash28(hash);
+  return scriptHash === undefined ? undefined : { hash: scriptHash };
+};
+
+/** Output rebuilt from its Plutus ledger API encoding. */
+export interface PlutusLedgerTxOut {
+  /** The ledger output, without the reference script the encoding names. */
+  readonly output: Cardano.TxOut;
+  /**
+   * Hex hash of the reference script the output carries. The encoding holds
+   * only the hash, so the output cannot be rebuilt with the script.
+   */
+  readonly referenceScriptHash?: string;
+}
+
+/**
+ * Rebuilds the ledger output a ledger API `TxOut` encodes: its address for
+ * the network, value, datum and the hash of its reference script, if any.
+ * Values are read as strictly as `readTxOut` reads them.
+ */
+export const readLedgerTxOut = (
+  data: Serialization.PlutusData,
+  networkId: Cardano.NetworkId,
+): PlutusLedgerTxOut | undefined => {
+  const fields = readConstr(data, 0n, TX_OUT_FIELD_COUNT);
+  if (!fields) return undefined;
+  const address = readAddress(fields[0], networkId);
+  const value = readValue(fields[1]);
+  const datum = readOutputDatum(fields[2]);
+  const referenceScript = readReferenceScriptHash(fields[3]);
+  if (!address || !value || !datum || !referenceScript) return undefined;
+  const output: Cardano.TxOut = {
+    address: Cardano.PaymentAddress(address.address),
+    value: {
+      coins: value.coins,
+      ...(value.assets.size > 0 && {
+        assets: new Map(
+          [...value.assets].map(([unit, quantity]) => [
+            Cardano.AssetId(unit),
+            quantity,
+          ]),
+        ),
+      }),
+    },
+    ...datum,
+  };
+  return referenceScript.hash === undefined
+    ? { output }
+    : { output, referenceScriptHash: referenceScript.hash };
 };

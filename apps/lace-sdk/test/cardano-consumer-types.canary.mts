@@ -1,6 +1,7 @@
 import * as cardanoEntry from '@laceio/sdk/cardano';
 import {
   AccountId,
+  buildHydraRecoverTx,
   Cardano,
   createLaceWallet,
   createLazyInMemoryVaultModule,
@@ -172,4 +173,15 @@ hydraWallet.stateObservables.hydraHeadsIndex.selectHydraDepositsByAccount$.subsc
     return states.byActivityId;
   },
 );
-void [hydraHeads, hydraPositions, hydraActivity.txName, lockedHeadId];
+const recoverTx: Result<Serialization.Transaction, Error> =
+  await buildHydraRecoverTx(hydraWallet, {
+    accountId: AccountId('account'),
+    deposit: { txId: 'ab'.repeat(32), index: 0 },
+  });
+void [
+  hydraHeads,
+  hydraPositions,
+  hydraActivity.txName,
+  lockedHeadId,
+  recoverTx,
+];

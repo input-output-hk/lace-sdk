@@ -6,7 +6,8 @@
  * proves a head genuine by its minting script, the reconstruction of what a
  * head absorbed for an account's keys and paid back to them, where the
  * account stands in each head at a given instant, and what the card of each
- * head says, and the policy every wallet stack sweeps the validators with:
+ * head says, what the recover transaction of a deposit past its deadline
+ * holds, and the policy every wallet stack sweeps the validators with:
  * how they are read, which heads are checked and read, and which are
  * listed. Pure functions with no IO, so any consumer can use them on a hot
  * path.
@@ -46,6 +47,8 @@ export { isHydraHeadMintingScript } from './minting-script';
 
 export { toHydraHeadPositions } from './positions';
 
+export { toHydraDepositRecovery } from './recover';
+
 export {
   findHydraHeadVersion,
   getHydraScriptRegistry,
@@ -82,6 +85,7 @@ export type {
   HydraBlockfrostUtxo,
   HydraCommittedOutput,
   HydraDepositDatum,
+  HydraDepositRecovery,
   HydraDepositStatus,
   HydraHeadCard,
   HydraHeadCards,

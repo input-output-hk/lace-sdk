@@ -1082,15 +1082,20 @@ describe('correctFeeAfterEvaluation', () => {
   const balanceWithUnevenSplitChange = () => {
     const protocol = initProtocolParameters();
     const availableUtxo = newDefaultUtxoList();
+    const unbalancedTx = newTransactionWithoutInputs(
+      BALANCED_TX_CBOR,
+      15_000_000n,
+    );
+    const firstChangeIndex = unbalancedTx.body.outputs.length;
     const { tx: balanced, selection } = balanceTransaction({
-      unbalancedTx: newTransactionWithoutInputs(BALANCED_TX_CBOR, 15_000_000n),
+      unbalancedTx,
       availableUtxo,
       preSelectedUtxo: undefined,
       protocolParameters: protocol,
       coinSelector: new UnevenSplitCoinSelector(),
       changeAddress: createAddress(changeAddr),
     });
-    return { balanced, protocol, selection };
+    return { balanced, protocol, selection, firstChangeIndex };
   };
 
   const overpayFee = (tx: Cardano.Tx, extra: bigint): Cardano.Tx => ({
@@ -1099,7 +1104,8 @@ describe('correctFeeAfterEvaluation', () => {
   });
 
   it('refunds the fee saving into the change output with the larger coins and returns the evaluated fee', () => {
-    const { balanced, protocol, selection } = balanceWithUnevenSplitChange();
+    const { balanced, protocol, selection, firstChangeIndex } =
+      balanceWithUnevenSplitChange();
     const overpaidTx = overpayFee(balanced, 100_000n);
     const overpaidFee = overpaidTx.body.fee;
 
@@ -1119,6 +1125,7 @@ describe('correctFeeAfterEvaluation', () => {
       protocolParameters: protocol,
       changeAddress: createAddress(changeAddr),
       deriveCollateralFields: () => ({}),
+      firstChangeIndex,
     });
 
     expect(fee).toBeLessThan(overpaidFee);
@@ -1141,13 +1148,73 @@ describe('correctFeeAfterEvaluation', () => {
       protocolParameters: protocol,
       changeAddress: createAddress(changeAddr),
       deriveCollateralFields: () => ({}),
+      firstChangeIndex,
     });
     expect(second.fee).toBe(fee);
     expect(second.outputs).toEqual(outputs);
   });
 
-  it('returns outputs and fee unchanged when no output is at the change address', () => {
+  it('credits the saving to the largest output at the change address when the balancer appended no change', () => {
     const { balanced, protocol, selection } = balanceWithUnevenSplitChange();
+    const overpaidTx = overpayFee(balanced, 100_000n);
+    const outputs = overpaidTx.body.outputs;
+    const largest = outputs.length - 1;
+
+    const corrected = correctFeeAfterEvaluation({
+      balancedTx: overpaidTx,
+      evaluatedRedeemers: [],
+      resolvedInputs: selection,
+      protocolParameters: protocol,
+      changeAddress: createAddress(changeAddr),
+      deriveCollateralFields: () => ({}),
+      firstChangeIndex: outputs.length,
+    });
+
+    expect(corrected.fee).toBeLessThan(overpaidTx.body.fee);
+    expect(corrected.outputs[largest].value.coins).toBe(
+      outputs[largest].value.coins + overpaidTx.body.fee - corrected.fee,
+    );
+  });
+
+  it('credits the saving to the change the balancer appended rather than to an output the caller added at the change address', () => {
+    const { balanced, protocol, selection, firstChangeIndex } =
+      balanceWithUnevenSplitChange();
+    const overpaidTx = overpayFee(balanced, 100_000n);
+    const overpaidFee = overpaidTx.body.fee;
+    const [smaller, larger] = overpaidTx.body.outputs.slice(firstChangeIndex);
+    expect(larger.value.coins).toBeGreaterThan(smaller.value.coins);
+    const callerAddedLarger: Cardano.Tx = {
+      ...overpaidTx,
+      body: {
+        ...overpaidTx.body,
+        outputs: [
+          ...overpaidTx.body.outputs.slice(0, firstChangeIndex),
+          larger,
+          smaller,
+        ],
+      },
+    };
+
+    const { outputs, fee } = correctFeeAfterEvaluation({
+      balancedTx: callerAddedLarger,
+      evaluatedRedeemers: [],
+      resolvedInputs: selection,
+      protocolParameters: protocol,
+      changeAddress: createAddress(changeAddr),
+      deriveCollateralFields: () => ({}),
+      firstChangeIndex: firstChangeIndex + 1,
+    });
+
+    expect(fee).toBeLessThan(overpaidFee);
+    expect(outputs[firstChangeIndex]).toEqual(larger);
+    expect(outputs[firstChangeIndex + 1].value.coins).toBe(
+      smaller.value.coins + overpaidFee - fee,
+    );
+  });
+
+  it('returns outputs and fee unchanged when no output is at the change address', () => {
+    const { balanced, protocol, selection, firstChangeIndex } =
+      balanceWithUnevenSplitChange();
     const overpaidTx = overpayFee(balanced, 100_000n);
 
     const { outputs, fee } = correctFeeAfterEvaluation({
@@ -1157,6 +1224,7 @@ describe('correctFeeAfterEvaluation', () => {
       protocolParameters: protocol,
       changeAddress: createAddress(otherAddr),
       deriveCollateralFields: () => ({}),
+      firstChangeIndex,
     });
 
     expect(fee).toBe(overpaidTx.body.fee);
@@ -1170,7 +1238,8 @@ describe('correctFeeAfterEvaluation', () => {
   // a collateral-return output must yield a HIGHER fee than one that ships none
   // (previously both were priced over the same stale body → identical fee).
   it('prices the fee over the collateral-return output it ships', () => {
-    const { balanced, protocol, selection } = balanceWithUnevenSplitChange();
+    const { balanced, protocol, selection, firstChangeIndex } =
+      balanceWithUnevenSplitChange();
     const overpaidTx = overpayFee(balanced, 100_000n);
     // Fee-derived collateral (ceil(fee * 150 / 100)) from a 5-ADA collateral
     // input, mirroring finalizePlutusTx's deriveCollateralFields.
@@ -1198,10 +1267,12 @@ describe('correctFeeAfterEvaluation', () => {
     const priced = correctFeeAfterEvaluation({
       ...shared,
       deriveCollateralFields: withReturn,
+      firstChangeIndex,
     });
     const pricedNoReturn = correctFeeAfterEvaluation({
       ...shared,
       deriveCollateralFields: withoutReturn,
+      firstChangeIndex,
     });
 
     expect(priced.collateralFields.collateralReturn).toBeDefined();
@@ -1252,7 +1323,8 @@ describe('correctFeeAfterEvaluation', () => {
   // Guards both ways: taking the cheaper candidate under-funds it, and climbing
   // past the seed spends coin the balancer never funded.
   it('keeps the seeded fee when no lower fee can cover the body it would ship', () => {
-    const { balanced, protocol, selection } = balanceWithUnevenSplitChange();
+    const { balanced, protocol, selection, firstChangeIndex } =
+      balanceWithUnevenSplitChange();
     // Just enough over the minimum that the seed covers its own body, while the
     // sub-seed shape's own requirement stays out of the correction's reach.
     const overpaidTx = overpayFee(balanced, 2_000n);
@@ -1269,6 +1341,7 @@ describe('correctFeeAfterEvaluation', () => {
       protocolParameters: protocol,
       changeAddress: createAddress(changeAddr),
       deriveCollateralFields: bandedCollateralReturn,
+      firstChangeIndex,
     });
 
     expect(result.fee).toBe(seedFee);
@@ -1276,7 +1349,8 @@ describe('correctFeeAfterEvaluation', () => {
   });
 
   it('throws when the balanced fee cannot cover the collateral fields it would ship', () => {
-    const { balanced, protocol, selection } = balanceWithUnevenSplitChange();
+    const { balanced, protocol, selection, firstChangeIndex } =
+      balanceWithUnevenSplitChange();
 
     expect(() =>
       correctFeeAfterEvaluation({
@@ -1286,12 +1360,14 @@ describe('correctFeeAfterEvaluation', () => {
         protocolParameters: protocol,
         changeAddress: createAddress(changeAddr),
         deriveCollateralFields: heavyCollateralReturn,
+        firstChangeIndex,
       }),
     ).toThrow(/balanced fee is/);
   });
 
   it('throws when the balanced fee cannot cover the collateral fields and there is no change output', () => {
-    const { balanced, protocol, selection } = balanceWithUnevenSplitChange();
+    const { balanced, protocol, selection, firstChangeIndex } =
+      balanceWithUnevenSplitChange();
 
     expect(() =>
       correctFeeAfterEvaluation({
@@ -1301,6 +1377,7 @@ describe('correctFeeAfterEvaluation', () => {
         protocolParameters: protocol,
         changeAddress: createAddress(otherAddr),
         deriveCollateralFields: heavyCollateralReturn,
+        firstChangeIndex,
       }),
     ).toThrow(/balanced fee is/);
   });

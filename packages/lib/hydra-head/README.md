@@ -15,7 +15,9 @@ This library implements its layer 1 parts:
 - locating a head state UTxO and reading its state datum (steps 1 and 2);
 - recognising deposits at the deposit validator, with their pending or
   recoverable status from the deadline (step 8);
-- the closing head state with its contestation deadline (part of step 9).
+- the closing head state with its contestation deadline (part of step 9);
+- what the recover transaction of a recoverable deposit holds, which the
+  CIP says a wallet should offer.
 
 It does not implement the verified in-head balance from the participants'
 signed snapshot (steps 3 to 7), so it never tells what an account holds
@@ -45,6 +47,9 @@ beyond it.
   them without holding a participation token.
 - **Genuine heads**: `isHydraHeadMintingScript` tells whether a script is
   the Hydra head minting script of a head, which proves the head genuine.
+- **Deposit recovery**: `toHydraDepositRecovery` tells what the transaction
+  that recovers a deposit past its deadline holds: the deposit validator to
+  run, its redeemer and the outputs to pay back.
 - **Address classification**: `classifyHydraTxByAddresses` names the Hydra
   action of a transaction from where its inputs and outputs sit, for
   consumers that have resolved inputs but no metadata.
@@ -105,6 +110,44 @@ before the deadline. Recover needs the validity to start strictly after it,
 so a deposit is `pending` up to and including the deadline and `recoverable`
 afterwards. `getHydraDepositStatus` applies that rule, so a consumer holding a
 deposit found earlier can tell its status at any later instant.
+
+## Recovering a deposit
+
+A deposit the head did not absorb by its deadline goes back to layer 1 by a
+recover transaction, which spends the deposit UTxO under the deposit
+validator. `toHydraDepositRecovery` checks that the deposit is one of the
+account's, as `findAccountHydraDeposits` finds it, and that its deadline has
+passed, and returns what that transaction must hold. Every release with a
+deposit validator applies the same rule, from `validators/deposit.ak` in
+`hydra-plutus` of each release:
+
+- The redeemer is `Recover(n)`, the second constructor of the validator's
+  redeemer type, where `n` is the number of committed outputs.
+- The validity must start strictly after the deadline, so the lower bound is
+  the first slot that starts after it.
+- The first `n` outputs, each serialized as the Plutus data of its ledger API
+  `TxOut`, must concatenate to the same bytes, hashed with SHA-256, as the
+  committed outputs in the order of the output references their commits
+  spent. Any other outputs, such as change, come after them.
+
+Three deposit validators exist: one shared by 0.20.0 to 2.0.0, one of 2.1.0,
+and one shared by 2.2.0 and 2.3.0. The library carries each as the compiled
+script of the release's `plutus.json`, keyed by the script hash of the
+deposit address, and the recovery attaches it to the witness set, as Hydra's
+own recover does, rather than reading it from a reference input that would
+have to be found on chain.
+
+Each committed output is rebuilt from its serialized form and serialized
+again as the ledger serializes it: lovelace first, then policies and asset
+names in ascending byte order. The recovery is refused unless that gives the
+committed bytes exactly, so a deposit that a ledger output cannot reproduce,
+such as one serialized out of order, is never recovered into a transaction
+the validator rejects. A committed output with a reference script is refused
+too: its serialized form names the script only by hash. Deposits Hydra nodes
+make serialize their outputs as the ledger does.
+
+The validator checks no signature, so anyone may submit a recover, but it
+pays the funds back only to the committed outputs.
 
 ## Heads
 
