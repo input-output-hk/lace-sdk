@@ -1,8 +1,5 @@
-import type { ImageSourcePropType } from 'react-native';
-
 import React from 'react';
 import {
-  ImageBackground,
   Keyboard,
   KeyboardAvoidingView,
   StyleSheet,
@@ -10,10 +7,10 @@ import {
   View,
 } from 'react-native';
 
-import { spacing, useTheme } from '../../../design-tokens';
-import { assets } from '../../assets';
+import { spacing } from '../../../design-tokens';
 import { Button, CustomTextInput, Icon, Text } from '../../atoms';
 import { KEYBOARD_VERTICAL_OFFSET, keyboardBehavior } from '../../util';
+import { PageBackground } from '../base';
 
 const keyboardVerticalOffset = Number(KEYBOARD_VERTICAL_OFFSET);
 
@@ -72,16 +69,9 @@ export const LockScreen = ({
   retryCountdownLabel,
 }: LockScreenProps) => {
   const styles = createStyles();
-  const { theme } = useTheme();
-  const imageSource = (
-    theme.name === 'dark' ? assets.darkBackground : assets.lightBackground
-  ) as ImageSourcePropType;
 
   return (
-    <ImageBackground
-      source={imageSource}
-      resizeMode="cover"
-      style={styles.background}>
+    <PageBackground style={styles.background}>
       <KeyboardAvoidingView
         style={styles.container}
         behavior={keyboardBehavior}
@@ -159,7 +149,7 @@ export const LockScreen = ({
           </View>
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
-    </ImageBackground>
+    </PageBackground>
   );
 };
 

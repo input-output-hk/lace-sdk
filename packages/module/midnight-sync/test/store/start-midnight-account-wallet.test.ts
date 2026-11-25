@@ -388,6 +388,40 @@ describe('startMidnightAccountWallet', () => {
     walletFacadeMock.state.mockReturnValue(of(createMockFacadeState()));
   });
 
+  it.each([false, true])(
+    'keeps the block margin without a fixed DUST overhead (restored: %s)',
+    async restored => {
+      if (restored) {
+        vi.mocked(store.getAll).mockReturnValue(
+          of([
+            {
+              walletId: midnightAccount.walletId,
+              accountId: midnightAccount.accountId,
+              networkId: midnightAccount.blockchainSpecific.networkId,
+              serializedState: createSerializedState(),
+            },
+          ]),
+        );
+      }
+      await firstValueFrom(
+        midnightSideEffectDependencies.startMidnightAccountWallet({
+          account:
+            midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
+          config,
+          store,
+          keyManager: createMockKeyManager({
+            keys$: of(createMockAccountKeys()),
+          }),
+        }),
+      );
+      expect(WalletFacadeInitMock).toHaveBeenCalledOnce();
+      const [{ configuration }] = WalletFacadeInitMock.mock.calls[0] as [
+        { configuration: WalletSdkFacade.DefaultConfiguration },
+      ];
+      expect(configuration.costParameters).toEqual({ feeBlocksMargin: 5 });
+    },
+  );
+
   describe('batch updates', () => {
     const batchUpdatesPassedToFacade = async (
       dependencies: typeof midnightSideEffectDependencies,

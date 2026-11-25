@@ -246,7 +246,6 @@ const getAccountWalletInstance = async (
 
   const configuration: DefaultConfiguration = {
     costParameters: {
-      additionalFeeOverhead: 300_000_000_000_000n,
       feeBlocksMargin: 5,
     },
     networkId,

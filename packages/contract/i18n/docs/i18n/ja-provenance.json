@@ -1,4 +1,5 @@
 {
+  "lace-next.onboarding.create-wallet-failed": "machine-translated",
   "lace-next.send.balance.including-rewards": "machine-translated",
   "lace-next.send.balance.automatic-withdrawal": "machine-translated",
   "lace-next.send.balance.rewards-unavailable": "machine-translated",
@@ -459,6 +460,8 @@
   "tx-executor.building-error.no-utxos": "unknown",
   "tx-executor.building-error.unresolved-utxo-address": "unknown",
   "tx-executor.confirmation-error.generic.subtitle": "unknown",
+  "tx-executor.confirmation-error.unknown-outcome.title": "machine-translated",
+  "tx-executor.confirmation-error.unknown-outcome.subtitle": "machine-translated",
   "tx-executor.confirmation-error.generic.title": "unknown",
   "tx-executor.submission-error.generic.subtitle": "unknown",
   "tx-executor.submission-error.generic.title": "unknown",
