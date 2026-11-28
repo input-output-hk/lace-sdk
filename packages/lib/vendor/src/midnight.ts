@@ -9,7 +9,7 @@
  * (`apps/lace-extension-shell/src/offscreen/midnight-engine.ts`), reached only
  * through offscreen.ts's dynamic import so a pre-warm-only document never
  * instantiates the WASM. Each wasm-bindgen engine this surface reaches (the
- * ledger-v8 engine today) rides the built bundle as a COMMITTED hashed `.wasm`
+ * ledger-v8 and ledger-v9 engines) rides the built bundle as a COMMITTED hashed `.wasm`
  * binary asset (the vendor build's `wasm-bindgen` plugin) — not text-diffable,
  * so its integrity gate is the rebuild-byte-compare CI plus the partner-assisted
  * engine audit ADR 37 names.
@@ -19,7 +19,9 @@
  * trees (the wallet-sdk umbrella's facade/dust/unshielded implementations, the
  * effect runtime, the onchain/zkir engines) are pinned by the workspace lockfile.
  */
-export * as ledger from '@midnight-ntwrk/ledger-v8';
+export * as ledger from '@midnightntwrk/ledger-v8';
+export * as ledgerV9 from '@midnightntwrk/ledger-v9';
+export { readMidnightTransaction } from './midnight-transaction-handle';
 export {
   DustAddress,
   MidnightBech32m,
@@ -33,9 +35,16 @@ export {
   mergeWalletEntries,
   WalletEntrySchema,
 } from '@midnightntwrk/wallet-sdk';
-export { NetworkId } from '@midnightntwrk/wallet-sdk-abstractions';
+export {
+  NetworkId,
+  ProtocolVersion,
+  WalletTransaction,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 export { DustWallet } from '@midnightntwrk/wallet-sdk/dust';
-export { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';
+export {
+  WalletFacade,
+  lifecycleTransactionTraits,
+} from '@midnightntwrk/wallet-sdk/facade';
 export type {
   BalancingRecipe,
   CombinedTokenTransfer,
@@ -48,3 +57,4 @@ export {
   PublicKey,
   UnshieldedWallet,
 } from '@midnightntwrk/wallet-sdk/unshielded';
+export { TransactionLifecycleServiceImpl } from '@midnightntwrk/wallet-sdk/capabilities/transactionLifecycle';

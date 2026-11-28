@@ -27,6 +27,14 @@ export const FEATURE_FLAG_MIDNIGHT_TEE_VERITEE_PROOF_SERVER = FeatureFlagKey(
   'BLOCKCHAIN_MIDNIGHT_TEE_VERITEE_PROOF_SERVER',
 );
 
+export const FEATURE_FLAG_MIDNIGHT_FILTERED_DUST_SYNC = FeatureFlagKey(
+  'BLOCKCHAIN_MIDNIGHT_FILTERED_DUST_SYNC',
+);
+
+export const FEATURE_FLAG_MIDNIGHT_FETCH_MISSING_FEES = FeatureFlagKey(
+  'BLOCKCHAIN_MIDNIGHT_FETCH_MISSING_FEES',
+);
+
 export const defaultTxTtlLength = 60 * 60 * 1000;
 
 /** The Midnight networks, keyed by name. */
@@ -49,11 +57,21 @@ export type MidnightSDKTestNetworkId = Exclude<MidnightSDKNetworkId, 'mainnet'>;
 export const MidnightSDKTestNetworkId: MidnightSDKTestNetworkId[] =
   MidnightSDKNetworkId.filter(id => id !== 'mainnet');
 
+/** Pending Dust nullifiers grouped by wallet account, used for explicit reset consent. */
+export type PendingDustNullifiersByAccount = Record<string, string[]>;
+
 /** The endpoints a Midnight network syncs and proves through. */
 export type MidnightNetworkConfig = {
   indexerAddress: string;
   nodeAddress: string;
   proofServer: ProofServerMode;
+  /** User opt-in applies only to this exact indexer, never to a replacement. */
+  filteredDustSyncIndexer?: string;
+  /** Pending Dust reservations the user explicitly accepted discarding on return to full sync.
+   * Cleared whenever filtering is enabled again. Never authorizes later reservations. */
+  dustSyncResetAuthorizations?: PendingDustNullifiersByAccount;
+  /** Derived from the rollout flag, never from a persisted user override. */
+  isFilteredDustSyncRolloutEnabled?: boolean;
 };
 
 export {
@@ -80,19 +98,25 @@ export const DEFAULT_NETWORKS_CONFIG: MidnightNetworksConfig = {
     indexerAddress: 'http://localhost:8088/api/v4/graphql',
   },
   [NetworkId.NetworkId.MainNet]: {
-    nodeAddress: 'https://blockfrost.lw.iog.io/midnight-mainnet-rpc/',
+    nodeAddress: 'https://rpc.midnight-mainnet.blockfrost.io',
     proofServer: defaultLocalProofServerMode,
-    indexerAddress: 'https://blockfrost.lw.iog.io/midnight-mainnet/',
+    indexerAddress: 'https://midnight-mainnet.blockfrost.io/api/v0',
   },
   [NetworkId.NetworkId.PreProd]: {
-    nodeAddress: 'https://blockfrost.lw.iog.io/midnight-preprod-rpc/',
+    nodeAddress: 'https://rpc.midnight-preprod.blockfrost.io',
     proofServer: defaultLocalProofServerMode,
-    indexerAddress: 'https://blockfrost.lw.iog.io/midnight-preprod/',
+    indexerAddress: 'https://midnight-preprod.blockfrost.io/api/v0',
   },
   [NetworkId.NetworkId.Preview]: {
-    nodeAddress: 'https://blockfrost.lw.iog.io/midnight-preview-rpc/',
+    nodeAddress: 'https://rpc.preview.midnight.network',
     proofServer: defaultLocalProofServerMode,
-    indexerAddress: 'https://blockfrost.lw.iog.io/midnight-preview/',
+    indexerAddress: 'https://indexer.preview.midnight.network/api/v4/graphql',
+  },
+  [NetworkId.NetworkId.StageNet]: {
+    nodeAddress: 'wss://rpc.stagenet.shielded.tools',
+    proofServer: defaultLocalProofServerMode,
+    // StageNet remains gated off until an approved indexer is configured.
+    indexerAddress: '',
   },
   [NetworkId.NetworkId.QaNet]: {
     nodeAddress: 'https://rpc.qanet.midnight.network',
@@ -118,6 +142,7 @@ export const EMPTY_PARTIAL_NETWORKS_CONFIG: PartialMidnightNetworksConfig = {
   [NetworkId.NetworkId.MainNet]: {},
   [NetworkId.NetworkId.PreProd]: {},
   [NetworkId.NetworkId.Preview]: {},
+  [NetworkId.NetworkId.StageNet]: {},
   [NetworkId.NetworkId.QaNet]: {},
   [NetworkId.NetworkId.DevNet]: {},
   [NetworkId.NetworkId.TestNet]: {},

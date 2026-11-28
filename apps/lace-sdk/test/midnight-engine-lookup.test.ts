@@ -335,6 +335,7 @@ const activityRowsOf = async (wallet: Wallet) =>
 
 const receiveEntry = (hash: string): WalletEntry => ({
   hash,
+  lifecycle: { status: 'finalized' },
   protocolVersion: 1,
   identifiers: [],
   timestamp: new Date(123000),

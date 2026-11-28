@@ -56,6 +56,7 @@ import Facebook02Icon from '@hugeicons/core-free-icons/Facebook02Icon';
 import File01Icon from '@hugeicons/core-free-icons/File01Icon';
 import FilterIcon from '@hugeicons/core-free-icons/FilterIcon';
 import FingerPrintIcon from '@hugeicons/core-free-icons/FingerPrintIcon';
+import FlashIcon from '@hugeicons/core-free-icons/FlashIcon';
 import FlowConnectionIcon from '@hugeicons/core-free-icons/FlowConnectionIcon';
 import Folder01Icon from '@hugeicons/core-free-icons/Folder01Icon';
 import FolderAddIcon from '@hugeicons/core-free-icons/FolderAddIcon';
@@ -274,6 +275,10 @@ export const iconMap = {
   Twitter: TwitterIcon,
   Youtube: YoutubeIcon,
   Facebook: Facebook02Icon,
+  Flash: FlashIcon.map(([element, attributes]): (typeof FlashIcon)[number] => [
+    element,
+    { ...attributes, fill: 'currentColor' },
+  ]),
   Instagram: InstagramIcon,
   Medium: MediumIcon,
   Tiktok: TiktokIcon,

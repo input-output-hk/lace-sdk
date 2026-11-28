@@ -632,7 +632,7 @@ describe('test:lace-sdk-build-checks', () => {
         _id: 'FiberFailure',
         cause: {
           _tag: 'Fail',
-          failure: {
+          error: {
             _tag: 'SubmissionError',
             cause: { message: NODE_REJECTION_MESSAGE },
           },
@@ -685,8 +685,8 @@ describe('test:lace-sdk-build-checks', () => {
     expect(browser.workers).toHaveLength(1);
     expect(host.detachClient.mock.calls).toEqual([[CLIENT]]);
     expect(signed).toEqual({
-      signature: 'worker-signature',
-      verifyingKey: 'worker-key',
+      signature: { tag: 'schnorr', value: 'worker-signature' },
+      verifyingKey: { tag: 'schnorr', value: 'worker-key' },
     });
     expect(host.signData).toHaveBeenCalledWith(
       expect.objectContaining({ clientId: OTHER_CLIENT }),
@@ -748,8 +748,8 @@ describe('test:lace-sdk-build-checks', () => {
 
     expect(await intrusion).toBe('refused');
     expect(signed).toEqual({
-      signature: 'worker-signature',
-      verifyingKey: 'worker-key',
+      signature: { tag: 'schnorr', value: 'worker-signature' },
+      verifyingKey: { tag: 'schnorr', value: 'worker-key' },
     });
     expect(host.signData.mock.calls).toEqual([
       [{ ...accountY, data: new Uint8Array([2]) }],
@@ -838,8 +838,8 @@ describe('test:lace-sdk-build-checks', () => {
     await settle();
 
     expect(signed).toEqual({
-      signature: 'worker-signature',
-      verifyingKey: 'worker-key',
+      signature: { tag: 'schnorr', value: 'worker-signature' },
+      verifyingKey: { tag: 'schnorr', value: 'worker-key' },
     });
     expect(host.signData.mock.calls).toEqual([
       [{ ...accountY, data: new Uint8Array([2]) }],
@@ -1007,8 +1007,8 @@ describe('test:lace-sdk-build-checks', () => {
       expect.objectContaining({ clientId: CLIENT }),
     );
     expect(signed).toEqual({
-      signature: 'worker-signature',
-      verifyingKey: 'worker-key',
+      signature: { tag: 'schnorr', value: 'worker-signature' },
+      verifyingKey: { tag: 'schnorr', value: 'worker-key' },
     });
   });
 

@@ -1,14 +1,17 @@
 import { SerialisedWalletState } from '@lace-contract/midnight-context';
 import { HexBytes } from '@lace-lib/util';
 import * as WalletSdk from '@midnightntwrk/wallet-sdk';
+import { Option } from 'effect';
 import { of, throwError } from 'rxjs';
 import { dummyLogger } from 'ts-log';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DustTimelineDiscovery } from '../../src/store/dust-timeline';
 import { createMidnightEngineHost } from '../../src/worker/engine-host';
 
 import {
   createMemoryStore,
+  encryptedSeedOf,
   PASSWORD,
   sealedAccount,
   settings,
@@ -43,7 +46,10 @@ vi.mock('@midnightntwrk/wallet-sdk', () => ({
 }));
 
 vi.mock('@midnightntwrk/wallet-sdk/facade', () => ({
-  WalletFacade: { init: sdk.init },
+  WalletFacade: {
+    init: sdk.init,
+    resolveConfiguration: (configuration: object) => configuration,
+  },
 }));
 
 vi.mock('@midnightntwrk/wallet-sdk/shielded', () => ({
@@ -79,16 +85,20 @@ const progress = { isStrictlyComplete: () => true, isConnected: true };
 const facade = {
   state: () =>
     of({
-      dust: { state: { progress }, capabilities: { keys: {} } },
-      shielded: { state: { progress }, totalCoins: [] },
+      dust: { progress, capabilities: { keys: {} } },
+      shielded: { progress, totalCoins: [] },
       unshielded: {
-        state: { progress },
+        progress,
         capabilities: { keys: { getPublicKey: () => 'night-verifying-key' } },
         availableCoins: [],
         pendingCoins: [],
       },
     }),
   stop: vi.fn(async () => undefined),
+  transactionLifecycleService: {
+    start: vi.fn(async () => undefined),
+    serializeState: vi.fn(async () => '{"version":"v2","records":[]}'),
+  },
   unshielded: {
     start: vi.fn(async () => undefined),
     serializeState: vi.fn(async () => 'unshielded-state'),
@@ -137,6 +147,7 @@ describe('engine-host-storage-operations', () => {
     host.attach({
       clientId: 'tab-1',
       account,
+      encryptedSeed: encryptedSeedOf(account),
       password: PASSWORD.slice(),
       settings: settings(),
     });
@@ -148,6 +159,10 @@ describe('engine-host-storage-operations', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(DustTimelineDiscovery.prototype, 'find').mockResolvedValue({
+      start: Option.none(),
+      outcome: 'not-applicable',
+    });
     sdk.shieldedSeeds.length = 0;
     sdk.dustSeeds.length = 0;
     sdk.init.mockImplementation(
@@ -175,6 +190,7 @@ describe('engine-host-storage-operations', () => {
 
       expect(sdk.shieldedSeeds).toEqual([seeds[2]]);
       expect(sdk.dustSeeds).toEqual([seeds[1]]);
+      expect(facade.transactionLifecycleService.start).toHaveBeenCalledOnce();
     });
 
     it('restores a readable checkpoint without the keys', async () => {
@@ -189,6 +205,7 @@ describe('engine-host-storage-operations', () => {
       await attach(hostWith(store));
 
       expect(sdk.shieldedSeeds).toEqual([]);
+      expect(facade.transactionLifecycleService.start).toHaveBeenCalledOnce();
     });
 
     it('discards only the corrupt checkpoint of the account and rebuilds it from the seed', async () => {

@@ -4,7 +4,12 @@ import {
   toUnshieldedTokenType,
 } from '@lace-contract/midnight-context';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import * as ledger from '@midnightntwrk/ledger-v8';
+import {
+  WalletTransaction,
+  ProtocolVersion,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 import {
   DustAddress,
   MidnightBech32m,
@@ -67,6 +72,7 @@ const setup = ({
     ledger.sampleSigningKey(),
   );
   const state = {
+    activeProtocolVersion: ProtocolVersion.MinSupportedVersion,
     unshielded: {
       availableCoins: night
         ? [
@@ -87,14 +93,14 @@ const setup = ({
         : [],
     },
     dust: {
-      balance: () => availableDust,
+      availableCoins: [{ generatedNow: availableDust }],
       totalCoins: [{ maxCap, generatedNow: 0n }],
     },
   } as unknown as FacadeState;
   const engine = {
     accountId,
     networkId,
-    nightVerifyingKey,
+    nightVerifyingKey: { tag: 'schnorr', value: nightVerifyingKey },
     state: () => of(state),
     address$: of({ dust: dustAddress }),
     areKeysAvailable$: of(keys),
@@ -153,7 +159,7 @@ describe('unsigned Midnight fee requests', () => {
         availableDust: 10n,
       });
       expect(engine.estimateTransactionFee).toHaveBeenCalledWith(
-        expect.any(ledger.Transaction),
+        expect.any(WalletTransaction),
         { currentTime: expect.any(Date) as unknown },
       );
       expect(engine.calculateTransactionFee).not.toHaveBeenCalled();
@@ -205,18 +211,13 @@ describe('unsigned Midnight fee requests', () => {
     engine: ReturnType<typeof setup>['engine'],
     allowFeePayment: bigint,
   ) => {
-    const [[tx]] = engine.estimateTransactionFee.mock.calls as unknown as [
-      [
-        ledger.Transaction<
-          ledger.SignatureEnabled,
-          ledger.PreProof,
-          ledger.PreBinding
-        >,
-      ],
+    const [[handle]] = engine.estimateTransactionFee.mock.calls as unknown as [
+      [WalletTransaction<'Unproven'>],
     ];
+    const tx = readMidnightTransaction(handle) as ledger.UnprovenTransaction;
     const registrations = tx.intents?.get(1)?.dustActions?.registrations ?? [];
     expect(registrations).toHaveLength(1);
-    expect(registrations[0]?.nightKey).toBe(engine.nightVerifyingKey);
+    expect(registrations[0]?.nightKey).toBe(engine.nightVerifyingKey.value);
     expect(registrations[0]?.dustAddress).toBe(
       DustAddress.codec.decode(networkId, MidnightBech32m.parse(dustAddress))
         .data,

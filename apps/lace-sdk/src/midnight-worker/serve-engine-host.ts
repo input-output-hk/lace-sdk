@@ -193,6 +193,8 @@ const hostForClient = (
     return request;
   };
   return {
+    inspectDustSyncReset: async request =>
+      carried(host.inspectDustSyncReset(own(request))),
     attach: async request =>
       carried(host.attach(withPasswordBytes(own(request)))),
     detach: async caller => carried(host.detach(own(caller))),

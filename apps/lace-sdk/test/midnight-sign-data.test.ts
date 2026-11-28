@@ -3,8 +3,8 @@ import {
   MidnightNetworkId,
 } from '@lace-contract/midnight-context';
 import { WalletId } from '@lace-contract/wallet-repo';
-import { verifySignature } from '@midnight-ntwrk/ledger-v8';
-import { createKeystore } from '@midnightntwrk/wallet-sdk-unshielded-wallet';
+import { verifySignature } from '@midnightntwrk/ledger-v8';
+import { createKeystore } from '@midnightntwrk/wallet-sdk/unshielded';
 import { of, throwError } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -29,9 +29,17 @@ const signature = { signature: 'aa', verifyingKey: 'bb' };
 const options: SignDataOptions = { encoding: 'text', keyType: 'unshielded' };
 
 const setup = (accounts = [accountId]) => {
-  const signData = vi.fn(() => of(signature));
+  const signData = vi.fn<MidnightWallet['signData']>(() =>
+    of({
+      signature: { tag: 'schnorr' as const, value: signature.signature },
+      verifyingKey: { tag: 'schnorr' as const, value: signature.verifyingKey },
+    }),
+  );
   const secondSignData = vi.fn(() =>
-    of({ signature: 'cc', verifyingKey: 'dd' }),
+    of({
+      signature: { tag: 'schnorr', value: 'cc' },
+      verifyingKey: { tag: 'schnorr', value: 'dd' },
+    }),
   );
   const wallet = {
     stateObservables: {
@@ -219,8 +227,14 @@ describe('signMidnightData', () => {
 
   it('verifies an actual unshielded signature only for the prefixed bytes and selected key', async () => {
     const { wallet, signData } = setup();
-    const keystore = createKeystore(new Uint8Array(32).fill(1), 'preview');
-    const other = createKeystore(new Uint8Array(32).fill(2), 'preview');
+    const keystore = createKeystore(
+      { kind: 'schnorr', secret: new Uint8Array(32).fill(1) },
+      'preview',
+    );
+    const other = createKeystore(
+      { kind: 'schnorr', secret: new Uint8Array(32).fill(2) },
+      'preview',
+    );
     signData.mockImplementation((...args: unknown[]) => {
       const bytes = args[0] as Uint8Array;
       return of({
@@ -243,7 +257,7 @@ describe('signMidnightData', () => {
       ),
     ).toBe(false);
     expect(
-      verifySignature(other.getPublicKey(), prefixed, result.signature),
+      verifySignature(other.getPublicKey().value, prefixed, result.signature),
     ).toBe(false);
   });
 });

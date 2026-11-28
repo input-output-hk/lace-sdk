@@ -1,8 +1,10 @@
+import { ProtocolVersion } from '@midnightntwrk/wallet-sdk-abstractions';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   assertPlainData,
   fakeEngines,
+  facadeState,
   PASSWORD,
   sealedAccount,
   settings,
@@ -19,9 +21,16 @@ const ledgerMocks = vi.hoisted(() => ({
   parseCheckResult: vi.fn(() => [42n, undefined]),
 }));
 
-vi.mock('@midnight-ntwrk/ledger-v8', async importOriginal => ({
+vi.mock('@midnightntwrk/ledger-v8', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   ...ledgerMocks,
+}));
+
+vi.mock('@midnightntwrk/ledger-v9', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createCheckPayload: vi.fn(() => new Uint8Array([0x99])),
+  createProvingPayload: vi.fn(() => new Uint8Array([0x98])),
+  parseCheckResult: vi.fn(() => [9n]),
 }));
 
 vi.mock('../../src/store/dependencies', async importOriginal => {
@@ -143,6 +152,55 @@ describe('engine-host-proving', () => {
       const [a, b] = fakeEngines.started;
       return { host, a, b, accounts };
     };
+
+    it('resolves omitted circuit epochs from the current account after a fork', async () => {
+      const { host, a, b, accounts } = await attached();
+      const request = {
+        clientId: 'tab-1',
+        accountId: accounts[0].accountId,
+        serializedPreimage: new Uint8Array([1]),
+        keyLocation: 'midnight/dust/spend',
+      };
+      await expect(host.checkCircuit(request)).resolves.toEqual([
+        42n,
+        undefined,
+      ]);
+      a.state$.next(
+        Object.assign(facadeState(), {
+          activeProtocolVersion: ProtocolVersion.V9NativeForkVersion,
+        }),
+      );
+      await expect(host.checkCircuit(request)).resolves.toEqual([9n]);
+      await host.proveCircuit(request);
+      expect(a.proofServerTransport.prove).toHaveBeenCalledWith(
+        new Uint8Array([0x98]),
+        undefined,
+      );
+      await expect(
+        host.checkCircuit({ ...request, accountId: accounts[1].accountId }),
+      ).resolves.toEqual([42n, undefined]);
+      expect(b.proofServerTransport.prove).not.toHaveBeenCalled();
+      await expect(
+        host.checkCircuit({ ...request, ledgerVersion: 'v8' }),
+      ).resolves.toEqual([42n, undefined]);
+    });
+
+    it('preserves a v9 circuit request through the worker port', async () => {
+      const { host, a, accounts } = await attached();
+      await expect(
+        host.checkCircuit({
+          clientId: 'tab-1',
+          accountId: accounts[0].accountId,
+          ledgerVersion: 'v9',
+          serializedPreimage: new Uint8Array([1]),
+          keyLocation: 'circuit',
+        }),
+      ).resolves.toEqual([9n]);
+      expect(a.proofServerTransport.check).toHaveBeenCalledWith(
+        new Uint8Array([0x99]),
+        undefined,
+      );
+    });
 
     it('checks a circuit with page-supplied key material through the account own port, carrying bytes only', async () => {
       const { host, a, b, accounts } = await attached();

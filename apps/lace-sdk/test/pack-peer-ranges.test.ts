@@ -86,6 +86,13 @@ describe('manifestForDistribution', () => {
       distribution([...STABLE_ENTRIES, 'midnight', 'experimental']),
     ) as Manifest;
     expect(canary.exports['./experimental']).toBeDefined();
+    expect(canary.peerDependencies?.['@midnightntwrk/ledger-v9']).toBe('1.0.2');
+    expect(canary.peerDependencies?.['@midnight-ntwrk/ledger-v8']).toBe(
+      '^8.1.0',
+    );
+    expect(canary.peerDependenciesMeta?.['@midnight-ntwrk/ledger-v8']).toEqual({
+      optional: true,
+    });
     expect(canary.peerDependencies?.['@midnightntwrk/wallet-sdk-facade']).toBe(
       '^5.0.0-rc.0',
     );

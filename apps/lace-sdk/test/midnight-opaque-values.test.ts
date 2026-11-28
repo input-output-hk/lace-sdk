@@ -7,8 +7,13 @@ import {
   toUnshieldedTokenType,
 } from '@lace-contract/midnight-context';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
 import { createScopedProofServerAccess } from '@lace-lib/vendor/proof-server-transport';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import * as ledger from '@midnightntwrk/ledger-v8';
+import {
+  WalletTransaction,
+  ProtocolVersion,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 import { UnshieldedAddress } from '@midnightntwrk/wallet-sdk-address-format';
 import { BehaviorSubject, defer, NEVER, of, TimeoutError } from 'rxjs';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -69,7 +74,7 @@ const nightOutput = {
 };
 
 // Real ledger transactions: an unshielded NIGHT spend, unproven, proved but unbound, and proved and bound.
-const unproven = () => {
+const rawUnproven = () => {
   const key = ledger.signatureVerifyingKey(ledger.sampleSigningKey());
   const token = ledger.nativeToken().raw;
   const intent = ledger.Intent.new(new Date(Date.now() + 3_600_000));
@@ -88,14 +93,28 @@ const unproven = () => {
   );
   return ledger.Transaction.fromParts(networkId, undefined, undefined, intent);
 };
+const protocolVersion = ProtocolVersion.MinSupportedVersion;
+const unproven = () =>
+  WalletTransaction.adopt('Unproven', rawUnproven(), protocolVersion);
+const finalized = () =>
+  WalletTransaction.adopt(
+    'Finalized',
+    rawUnproven().mockProve(),
+    protocolVersion,
+  );
 // Without contract calls, proving asks the prover for nothing.
 const unbound = async () =>
-  unproven().prove(
-    { check: async () => [], prove: async () => new Uint8Array() },
-    ledger.CostModel.initialCostModel(),
+  WalletTransaction.adopt(
+    'Unbound',
+    await rawUnproven().prove(
+      { check: async () => [], prove: async () => new Uint8Array() },
+      ledger.CostModel.initialCostModel(),
+    ),
+    protocolVersion,
   );
 const unprovenRecipe = (): BalancingRecipe => ({
   type: 'UNPROVEN_TRANSACTION',
+  protocolVersion,
   transaction: unproven(),
 });
 
@@ -116,7 +135,7 @@ const createEngine = () => {
   const built = unprovenRecipe();
   const balanced = unprovenRecipe();
   const signed = unprovenRecipe();
-  const proved = unproven().mockProve();
+  const proved = finalized();
   return {
     accountId,
     networkId,
@@ -142,14 +161,28 @@ const createEngine = () => {
         },
         dust: { totalCoins: [], availableCoins: [] },
       }),
+    adoptTransaction: (bytes: Uint8Array, stage: WalletTransaction.Stage) =>
+      of(
+        WalletTransaction.adopt(
+          stage,
+          ledger.Transaction.deserialize(
+            'signature',
+            stage === 'Unproven' ? 'pre-proof' : 'proof',
+            stage === 'Finalized' ? 'binding' : 'pre-binding',
+            bytes,
+          ),
+          protocolVersion,
+        ),
+      ),
     transferTransaction: vi.fn(() => of(built)),
     initSwap: vi.fn(() => of(built)),
     registerNightUtxosForDustGeneration: vi.fn(() => of(built)),
     balanceUnprovenTransaction: vi.fn(() => of(balanced)),
     balanceFinalizedTransaction: vi.fn(
-      (original: ledger.FinalizedTransaction) =>
+      (original: WalletTransaction<'Finalized'>) =>
         of({
           type: 'FINALIZED_TRANSACTION',
+          protocolVersion,
           originalTransaction: original,
           balancingTransaction: unproven(),
         }),
@@ -161,12 +194,17 @@ const createEngine = () => {
           ledger.Proof,
           ledger.PreBinding
         >,
-      ) => of({ type: 'UNBOUND_TRANSACTION', baseTransaction: base }),
+      ) =>
+        of({
+          type: 'UNBOUND_TRANSACTION',
+          protocolVersion,
+          baseTransaction: base,
+        }),
     ),
     signRecipe: vi.fn((_recipe: BalancingRecipe) => of(signed)),
     finalizeRecipe: vi.fn((_recipe: BalancingRecipe) => of(proved)),
     revert: vi.fn((_recipe: BalancingRecipe) => of(undefined)),
-    submitTransaction: vi.fn((_transaction: ledger.FinalizedTransaction) =>
+    submitTransaction: vi.fn((_transaction: WalletTransaction<'Finalized'>) =>
       of('tx-id'),
     ),
   };
@@ -203,7 +241,11 @@ const setup = () => {
 // Every value field is bytes or text: nothing a structured clone could strip.
 const expectPlainData = (value: object) => {
   for (const field of Object.values(value))
-    expect(typeof field === 'string' || field instanceof Uint8Array).toBe(true);
+    expect(
+      typeof field === 'bigint' ||
+        typeof field === 'string' ||
+        field instanceof Uint8Array,
+    ).toBe(true);
 };
 
 const expectOriginOf = (
@@ -258,7 +300,7 @@ const connectorHelpers: [
     'balanceMidnightSealedTransaction',
     async wallet =>
       balanceMidnightSealedTransaction(wallet, {
-        tx: hex(unproven().mockProve()),
+        tx: hex(finalized()),
       }),
   ],
   [
@@ -329,7 +371,9 @@ describe('midnight-opaque-helpers', () => {
     expectPlainData(transaction);
     expectOriginOf(transaction, engine);
     expect(valueBytes(transaction)).toBe(hex(engine.proved));
-    expect(transaction.activityHash).toBe(engine.proved.transactionHash());
+    expect(transaction.activityHash).toBe(
+      readMidnightTransaction(engine.proved).transactionHash(),
+    );
   });
 
   it('discardMidnightTx gives the engine the decoded recipe', async () => {
@@ -385,7 +429,9 @@ describe('midnight-opaque-helpers', () => {
       expectPlainData(transaction);
       expectOriginOf(transaction, engine);
       expect(valueBytes(transaction)).toBe(hex(engine.proved));
-      expect(transaction.activityHash).toBe(engine.proved.transactionHash());
+      expect(transaction.activityHash).toBe(
+        readMidnightTransaction(engine.proved).transactionHash(),
+      );
     },
   );
 
@@ -451,11 +497,11 @@ describe('midnight-duplicate-proof-refused', () => {
   const provingSetup = async () => {
     const { engine, wallet } = setup();
     let settle!: {
-      resolve: (transaction: ledger.FinalizedTransaction) => void;
+      resolve: (transaction: WalletTransaction<'Finalized'>) => void;
       reject: (error: Error) => void;
     };
     const prove = vi
-      .fn<() => Promise<ledger.FinalizedTransaction>>()
+      .fn<() => Promise<WalletTransaction<'Finalized'>>>()
       .mockImplementationOnce(
         async () =>
           new Promise((resolve, reject) => {
@@ -470,7 +516,10 @@ describe('midnight-duplicate-proof-refused', () => {
     const facade = {
       finalizeRecipe: async ({ transaction }: { transaction: never }) => {
         try {
-          return await access.provingService.prove(transaction);
+          return await access.provingService.prove(
+            transaction,
+            protocolVersion,
+          );
         } catch (error) {
           revertTransaction(transaction);
           throw error;

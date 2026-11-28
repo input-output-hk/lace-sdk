@@ -36,6 +36,7 @@ interface GovernanceCenterMainProps {
   onSearchChange?: (value: string) => void;
   searchPlaceholder?: string;
   showSearchBar?: boolean;
+  collapseTitleOnScroll?: boolean;
   governanceStatusCard: GovernanceStatusCardProps;
   governanceCards: GovernanceCardProps[];
   dRepDataError?: GovernanceDRepDataError;
@@ -47,6 +48,7 @@ export const GovernanceCenterMain = ({
   onSearchChange,
   searchPlaceholder,
   showSearchBar,
+  collapseTitleOnScroll = false,
   governanceStatusCard,
   governanceCards,
   dRepDataError,
@@ -54,6 +56,7 @@ export const GovernanceCenterMain = ({
   const { t } = useTranslation();
   const { theme } = useTheme();
   const shouldShowSearch = showSearchBar ?? governanceCards.length > 1;
+  const shouldCollapseSearchHeader = collapseTitleOnScroll && shouldShowSearch;
 
   const ListHeaderComponent = useMemo(
     () => (
@@ -109,64 +112,73 @@ export const GovernanceCenterMain = ({
 
   const { collapseScrollY, onScroll } = usePageHeaderCollapseScroll();
 
-  const headerSection = useMemo(
-    () => (
-      <PageHeaderSection
-        title={t('v2.governance.center.title')}
-        reserveSubtitleSpace
-        testID="governance-center-header-section"
-        collapseScrollY={collapseScrollY}
-        stickyInScrollParent
-        contentStyle={
-          shouldShowSearch ? undefined : styles.headerSectionContent
-        }>
-        {shouldShowSearch ? (
-          <SearchBar
-            value={searchValue}
-            onChangeText={onSearchChange}
-            placeholder={searchPlaceholder}
-            testID="governance-center-search-bar"
-          />
-        ) : null}
-      </PageHeaderSection>
-    ),
-    [
-      searchValue,
-      onSearchChange,
-      searchPlaceholder,
-      shouldShowSearch,
-      t,
-      collapseScrollY,
-    ],
+  const searchBar = shouldShowSearch ? (
+    <SearchBar
+      value={searchValue}
+      onChangeText={onSearchChange}
+      placeholder={searchPlaceholder}
+      testID="governance-center-search-bar"
+    />
+  ) : null;
+
+  const list = (
+    <GenericFlashList<GovernanceCardProps>
+      testID="governance-center-list"
+      style={shouldCollapseSearchHeader ? styles.fillSpace : styles.list}
+      data={governanceCards}
+      renderItem={renderItem}
+      keyExtractor={keyExtractor}
+      ListHeaderComponent={ListHeaderComponent}
+      ListEmptyComponent={ListEmptyComponent}
+      ItemSeparatorComponent={() => <View style={styles.itemSeparator} />}
+      contentContainerStyle={[
+        styles.listContent,
+        !shouldCollapseSearchHeader && styles.listTopInset,
+      ]}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
+      maintainVisibleContentPosition={{ disabled: true }}
+    />
   );
 
   return (
     <PageContainerTemplate>
-      <View style={styles.content}>
-        <View style={styles.fillSpace}>
-          {headerSection}
-          <GenericFlashList<GovernanceCardProps>
-            style={styles.list}
-            data={governanceCards}
-            renderItem={renderItem}
-            keyExtractor={keyExtractor}
-            ListHeaderComponent={ListHeaderComponent}
-            ListEmptyComponent={ListEmptyComponent}
-            ItemSeparatorComponent={() => <View style={styles.itemSeparator} />}
-            contentContainerStyle={styles.listContent}
-            onScroll={onScroll}
-            scrollEventThrottle={16}
-            maintainVisibleContentPosition={{ disabled: true }}
-          />
-        </View>
+      <View style={styles.fillSpace}>
+        <PageHeaderSection
+          title={t('v2.governance.center.title')}
+          reserveSubtitleSpace={!shouldCollapseSearchHeader}
+          collapseTitleOnScroll={shouldCollapseSearchHeader}
+          testID="governance-center-header-section"
+          collapseScrollY={collapseScrollY}
+          stickyInScrollParent
+          contentStyle={
+            shouldShowSearch ? undefined : styles.headerSectionContent
+          }>
+          {shouldCollapseSearchHeader ? null : searchBar}
+        </PageHeaderSection>
+        {shouldCollapseSearchHeader ? (
+          <View collapsable={false} style={styles.searchAndResults}>
+            {searchBar}
+            <View style={styles.clippedList}>{list}</View>
+          </View>
+        ) : (
+          list
+        )}
       </View>
     </PageContainerTemplate>
   );
 };
 
 const styles = StyleSheet.create({
-  content: {
+  searchAndResults: {
     flex: 1,
+    paddingTop: spacing.S,
+    gap: spacing.M,
+  },
+  clippedList: {
+    flex: 1,
+    marginHorizontal: -spacing.M,
+    overflow: 'hidden',
   },
   fillSpace: {
     flex: 1,
@@ -179,9 +191,11 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
   },
   listContent: {
-    paddingTop: spacing.M,
     paddingHorizontal: spacing.M,
     paddingBottom: TabBarMetrics.horizontal.height + spacing.XL,
+  },
+  listTopInset: {
+    paddingTop: spacing.M,
   },
   itemSeparator: {
     height: spacing.L,

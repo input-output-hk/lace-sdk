@@ -11,6 +11,8 @@ import {
 } from '@lace-contract/midnight-context';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { AccountId } from '@lace-contract/wallet-repo';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import { ProtocolVersion } from '@midnightntwrk/wallet-sdk-abstractions';
 import {
   DustAddress,
   MidnightBech32m,
@@ -62,7 +64,6 @@ import type {
   AnyWallet,
   InMemoryWalletAccount,
 } from '@lace-contract/wallet-repo';
-import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 import type {
   BalancingRecipe,
   FacadeState,
@@ -122,13 +123,13 @@ const facadeState = ({
     unshielded: {
       availableCoins: [...available, otherCoin],
       pendingCoins: pending,
-      state: syncState(synced.unshielded),
+      ...syncState(synced.unshielded),
     },
-    shielded: { state: syncState(synced.shielded) },
+    shielded: { ...syncState(synced.shielded) },
     dust: {
       totalCoins: dustTotal,
       availableCoins: dustAvailable,
-      state: syncState(synced.dust),
+      ...syncState(synced.dust),
     },
   } as unknown as FacadeState);
 
@@ -146,15 +147,20 @@ const syncProgress = (complete: boolean) => ({
 const registrationTx = ledgerFake({ id: 'registration-transaction' });
 const recipe = {
   type: 'UNPROVEN_TRANSACTION',
+  protocolVersion: ProtocolVersion.MinSupportedVersion,
   transaction: registrationTx,
 } as unknown as BalancingRecipe;
 const signed = {
   type: 'UNPROVEN_TRANSACTION',
+  protocolVersion: ProtocolVersion.MinSupportedVersion,
   transaction: ledgerFake({ id: 'signed-transaction' }),
 } as unknown as BalancingRecipe;
-const finalized = ledgerFake({
-  id: 'finalized-transaction',
-}) as unknown as FinalizedTransaction;
+const finalized = ledgerFake(
+  {
+    id: 'finalized-transaction',
+  },
+  'Finalized',
+);
 
 const wallets$ = new BehaviorSubject<MidnightWalletsByAccountId>({});
 
@@ -738,6 +744,7 @@ describe('Midnight helpers', () => {
           // decodes back to, as the wallet library reads them from it.
           const built = {
             type: 'UNPROVEN_TRANSACTION',
+            protocolVersion: ProtocolVersion.MinSupportedVersion,
             transaction: ledgerFake({ inputs }),
           } as unknown as ReservingRecipe;
           lastBuilt = built;
@@ -750,7 +757,9 @@ describe('Midnight helpers', () => {
       );
       engine.revert.mockImplementation(built =>
         defer(() => {
-          const { inputs } = (built as ReservingRecipe).transaction;
+          const { inputs } = readMidnightTransaction(
+            (built as ReservingRecipe).transaction,
+          ) as unknown as { inputs: Coin[] };
           coins.pending = coins.pending.filter(coin => !inputs.includes(coin));
           coins.available.push(...inputs);
           publish();

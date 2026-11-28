@@ -10,7 +10,6 @@ import {
 import { syncActions } from '@lace-contract/sync';
 import { tokensActions } from '@lace-contract/tokens';
 import { walletsActions } from '@lace-contract/wallet-repo';
-import { Percent } from '@lace-lib/cardano-util';
 import { Timestamp } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
 import {
@@ -74,6 +73,7 @@ import {
   nightCoin,
   PASSWORD,
   sealedAccount,
+  encryptedSeedOf,
   useFastKeyDerivation,
   WRONG_PASSWORD,
 } from './engine-host-fakes';
@@ -176,6 +176,7 @@ const historyEntry = (hash: string) => ({
   timestamp: new Date(1000),
   fees: null,
   status: 'SUCCESS',
+  lifecycle: { status: 'finalized' },
 });
 const progress = (ratio: number) => ({
   shielded: ratio,
@@ -595,7 +596,9 @@ describe('test:engine-client-storage-routing', () => {
       );
       await until(() =>
         emitted.some(
-          ({ type }) => type === actions.sync.completeSyncOperation.type,
+          action =>
+            actions.sync.applySyncOperationSnapshot.match(action) &&
+            action.payload.operation.status === 'Completed',
         ),
       );
       const beforeReset = emitted.length;
@@ -615,18 +618,18 @@ describe('test:engine-client-storage-routing', () => {
       await until(() =>
         afterReset().some(
           action =>
-            actions.sync.addSyncOperation.match(action) &&
+            actions.sync.applySyncOperationSnapshot.match(action) &&
             action.payload.operation.status === 'InProgress',
         ),
       );
 
       expect(typesBeforeFreshProgress).not.toContain(
-        actions.sync.completeSyncOperation.type,
+        actions.sync.applySyncOperationSnapshot.type,
       );
       expect(
         afterReset().filter(
           action =>
-            actions.sync.addSyncOperation.match(action) &&
+            actions.sync.applySyncOperationSnapshot.match(action) &&
             action.payload.operation.status === 'InProgress',
         ),
       ).toMatchObject([{ payload: { operation: { progress: 0.25 } } }]);
@@ -971,6 +974,12 @@ describe('test:engine-client-storage-routing', () => {
         sync: { selectSyncStatusByAccount$: of({}) },
         tokens: { selectTokensMetadata$: of({}) },
         wallets: {
+          selectWalletById$: of(() => ({
+            type: 'InMemory',
+            blockchainSpecific: {
+              Midnight: { encryptedSeed: encryptedSeedOf(account) },
+            },
+          })),
           selectIsWalletRepoMigrating$: of(false),
           selectActiveNetworkAccounts$: of([account]),
         },
@@ -2066,16 +2075,14 @@ describe('test:engine-client-storage-routing', () => {
             const emitted: Action[] = [];
             sideEffect$.subscribe(action => emitted.push(action));
             flush();
-            expect(emitted).toEqual([
-              actions.sync.updateSyncProgress({
-                accountId: a.accountId,
-                operationId,
-                progress: Percent(1),
-              }),
-              actions.sync.completeSyncOperation({
-                accountId: a.accountId,
-                operationId,
-              }),
+            expect(emitted).toMatchObject([
+              {
+                type: actions.sync.applySyncOperationSnapshot.type,
+                payload: {
+                  accountId: a.accountId,
+                  operation: { operationId, status: 'Completed' },
+                },
+              },
             ]);
           },
         }),

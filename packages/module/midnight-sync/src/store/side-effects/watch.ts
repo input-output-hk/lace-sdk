@@ -6,7 +6,8 @@ import {
 } from '@lace-contract/midnight-context';
 import { TokenId } from '@lace-contract/tokens';
 import { whileActive } from '@lace-contract/wallet-active-state';
-import { deepEquals, isNotNil, Percent } from '@lace-lib/cardano-util';
+import { WalletType } from '@lace-contract/wallet-repo';
+import { deepEquals, isNotNil } from '@lace-lib/cardano-util';
 import { blockingWithLatestFrom } from '@lace-lib/cardano-util-rxjs';
 import { BigNumber, Timestamp } from '@lace-lib/util';
 import { PROVIDER_REQUEST_RETRY_CONFIG } from '@lace-lib/util-provider';
@@ -23,6 +24,7 @@ import {
   exhaustMap,
   filter,
   finalize,
+  firstValueFrom,
   from,
   groupBy,
   map,
@@ -32,12 +34,13 @@ import {
   of,
   ReplaySubject,
   share,
+  startWith,
+  Subject,
   switchMap,
   take,
   takeUntil,
   tap,
   throttleTime,
-  withLatestFrom,
   zip,
   type Observable,
   type BehaviorSubject,
@@ -51,6 +54,7 @@ import {
   midnightStateOf$,
   shieldedPublicKeysOf,
 } from '../../worker/state-accessors';
+import { observeSyncStatus } from '../sync-status';
 import { createVeriteeLedgerIndexerResolver } from '../veritee-ledger-indexer';
 
 import { midnightSyncFailedActions } from './sync-failure';
@@ -294,114 +298,50 @@ export const upsertAddresses =
       ),
     );
 
-// Sync progress subscription - emits sync actions when wallet.syncProgress$ emits.
-// Use blockingWithLatestFrom for isUnshieldedEnabled$ to handle race conditions.
-// Throttle to 500ms to reduce Redux dispatch frequency during heavy sync,
-// keeping the SW event loop responsive for navigation and other user actions.
+// Percentage changes are coalesced before Redux, while completion and health
+// transitions bypass the delay. Feature changes use the current snapshot only.
 export const updateSyncProgress =
   (
     wallet: MidnightEngine,
     isUnshieldedEnabled$: Observable<boolean>,
     wallets$: BehaviorSubject<MidnightEnginesByAccountId>,
   ): SideEffect =>
-  (_, stateObservables, { actions }) =>
-    wallet.syncProgress$.pipe(
-      throttleTime(500, undefined, { leading: true, trailing: true }),
-      // Must sit BELOW the throttle: RxJS withholds completion until a queued
-      // trailing emission has fired, so it outlives the wallet and revives
-      // the sync record a reset just deleted, stamping lastSuccessfulSync.
+  (_, __, { actions }) =>
+    observeSyncStatus(wallet.syncProgress$, isUnshieldedEnabled$).pipe(
+      // A trailing percentage can outlive source completion during a reset.
       filter(() => !!wallets$.value[wallet.accountId]),
-      blockingWithLatestFrom(isUnshieldedEnabled$),
-      withLatestFrom(stateObservables.sync.selectSyncStatusByAccount$),
-      mergeMap(
-        ([
-          [
-            { shielded, unshielded, dust, isStrictlyComplete },
-            isUnshieldedEnabled,
-          ],
-          syncStatusByAccount,
-        ]) => {
-          const { accountId } = wallet;
-          const operationId = `${accountId}-midnight-sync`;
-          const accountSyncStatus = syncStatusByAccount[accountId];
-          // Dust counts even at 0: the bar reports how synced the wallet IS,
-          // so an unstarted dust wallet is 0% synced, not absent from the
-          // reading. Excluding it overstated syncedness exactly when dust was
-          // furthest behind.
-          const progressValues = [shielded, dust];
-
-          if (isUnshieldedEnabled) {
-            progressValues.push(unshielded);
-          }
-
-          const progress = Math.min(...progressValues);
-
-          // Sync is complete only when the SDK confirms strict completion for all active wallets.
-          // This prevents false positives from the initial "connected + empty state" where
-          // computeConnectedSyncRatio returns 1 before the indexer has sent actual sync data.
-          const isComplete =
-            isStrictlyComplete.shielded &&
-            (!isUnshieldedEnabled || isStrictlyComplete.unshielded) &&
-            isStrictlyComplete.dust;
-
-          // If no pending InProgress operation exists yet (e.g. first sync or resync Pending
-          // placeholder), create a new InProgress+Determinate operation instead of updating.
-          const existingOperation =
-            accountSyncStatus?.pendingSync?.operations[operationId];
-          if (
-            !accountSyncStatus?.pendingSync ||
-            !existingOperation ||
-            existingOperation.status === 'Pending'
-          ) {
-            const syncActions: MidnightWatchAction[] = [
-              actions.sync.addSyncOperation({
-                accountId,
-                operation: {
-                  operationId,
+      map(({ progress, isComplete, liveness, statusDetail, usesFastSync }) => {
+        const now = Timestamp(Date.now());
+        const base = {
+          operationId: `${wallet.accountId}-midnight-sync`,
+          description: 'sync.operation.midnight-wallet-sync' as const,
+          startedAt: now,
+          ...(statusDetail ? { statusDetail } : {}),
+        };
+        // Dispatch is delayed by the store. Reading Redux here to choose between
+        // add/update could miss a queued completion and lose newer progress.
+        return actions.sync.applySyncOperationSnapshot({
+          accountId: wallet.accountId,
+          usesFastSync,
+          operation:
+            liveness === 'WrongNetwork'
+              ? {
+                  ...base,
+                  status: 'Failed',
+                  error: 'sync.error.midnight-sync-failed',
+                  failedAt: now,
+                }
+              : isComplete
+              ? { ...base, status: 'Completed', completedAt: now }
+              : {
+                  ...base,
                   status: 'InProgress',
-                  type: 'Determinate',
-                  progress: Percent(progress),
-                  description: 'sync.operation.midnight-wallet-sync',
-                  startedAt: Timestamp(Date.now()),
+                  ...(progress === undefined
+                    ? { type: 'Indeterminate' }
+                    : { type: 'Determinate', progress }),
                 },
-              }),
-            ];
-
-            // If progress is already complete, also dispatch completion action immediately
-            if (isComplete) {
-              syncActions.push(
-                actions.sync.completeSyncOperation({
-                  accountId,
-                  operationId,
-                }),
-              );
-            }
-
-            return from(syncActions);
-          }
-
-          // Update progress for existing operation
-          const progressActions: MidnightWatchAction[] = [
-            actions.sync.updateSyncProgress({
-              accountId,
-              operationId,
-              progress: Percent(progress),
-            }),
-          ];
-
-          // If progress is complete, also dispatch completion action
-          if (isComplete) {
-            progressActions.push(
-              actions.sync.completeSyncOperation({
-                accountId,
-                operationId,
-              }),
-            );
-          }
-
-          return from(progressActions);
-        },
-      ),
+        });
+      }),
     );
 
 // Dust generation details subscription - extracts full dust info from SDK.
@@ -593,59 +533,106 @@ export const createWatchMidnightAccount =
       dependencies,
     );
 
-    return dependencies
-      .startMidnightAccountWallet({
+    const startupStatus$ = new Subject<MidnightWatchAction>();
+    const wallet$ = defer(() =>
+      dependencies.startMidnightAccountWallet({
         account,
         config,
         store,
         keyManager,
+        getEncryptedSeed: async () => {
+          const selectWallet = await firstValueFrom(
+            stateObservables.wallets.selectWalletById$,
+          );
+          const wallet = selectWallet(account.walletId);
+          const seed =
+            wallet?.type === WalletType.InMemory
+              ? wallet.blockchainSpecific.Midnight?.encryptedSeed
+              : undefined;
+          if (!seed) throw new Error('Missing Midnight wallet seed');
+          return seed;
+        },
+        onPreparationStatusChange: isPreparing => {
+          startupStatus$.next(
+            dependencies.actions.sync.updateSyncOperation({
+              accountId: account.accountId,
+              operationId: `${account.accountId}-midnight-sync`,
+              update: {
+                statusDetail: isPreparing
+                  ? 'v2.sync-status.detail.preparing'
+                  : 'v2.sync-status.detail.waiting-for-data',
+              },
+            }),
+          );
+        },
         getVeriteeLedgerIndexerUrl: createVeriteeLedgerIndexerResolver(
           stateObservables.midnightContext.selectNetworksConfig$,
         ),
-      })
-      .pipe(
-        tap(midnightWallet => {
-          midnightWallets$.next({
-            ...midnightWallets$.value,
-            [midnightWallet.accountId]: midnightWallet,
-          });
-        }),
-        mergeMap(midnightWallet =>
-          subscribeToEngine(midnightWallet, midnightWallets$)(
-            actionObservables,
-            stateObservables,
-            dependencies,
-          ).pipe(
-            filter(
-              () =>
-                midnightWallets$.value[midnightWallet.accountId] ===
-                midnightWallet,
-            ),
-            finalize(() => {
-              // An old watcher must not remove a replacement for the same account.
-              if (
-                midnightWallets$.value[midnightWallet.accountId] ===
-                midnightWallet
-              ) {
-                const { [midnightWallet.accountId]: _, ...remainingWallets } =
-                  midnightWallets$.value;
-                midnightWallets$.next(remainingWallets);
-              }
-              defer(() => midnightWallet.stop()).subscribe({
-                error: (error: unknown) => {
-                  dependencies.logger.error(
-                    'Midnight account watch teardown: stop failed',
-                    error,
-                  );
-                },
-              });
-            }),
+      }),
+    ).pipe(
+      tap(midnightWallet => {
+        midnightWallets$.next({
+          ...midnightWallets$.value,
+          [midnightWallet.accountId]: midnightWallet,
+        });
+      }),
+      mergeMap(midnightWallet =>
+        subscribeToEngine(midnightWallet, midnightWallets$)(
+          actionObservables,
+          stateObservables,
+          dependencies,
+        ).pipe(
+          filter(
+            () =>
+              midnightWallets$.value[midnightWallet.accountId] ===
+              midnightWallet,
           ),
+          finalize(() => {
+            // An old watcher must not remove a replacement for the same account.
+            if (
+              midnightWallets$.value[midnightWallet.accountId] ===
+              midnightWallet
+            ) {
+              const { [midnightWallet.accountId]: _, ...remainingWallets } =
+                midnightWallets$.value;
+              midnightWallets$.next(remainingWallets);
+            }
+            defer(() => midnightWallet.stop()).subscribe({
+              error: (error: unknown) => {
+                dependencies.logger.error(
+                  'Midnight account watch teardown: stop failed',
+                  error,
+                );
+              },
+            });
+          }),
         ),
-        finalize(() => {
-          destroyAccountKeyManager();
+      ),
+      finalize(() => {
+        startupStatus$.complete();
+      }),
+    );
+
+    return merge(startupStatus$, wallet$).pipe(
+      // The persisted success belongs to the previous session. Register the
+      // current operation before restoration so queued wallets cannot look synced.
+      startWith(
+        dependencies.actions.sync.addSyncOperation({
+          accountId: account.accountId,
+          operation: {
+            operationId: `${account.accountId}-midnight-sync`,
+            status: 'InProgress',
+            type: 'Indeterminate',
+            description: 'sync.operation.midnight-wallet-sync',
+            statusDetail: 'v2.sync-status.detail.waiting-for-data',
+            startedAt: Timestamp(Date.now()),
+          },
         }),
-      );
+      ),
+      finalize(() => {
+        destroyAccountKeyManager();
+      }),
+    );
   };
 
 /** Watches one account; see {@link createWatchMidnightAccount}. */
@@ -815,6 +802,8 @@ export const watchMidnightAccounts =
     // `SerializedMidnightWallet` (written every 5s by the SDK) — the SDK
     // resumes from the stored `appliedIndex` rather than performing a full
     // resync. See ADR 29.
+    // Config changes restart from saved checkpoints. Feature-flag refreshes
+    // must never dispatch resync, which deletes all account snapshots.
     merge(of(0), actionObservables.midnightSync.restartWalletWatch$).pipe(
       switchMap(() =>
         selectorObservables.midnightContext.selectCurrentNetwork$.pipe(

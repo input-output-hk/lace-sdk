@@ -31,3 +31,5 @@ export type {
   UseEditTokenNameProps,
   UseEditTokenNameResult,
 } from './hooks/useEditTokenName';
+
+export { UnreadableDustSnapshotError } from './dust-sync-errors';

@@ -26,6 +26,8 @@ interface PillProps {
 interface SyncStatusProps {
   status: SyncStatus;
   syncingProgress?: number;
+  usesFastSync?: boolean;
+  detail?: string;
   showBeacon?: boolean;
   showLabel?: boolean;
   onPress?: () => void;
@@ -72,6 +74,8 @@ const SyncStatusVariant: React.FC<SyncStatusProps> = ({
   status,
   onPress,
   syncingProgress,
+  usesFastSync = false,
+  detail,
   showBeacon = true,
   showLabel = true,
 }) => {
@@ -92,12 +96,22 @@ const SyncStatusVariant: React.FC<SyncStatusProps> = ({
 
   const beacon = useMemo(() => {
     if (!showBeacon) return null;
+    if (usesFastSync)
+      return (
+        <View
+          accessible
+          accessibilityRole="image"
+          accessibilityLabel={t('midnight.filtered-dust-sync.label')}
+          testID="sync-status-fast">
+          <Icon name="Flash" size={16} color={beaconColor} />
+        </View>
+      );
     const style: ViewStyle = {
       ...styles.beacon,
       backgroundColor: beaconColor,
     };
     return <View style={style} testID="sync-status-beacon" />;
-  }, [showBeacon, beaconColor]);
+  }, [showBeacon, beaconColor, usesFastSync, styles.beacon, t]);
 
   const progressBar = useMemo(() => {
     // undefined means progress cannot be calculated yet (no determinate
@@ -114,18 +128,6 @@ const SyncStatusVariant: React.FC<SyncStatusProps> = ({
       </View>
     );
   }, [syncingProgress, theme, status]);
-
-  const errorLabel = useMemo(() => {
-    if (status !== 'error') return null;
-    return (
-      <Text.XS
-        variant="secondary"
-        style={styles.errorText}
-        testID="sync-status-error">
-        {t('v2.sync-status.error.subtitle')}
-      </Text.XS>
-    );
-  }, [status, t, styles.errorText]);
 
   const label = useMemo(() => {
     if (!showLabel) return null;
@@ -148,7 +150,18 @@ const SyncStatusVariant: React.FC<SyncStatusProps> = ({
       onPress={onPress}
       label={label}
       leftNode={beacon}
-      centerNode={!showLabel ? null : progressBar || errorLabel}
+      centerNode={
+        !showLabel ? null : (
+          <>
+            {progressBar}
+            {detail && status !== 'synced' && (
+              <Text.XS variant="secondary" testID="sync-status-detail">
+                {detail}
+              </Text.XS>
+            )}
+          </>
+        )
+      }
       testID="sync-status-pill"
     />
   );
@@ -219,9 +232,6 @@ const getStyles = ({ theme }: { theme: Theme }) =>
       backgroundColor: theme.background.secondary,
       borderRadius: radius.rounded,
       padding: spacing.XS,
-    },
-    errorText: {
-      top: -4,
     },
   });
 

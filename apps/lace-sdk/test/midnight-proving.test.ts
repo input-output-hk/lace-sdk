@@ -7,10 +7,15 @@ import {
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { AccountId } from '@lace-contract/wallet-repo';
 import { createAttestedProofServerAccess } from '@lace-lib/vendor/attested-proving-service';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
 import {
   createScopedProofServerAccess,
   createCircuitProviderFromTransport,
 } from '@lace-lib/vendor/proof-server-transport';
+import {
+  WalletTransaction,
+  ProtocolVersion,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 import {
   BehaviorSubject,
   defer,
@@ -53,7 +58,6 @@ import type {
 } from '@lace-contract/midnight-context';
 import type { ModuleInitProps } from '@lace-contract/module';
 import type { AttestedProverProvider } from '@lace-lib/vendor/attested-proving-service';
-import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 import type {
   BalancingRecipe,
   WalletFacade,
@@ -64,7 +68,7 @@ const ledgerMocks = vi.hoisted(() => ({
   createProvingPayload: vi.fn(() => new Uint8Array([0xff])),
   parseCheckResult: vi.fn(() => [42n, undefined]),
 }));
-vi.mock('@midnight-ntwrk/ledger-v8', async importOriginal => ({
+vi.mock('@midnightntwrk/ledger-v8', async importOriginal => ({
   ...(await importOriginal<object>()),
   ...ledgerMocks,
 }));
@@ -113,6 +117,9 @@ const fixture = () => {
   };
   const engine = {
     accountId,
+    state: () =>
+      of({ activeProtocolVersion: ProtocolVersion.MinSupportedVersion }),
+    adoptTransaction: vi.fn(() => of(ledgerFake({}, 'Finalized'))),
     proofCircuitProvider: createCircuitProviderFromTransport(transport),
   } as unknown as MidnightWallet;
   registry.next({ [accountId]: engine });
@@ -138,9 +145,10 @@ const provider = (
 });
 const recipe = {
   type: 'UNPROVEN_TRANSACTION',
+  protocolVersion: ProtocolVersion.MinSupportedVersion,
   transaction: ledgerFake({}),
 } as unknown as BalancingRecipe;
-const proved = ledgerFake({}) as unknown as FinalizedTransaction;
+const proved = ledgerFake({}, 'Finalized');
 // The opaque value a build returned for the recipe under this engine.
 const recipeFor = (engine: MidnightWallet, built = recipe) =>
   toMidnightTxRecipe(engine, built);
@@ -241,7 +249,11 @@ describe('account-bound circuit proving', () => {
       keyMaterialProvider: keys,
     });
     const circuit = result.unwrap();
-    expect(Object.keys(circuit).sort()).toEqual(['check', 'prove']);
+    expect(Object.keys(circuit).sort()).toEqual([
+      'check',
+      'lookupKey',
+      'prove',
+    ]);
     const preimage = new Uint8Array([9]);
     await expect(circuit.check(preimage, 'circuit')).resolves.toEqual([
       42n,
@@ -348,6 +360,9 @@ describe('account-bound circuit proving', () => {
       })
     ).unwrap();
     const replacement = {
+      state: () =>
+        of({ activeProtocolVersion: ProtocolVersion.MinSupportedVersion }),
+      adoptTransaction: vi.fn(() => of(ledgerFake({}, 'Finalized'))),
       proofCircuitProvider: createCircuitProviderFromTransport({
         ...first.transport,
         prove: vi.fn(async () => new Uint8Array([7])),
@@ -445,25 +460,42 @@ describe('operation-scoped proving progress', () => {
     );
     const facade = {
       finalizeRecipe: async (value: { transaction: object }) =>
-        access.provingService.prove(value.transaction as never),
+        access.provingService
+          .prove(
+            readMidnightTransaction(
+              value.transaction as WalletTransaction,
+            ) as never,
+            ProtocolVersion.MinSupportedVersion,
+          )
+          .then(raw =>
+            WalletTransaction.adopt(
+              'Finalized',
+              raw,
+              ProtocolVersion.MinSupportedVersion,
+            ),
+          ),
     } as unknown as WalletFacade;
     engine.finalizeRecipe = (value, emit) =>
       defer(async () => access.finalizeRecipe(facade, value, emit));
     let finish!: () => void;
     const firstRecipe = recipeFor(engine, {
       type: 'UNPROVEN_TRANSACTION',
+      protocolVersion: ProtocolVersion.MinSupportedVersion,
       transaction: ledgerFake({
         prove: async () =>
           new Promise(resolve => {
             finish = () => {
-              resolve(proved);
+              resolve(readMidnightTransaction(proved));
             };
           }),
       }),
     } as unknown as BalancingRecipe);
     const secondRecipe = recipeFor(engine, {
       type: 'UNPROVEN_TRANSACTION',
-      transaction: ledgerFake({ prove: async () => proved }),
+      protocolVersion: ProtocolVersion.MinSupportedVersion,
+      transaction: ledgerFake({
+        prove: async () => readMidnightTransaction(proved),
+      }),
     } as unknown as BalancingRecipe);
     const firstEvents: AttestationProgressEvent[] = [];
     const secondEvents: AttestationProgressEvent[] = [];
@@ -505,6 +537,9 @@ describe('proving timeouts', () => {
     };
     Object.assign(context.engine, {
       networkId,
+      state: () =>
+        of({ activeProtocolVersion: ProtocolVersion.MinSupportedVersion }),
+      adoptTransaction: vi.fn(() => of(ledgerFake({}, 'Finalized'))),
       proofCircuitProvider: createCircuitProviderFromTransport(transport),
       balanceFinalizedTransaction: vi.fn(() => of(recipe)),
       balanceUnboundTransaction: vi.fn(() => of(recipe)),

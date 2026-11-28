@@ -50,6 +50,7 @@ export const CANARY_ONLY_ENTRIES = [
     publishedPeers: {
       '@midnight-ntwrk/compact-js': '^3.0.0-rc.3',
       '@midnight-ntwrk/compact-runtime': '^0.20.0',
+      '@midnight-ntwrk/ledger-v8': '^8.1.0',
       '@midnight-ntwrk/midnight-js-contracts': '^5.0.0-rc.2',
       '@midnight-ntwrk/midnight-js-indexer-public-data-provider': '^5.0.0-rc.2',
       '@midnight-ntwrk/midnight-js-network-id': '^5.0.0-rc.2',

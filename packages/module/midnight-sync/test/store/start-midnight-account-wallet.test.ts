@@ -5,13 +5,23 @@ import {
 } from '@lace-contract/midnight-context';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { AuthenticationCancelledError } from '@lace-contract/signer';
+import { syncActions } from '@lace-contract/sync';
 import * as LaceSdkUtil from '@lace-lib/util';
 import { configureWasmProver } from '@lace-lib/vendor/wasm-proof-backend';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import * as ledger from '@midnightntwrk/ledger-v8';
 import * as WalletSdk from '@midnightntwrk/wallet-sdk';
+import {
+  Lifecycle,
+  TransactionLifecycleServiceImpl,
+} from '@midnightntwrk/wallet-sdk/capabilities/transactionLifecycle';
 import * as WalletSdkDustWallet from '@midnightntwrk/wallet-sdk/dust';
+import { V2Tag } from '@midnightntwrk/wallet-sdk/dust/v2';
+import * as WalletSdkFacadeValue from '@midnightntwrk/wallet-sdk/facade';
 import * as WalletSdkShielded from '@midnightntwrk/wallet-sdk/shielded';
 import * as WalletSdkUnshielded from '@midnightntwrk/wallet-sdk/unshielded';
+import { VariantState } from '@midnightntwrk/wallet-sdk-abstractions';
+import * as WalletSdkAddressFormat from '@midnightntwrk/wallet-sdk-address-format';
+import { Either, Option } from 'effect';
 import noop from 'lodash/noop';
 import {
   BehaviorSubject,
@@ -32,6 +42,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createAccountKeyManager } from '../../src/store/account-keys';
 import { createMidnightSideEffectDependencies } from '../../src/store/dependencies';
+import * as dustSync from '../../src/store/dust-sync';
+import { DustTimelineDiscovery } from '../../src/store/dust-timeline';
 import { initializeMidnightSideEffectDependencies } from '../../src/store/initialize-dependencies';
 import { createSdkStoreInit } from '../../src/store/sdk-init';
 import * as accountKeyManager from '../../src/store/side-effects/account-key-manager';
@@ -118,9 +130,16 @@ vi.mock('@midnightntwrk/wallet-sdk/dust', () => ({
 const { WalletFacadeInitMock } = vi.hoisted(() => ({
   WalletFacadeInitMock: vi.fn(),
 }));
-vi.mock('@midnightntwrk/wallet-sdk/facade', () => ({
-  WalletFacade: { init: WalletFacadeInitMock },
-}));
+vi.mock('@midnightntwrk/wallet-sdk/facade', async importOriginal => {
+  const actual = await importOriginal<typeof WalletSdkFacade>();
+  return {
+    lifecycleTransactionTraits: actual.lifecycleTransactionTraits,
+    WalletFacade: {
+      init: WalletFacadeInitMock,
+      resolveConfiguration: actual.WalletFacade.resolveConfiguration,
+    },
+  };
+});
 
 vi.mock('@midnightntwrk/wallet-sdk/shielded', async importOriginal => {
   const actual = await importOriginal<typeof WalletSdkShielded>();
@@ -139,13 +158,20 @@ vi.mock('@midnightntwrk/wallet-sdk/unshielded', () => ({
   }),
 }));
 
-const { zswapSecretKeysMock, dustSecretKeyMock } = vi.hoisted(() => ({
+const {
+  zswapSecretKeysMock,
+  dustSecretKeyMock,
+  v9ZswapSecretKeysMock,
+  v9DustSecretKeyMock,
+} = vi.hoisted(() => ({
   zswapSecretKeysMock: { clear: vi.fn() },
+  v9ZswapSecretKeysMock: { clear: vi.fn() },
+  v9DustSecretKeyMock: { clear: vi.fn() },
   // Needs clear(): the sync copies are zeroized on teardown, so a bare string
   // here throws in the facade-stop finally() as an unhandled rejection.
   dustSecretKeyMock: { clear: vi.fn() },
 }));
-vi.mock('@midnight-ntwrk/ledger-v8', () => ({
+vi.mock('@midnightntwrk/ledger-v8', () => ({
   createProvingPayload: vi.fn((preimage: Uint8Array) => preimage),
   createCheckPayload: vi.fn((preimage: Uint8Array) => preimage),
   parseCheckResult: vi.fn(() => []),
@@ -158,14 +184,19 @@ vi.mock('@midnight-ntwrk/ledger-v8', () => ({
   },
 }));
 
+vi.mock('@midnightntwrk/ledger-v9', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  DustSecretKey: { fromSeed: vi.fn().mockReturnValue(v9DustSecretKeyMock) },
+  ZswapSecretKeys: { fromSeed: vi.fn().mockReturnValue(v9ZswapSecretKeysMock) },
+}));
+
 // ===== TEST HELPERS =====
 
 /**
- * The keys pipeline yields through observeOn(asyncScheduler) before wallet
- * start (LW-15215), so settling lifecycle work needs several macrotask hops,
- * not one.
+ * Restoration yields between components and before releasing startup.
+ * Settle these short tasks without advancing the persistence throttle.
  */
-const flushScheduledWork = async (hops = 5): Promise<void> => {
+const flushScheduledWork = async (hops = 20): Promise<void> => {
   for (let hop = 0; hop < hops; hop += 1) {
     await new Promise(resolve => setTimeout(resolve, 0));
   }
@@ -173,43 +204,46 @@ const flushScheduledWork = async (hops = 5): Promise<void> => {
 
 const createMockFacadeState = () => ({
   dust: {
-    capabilities: { keys: { getAddress: () => 'dust-address' } },
-    state: {
-      progress: {
-        isStrictlyComplete: () => true,
-        appliedIndex: 100n,
-        highestIndex: 100n,
-        highestRelevantWalletIndex: 100n,
-        highestRelevantIndex: 100n,
-        isConnected: true,
-      },
+    state: VariantState.seal('v1', {}),
+    address: 'dust-address',
+    protocolVersion: 8n,
+    progress: {
+      isStrictlyComplete: () => true,
+      appliedIndex: 100n,
+      highestIndex: 100n,
+      highestRelevantWalletIndex: 100n,
+      highestRelevantIndex: 100n,
+      isConnected: true,
     },
     balance: () => 0n,
   },
   shielded: {
     address: 'shielded-address',
-    state: {
-      progress: {
-        isStrictlyComplete: () => true,
-        appliedIndex: 100n,
-        highestIndex: 100n,
-        highestRelevantWalletIndex: 100n,
-        highestRelevantIndex: 100n,
-        isConnected: true,
-      },
+    protocolVersion: 8n,
+    progress: {
+      isStrictlyComplete: () => true,
+      appliedIndex: 100n,
+      highestIndex: 100n,
+      highestRelevantWalletIndex: 100n,
+      highestRelevantIndex: 100n,
+      isConnected: true,
     },
     totalCoins: [],
   },
   unshielded: {
     address: 'unshielded-address',
-    capabilities: { keys: { getPublicKey: () => 'night-verifying-key' } },
-    state: {
-      progress: {
-        isStrictlyComplete: () => true,
-        appliedId: 100n,
-        highestTransactionId: 100n,
-        isConnected: true,
+    protocolVersion: 8n,
+    verifyingKey: { tag: 'schnorr', value: 'night-verifying-key' },
+    progress: {
+      isStrictlyComplete: () => true,
+      appliedId: 100n,
+      highestTransactionId: 100n,
+      indexerLiveness: {
+        _tag: 'InSync' as WalletSdkFacade.FacadeState['unshielded']['progress']['indexerLiveness']['_tag'],
+        indexerHeight: 100n,
+        finalizedHeight: 100n,
       },
+      isConnected: true,
     },
     availableCoins: [],
     pendingCoins: [],
@@ -219,7 +253,7 @@ const createMockFacadeState = () => ({
 const createMockKeyManager = (
   overrides: Partial<AccountKeyManager> = {},
 ): AccountKeyManager => ({
-  keys$: EMPTY,
+  keys$: defer(() => of(createMockAccountKeys())),
   areKeysAvailable$: of(false),
   destroy: vi.fn(),
   ...overrides,
@@ -229,20 +263,20 @@ const createMockAccountKeys = (): AccountKeys => {
   // Must be 32 bytes for ledger validation
   const dustKeyBuffer = LaceSdkUtil.ByteArray(new Uint8Array(32).fill(1));
   const zswapKeyBuffer = LaceSdkUtil.ByteArray(new Uint8Array(32).fill(2));
-  // Pre-compute ledger key objects (matching real implementation)
-  const dustSecretKey = ledger.DustSecretKey.fromSeed(dustKeyBuffer);
-  const zswapSecretKeys = ledger.ZswapSecretKeys.fromSeed(zswapKeyBuffer);
 
   return {
     unshieldedKeystore: {
       getPublicKey: vi.fn(),
       signData: vi.fn(),
+      signDataAsync: vi.fn(),
     } as unknown as AccountKeys['unshieldedKeystore'],
+    ecdsaKeystore: {
+      getPublicKey: vi.fn(),
+      signDataAsync: vi.fn(),
+    } as unknown as AccountKeys['ecdsaKeystore'],
     walletKeys: {
       dustKeyBuffer,
       zswapKeyBuffer,
-      dustSecretKey,
-      zswapSecretKeys,
     },
     clear: vi.fn(),
   };
@@ -290,6 +324,10 @@ const dustWalletMock = {
 };
 
 const walletFacadeMock = {
+  transactionLifecycleService: {
+    start: vi.fn().mockResolvedValue(undefined),
+    serializeState: vi.fn().mockResolvedValue('{"version":"v2","records":[]}'),
+  },
   state: vi.fn().mockReturnValue(of(createMockFacadeState())),
   stop: vi.fn().mockResolvedValue(undefined),
   dust: dustWalletMock,
@@ -311,22 +349,22 @@ const walletFacadeMock = {
   revert: vi.fn().mockResolvedValue(undefined),
 };
 
-WalletFacadeInitMock.mockReturnValue(
+WalletFacadeInitMock.mockResolvedValue(
   walletFacadeMock as unknown as WalletSdkFacade.WalletFacade,
 );
 
 vi.mocked(WalletSdkDustWallet.DustWallet).mockReturnValue({
-  restore: vi.fn().mockReturnValue('restored-dust'),
+  restore: vi.fn().mockReturnValue(dustWalletMock),
   startWithSeed: vi.fn().mockReturnValue('new-dust'),
 } as unknown as WalletSdkDustWallet.DustWalletClass);
 
 vi.mocked(WalletSdkShielded.ShieldedWallet).mockReturnValue({
-  restore: vi.fn().mockReturnValue('restored-shielded'),
+  restore: vi.fn().mockReturnValue(shieldedWalletMock),
   startWithSeed: vi.fn().mockReturnValue('new-shielded'),
 } as unknown as ReturnType<typeof WalletSdkShielded.ShieldedWallet>);
 
 vi.mocked(WalletSdkUnshielded.UnshieldedWallet).mockReturnValue({
-  restore: vi.fn().mockReturnValue('restored-unshielded'),
+  restore: vi.fn().mockReturnValue(unshieldedWalletMock),
   startWithPublicKey: vi.fn().mockReturnValue('new-unshielded'),
 } as unknown as WalletSdkUnshielded.UnshieldedWalletClass);
 
@@ -363,6 +401,10 @@ describe('startMidnightAccountWallet', () => {
   let store: CollectionStorage<SerializedMidnightWallet>;
 
   beforeEach(() => {
+    vi.spyOn(DustTimelineDiscovery.prototype, 'find').mockResolvedValue({
+      start: Option.none(),
+      outcome: 'not-applicable',
+    });
     store = {
       getAll: vi.fn().mockReturnValue(of([])),
       // Derived from getAll so a test states its stored state once, the way the
@@ -421,6 +463,420 @@ describe('startMidnightAccountWallet', () => {
       expect(configuration.costParameters).toEqual({ feeBlocksMargin: 5 });
     },
   );
+
+  describe('coordinated restoration', () => {
+    const account = (accountId: string) =>
+      ({
+        ...midnightAccount,
+        accountId,
+      } as InMemoryWalletAccount<MidnightAccountProps>);
+    const saved = (accountId: string): SerializedMidnightWallet => ({
+      ...account(accountId),
+      networkId: midnightAccount.blockchainSpecific.networkId,
+      serializedState: createSerializedState(),
+    });
+    const start = (
+      accountId: string,
+      keyManager = createMockKeyManager({ keys$: of(createMockAccountKeys()) }),
+    ) =>
+      midnightSideEffectDependencies.startMidnightAccountWallet({
+        account: account(accountId),
+        config,
+        store,
+        keyManager,
+      });
+
+    it('reports Preparing until its own restoration completes without waiting for a slow sibling read', async () => {
+      const delayedState$ = new Subject<SerializedMidnightWallet>();
+      vi.mocked(store.get).mockImplementation(id =>
+        id === 'late' ? delayedState$ : of(saved(id)),
+      );
+      const phases: boolean[] = [];
+      const onPreparationStatusChange = vi.fn((restoring: boolean) => {
+        phases.push(restoring);
+        if (restoring)
+          expect(
+            WalletSdk.InMemoryTransactionHistoryStorage.restore,
+          ).not.toHaveBeenCalled();
+        else {
+          const dustFactory = vi.mocked(WalletSdkDustWallet.DustWallet).mock
+            .results[0].value as WalletSdkDustWallet.DustWalletClass;
+          expect(dustFactory.restore).toHaveBeenCalledTimes(1);
+        }
+      });
+      const late = start('late').subscribe();
+      const restored = midnightSideEffectDependencies
+        .startMidnightAccountWallet({
+          account: account('restored'),
+          config,
+          store,
+          keyManager: createMockKeyManager({
+            keys$: of(createMockAccountKeys()),
+          }),
+          onPreparationStatusChange,
+        })
+        .subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(phases).toEqual([true, false]);
+          expect(store.get).toHaveBeenCalledWith('late');
+          expect(WalletSdkDustWallet.DustWallet).toHaveBeenCalled();
+          const factory = vi.mocked(WalletSdkDustWallet.DustWallet).mock
+            .results[0].value as WalletSdkDustWallet.DustWalletClass;
+          expect(factory.restore).toHaveBeenCalledOnce();
+        });
+        expect(WalletFacadeInitMock).toHaveBeenCalledOnce();
+        delayedState$.next(saved('late'));
+        await vi.waitFor(() => {
+          expect(WalletFacadeInitMock).toHaveBeenCalledTimes(2);
+        });
+        expect(phases).toEqual([true, false]);
+      } finally {
+        restored.unsubscribe();
+        late.unsubscribe();
+      }
+    });
+
+    it('reports Preparing for a fresh account waiting for keys', async () => {
+      vi.mocked(store.get).mockReturnValue(EMPTY);
+      const keys$ = new Subject<AccountKeys>();
+      const onPreparationStatusChange = vi.fn();
+      const subscription = midnightSideEffectDependencies
+        .startMidnightAccountWallet({
+          account: account('fresh'),
+          config,
+          store,
+          keyManager: createMockKeyManager({ keys$ }),
+          onPreparationStatusChange,
+        })
+        .subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(keys$.observed).toBe(true);
+        });
+        expect(onPreparationStatusChange.mock.calls).toEqual([[true]]);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+
+    it('finishes ready snapshots before discovery and defers a late snapshot until discovery ends', async () => {
+      let finish!: () => void;
+      const discovered = new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      vi.mocked(DustTimelineDiscovery.prototype.find).mockImplementationOnce(
+        async () => {
+          await discovered;
+          return { start: Option.none(), outcome: 'not-applicable' };
+        },
+      );
+      const delayedState$ = new Subject<SerializedMidnightWallet>();
+      vi.mocked(store.get).mockImplementation(id =>
+        id === 'late' ? delayedState$ : id === 'fresh' ? EMPTY : of(saved(id)),
+      );
+      const restored = start('restored').subscribe();
+      const fresh = start('fresh').subscribe();
+      const late = start('late').subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(DustTimelineDiscovery.prototype.find).toHaveBeenCalledOnce();
+        });
+        const factory = vi.mocked(WalletSdkDustWallet.DustWallet).mock
+          .results[0].value as WalletSdkDustWallet.DustWalletClass;
+        expect(factory.restore).toHaveBeenCalledOnce();
+        expect(
+          vi.mocked(factory.restore).mock.invocationCallOrder[0],
+        ).toBeLessThan(
+          vi.mocked(DustTimelineDiscovery.prototype.find).mock
+            .invocationCallOrder[0],
+        );
+        delayedState$.next(saved('late'));
+        await flushScheduledWork();
+        expect(factory.restore).toHaveBeenCalledOnce();
+        expect(WalletFacadeInitMock).not.toHaveBeenCalled();
+        expect(store.upsert).not.toHaveBeenCalled();
+        finish();
+        await vi.waitFor(() => {
+          expect(unshieldedWalletMock.start).toHaveBeenCalledTimes(3);
+        });
+        expect(factory.restore).toHaveBeenCalledTimes(2);
+        expect(store.removeWhere).not.toHaveBeenCalled();
+      } finally {
+        finish();
+        restored.unsubscribe();
+        fresh.unsubscribe();
+        late.unsubscribe();
+      }
+    });
+
+    it('closes partial restores without wiping cache when cancelled at the barrier', async () => {
+      const pending$ = new Subject<SerializedMidnightWallet>();
+      vi.mocked(DustTimelineDiscovery.prototype.find).mockImplementationOnce(
+        async (_config, signal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                reject(new Error('cancelled'));
+              },
+              { once: true },
+            );
+          }),
+      );
+      vi.mocked(store.get).mockImplementation(id =>
+        id === 'pending' ? EMPTY : of(saved(id)),
+      );
+      const waiting = start('pending').subscribe();
+      const restored = start('restored').subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(WalletSdkDustWallet.DustWallet).toHaveBeenCalled();
+        });
+        await flushScheduledWork();
+        expect(WalletFacadeInitMock).not.toHaveBeenCalled();
+        restored.unsubscribe();
+        await vi.waitFor(() => {
+          expect(dustWalletMock.stop).toHaveBeenCalledOnce();
+        });
+        expect(shieldedWalletMock.stop).toHaveBeenCalledOnce();
+        expect(unshieldedWalletMock.stop).toHaveBeenCalledOnce();
+        expect(unshieldedWalletMock.start).not.toHaveBeenCalled();
+        expect(store.removeWhere).not.toHaveBeenCalled();
+        expect(store.upsert).not.toHaveBeenCalled();
+      } finally {
+        waiting.unsubscribe();
+        restored.unsubscribe();
+        pending$.complete();
+      }
+    });
+
+    it('allows a restored account to start while a fresh sibling waits for authentication', async () => {
+      vi.mocked(store.get).mockImplementation(id =>
+        id === 'fresh' ? EMPTY : of(saved(id)),
+      );
+      const keys$ = new Subject<AccountKeys>();
+      const waiting = start(
+        'fresh',
+        createMockKeyManager({ keys$ }),
+      ).subscribe();
+      const restored = start('restored').subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(keys$.observed).toBe(true);
+        });
+        await flushScheduledWork();
+        expect(unshieldedWalletMock.start).toHaveBeenCalledOnce();
+        expect(WalletFacadeInitMock).toHaveBeenCalledOnce();
+        keys$.next(createMockAccountKeys());
+        await vi.waitFor(() => {
+          expect(unshieldedWalletMock.start).toHaveBeenCalledTimes(2);
+        });
+      } finally {
+        waiting.unsubscribe();
+        restored.unsubscribe();
+      }
+    });
+
+    it('prepares each restored account before starting it without holding peers behind authentication', async () => {
+      vi.mocked(store.get).mockImplementation(id => of(saved(id)));
+      const delayedKeys$ = new Subject<AccountKeys>();
+      const prepared = vi.fn();
+      const readyKeys = createMockAccountKeys();
+      const first = start(
+        'first',
+        createMockKeyManager({
+          keys$: of(readyKeys).pipe(tap(prepared)),
+        }),
+      ).subscribe();
+      const second = start(
+        'second',
+        createMockKeyManager({ keys$: delayedKeys$ }),
+      ).subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(delayedKeys$.observed).toBe(true);
+        });
+        await flushScheduledWork();
+        expect(prepared).toHaveBeenCalledOnce();
+        expect(WalletFacadeInitMock).toHaveBeenCalledOnce();
+        expect(unshieldedWalletMock.start).toHaveBeenCalledOnce();
+        expect(shieldedWalletMock.start).toHaveBeenCalledOnce();
+        expect(dustWalletMock.start).toHaveBeenCalledOnce();
+        delayedKeys$.next(createMockAccountKeys());
+        await vi.waitFor(() => {
+          expect(dustWalletMock.start).toHaveBeenCalledTimes(2);
+        });
+        expect(prepared).toHaveBeenCalledOnce();
+        const lastKeyCopy = vi
+          .mocked(ledger.DustSecretKey.fromSeed)
+          .mock.invocationCallOrder.at(-1)!;
+        expect(lastKeyCopy).toBeLessThan(
+          unshieldedWalletMock.start.mock.invocationCallOrder[1],
+        );
+      } finally {
+        first.unsubscribe();
+        second.unsubscribe();
+      }
+    });
+
+    it('keeps fresh startup seeds valid after signing-cache expiry and clears the copies after initialization', async () => {
+      vi.mocked(store.get).mockImplementation(id =>
+        id === 'fresh' ? EMPTY : of(saved(id)),
+      );
+      const delayedKeys$ = new Subject<AccountKeys>();
+      let finish!: () => void;
+      const discovery = new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      vi.mocked(DustTimelineDiscovery.prototype.find).mockImplementationOnce(
+        async () => {
+          await discovery;
+          return { start: Option.none(), outcome: 'not-applicable' };
+        },
+      );
+      const keys = createMockAccountKeys();
+      const requested = vi.fn();
+      const prepared = vi.fn();
+      const capturedSeeds: Uint8Array[] = [];
+      const dustFactory = WalletSdkDustWallet.DustWallet({} as never);
+      vi.mocked(dustFactory.startWithSeed).mockImplementationOnce(seed => {
+        capturedSeeds.push(seed);
+        expect([...seed]).toEqual(new Array(32).fill(1));
+        return dustWalletMock as never;
+      });
+      WalletFacadeInitMock.mockImplementation(
+        async (
+          options: Parameters<typeof WalletSdkFacadeValue.WalletFacade.init>[0],
+        ) => {
+          await options.dust(
+            WalletSdkFacadeValue.WalletFacade.resolveConfiguration(
+              options.configuration,
+            ),
+          );
+          return walletFacadeMock;
+        },
+      );
+      const fresh = midnightSideEffectDependencies
+        .startMidnightAccountWallet({
+          account: account('fresh'),
+          config,
+          store,
+          keyManager: createMockKeyManager({
+            keys$: of(keys).pipe(tap(requested)),
+          }),
+          onPreparationStatusChange: prepared,
+        })
+        .subscribe();
+      const sibling = start(
+        'sibling',
+        createMockKeyManager({ keys$: delayedKeys$ }),
+      ).subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(requested).toHaveBeenCalledOnce();
+          expect(delayedKeys$.observed).toBe(true);
+        });
+        await flushScheduledWork();
+        Uint8Array.prototype.fill.call(keys.walletKeys.dustKeyBuffer, 0);
+        Uint8Array.prototype.fill.call(keys.walletKeys.zswapKeyBuffer, 0);
+        expect(unshieldedWalletMock.start).not.toHaveBeenCalled();
+        finish();
+        delayedKeys$.next(createMockAccountKeys());
+        await vi.waitFor(() => {
+          expect(dustWalletMock.start).toHaveBeenCalledTimes(2);
+        });
+        expect(requested).toHaveBeenCalledOnce();
+        expect(capturedSeeds).toHaveLength(1);
+        expect(capturedSeeds[0]).not.toBe(keys.walletKeys.dustKeyBuffer);
+        expect([...capturedSeeds[0]]).toEqual(new Array(32).fill(0));
+      } finally {
+        finish();
+        fresh.unsubscribe();
+        sibling.unsubscribe();
+        WalletFacadeInitMock.mockResolvedValue(walletFacadeMock);
+      }
+    });
+
+    it.each(['cancel', 'error'] as const)(
+      'releases siblings and closes resources when key preparation ends with %s',
+      async outcome => {
+        vi.mocked(store.get).mockImplementation(id => of(saved(id)));
+        const delayedKeys$ = new Subject<AccountKeys>();
+        const errors: unknown[] = [];
+        const waiting = start(
+          'waiting',
+          createMockKeyManager({ keys$: delayedKeys$ }),
+        ).subscribe({ error: error => errors.push(error) });
+        const sibling = start('sibling').subscribe();
+        try {
+          await vi.waitFor(() => {
+            expect(delayedKeys$.observed).toBe(true);
+          });
+          await flushScheduledWork();
+          await vi.waitFor(() => {
+            expect(unshieldedWalletMock.start).toHaveBeenCalledOnce();
+          });
+          if (outcome === 'cancel') waiting.unsubscribe();
+          else delayedKeys$.error(new Error('decrypt failed'));
+          await vi.waitFor(() => {
+            expect(unshieldedWalletMock.start).toHaveBeenCalledOnce();
+          });
+          expect(delayedKeys$.observed).toBe(false);
+          expect(store.removeWhere).not.toHaveBeenCalled();
+          await vi.waitFor(() => {
+            expect(errors).toHaveLength(outcome === 'error' ? 1 : 0);
+          });
+          await vi.waitFor(() => {
+            expect(dustWalletMock.stop).toHaveBeenCalled();
+          });
+        } finally {
+          waiting.unsubscribe();
+          sibling.unsubscribe();
+        }
+      },
+    );
+
+    it.each(['cancel', 'error'] as const)(
+      'releases siblings after a pending read ends with %s',
+      async outcome => {
+        const pending$ = new Subject<SerializedMidnightWallet>();
+        vi.mocked(store.get).mockImplementation(id =>
+          id === 'pending' ? pending$ : of(saved(id)),
+        );
+        const errors: unknown[] = [];
+        const waiting = start('pending').subscribe({
+          error: error => errors.push(error),
+        });
+        const restored = start('restored').subscribe();
+        try {
+          await vi.waitFor(() => {
+            expect(pending$.observed).toBe(true);
+          });
+          await vi.waitFor(() => {
+            expect(unshieldedWalletMock.start).toHaveBeenCalledOnce();
+          });
+          if (outcome === 'cancel') {
+            waiting.unsubscribe();
+            pending$.next(saved('pending'));
+          } else {
+            pending$.error(new Error('read failed'));
+          }
+          await vi.waitFor(() => {
+            expect(unshieldedWalletMock.start).toHaveBeenCalledOnce();
+          });
+          expect(WalletFacadeInitMock).toHaveBeenCalledOnce();
+          expect(store.removeWhere).not.toHaveBeenCalled();
+          await vi.waitFor(() => {
+            expect(errors).toHaveLength(outcome === 'error' ? 1 : 0);
+          });
+        } finally {
+          waiting.unsubscribe();
+          restored.unsubscribe();
+        }
+      },
+    );
+  });
 
   describe('batch updates', () => {
     const batchUpdatesPassedToFacade = async (
@@ -518,6 +974,33 @@ describe('startMidnightAccountWallet', () => {
 
       expect(wallet.accountId).toBe(midnightAccount.accountId);
       expect(keysRequested).toHaveBeenCalled();
+    });
+
+    it('enables boundary discovery only for a fresh Dust wallet', async () => {
+      await firstValueFrom(
+        midnightSideEffectDependencies.startMidnightAccountWallet({
+          account:
+            midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
+          config,
+          store,
+          keyManager: createMockKeyManager({
+            keys$: of(createMockAccountKeys()),
+          }),
+        }),
+      );
+      const init = WalletFacadeInitMock.mock.calls[0][0] as Parameters<
+        typeof WalletSdkFacade.WalletFacade.init
+      >[0];
+      const resolved = (
+        await import('@midnightntwrk/wallet-sdk/facade')
+      ).WalletFacade.resolveConfiguration(init.configuration);
+      await init.dust(resolved);
+      expect(
+        vi.mocked(WalletSdkDustWallet.DustWallet).mock.calls[0][0],
+      ).toMatchObject({
+        skipLedgerV8DustHistory: false,
+        dustTimelineStartProbe: expect.any(Function) as unknown,
+      });
     });
 
     it('wires the wallet to the tx-history storage it persists (LW-15122)', async () => {
@@ -692,6 +1175,7 @@ describe('startMidnightAccountWallet', () => {
                 } as Parameters<typeof watch>[1],
                 {
                   ...dependencies,
+                  actions: syncActions,
                   runtime: {},
                   startMidnightAccountWallet,
                 } as unknown as Parameters<typeof watch>[2],
@@ -831,6 +1315,96 @@ describe('startMidnightAccountWallet', () => {
       });
     });
 
+    it.each(['unshielded', 'dust'] as const)(
+      'closes partial restores and rebuilds only the account with an unreadable %s snapshot',
+      async kind => {
+        vi.mocked(store.getAll).mockReturnValue(
+          of([
+            {
+              walletId: midnightAccount.walletId,
+              accountId: midnightAccount.accountId,
+              networkId: midnightAccount.blockchainSpecific.networkId,
+              serializedState: createSerializedState(),
+            },
+          ]),
+        );
+        const restore = vi.mocked(
+          kind === 'dust'
+            ? WalletSdkDustWallet.DustWallet(config as never).restore
+            : WalletSdkUnshielded.UnshieldedWallet(config as never).restore,
+        );
+        restore.mockImplementationOnce(() => {
+          throw Object.assign(new Error('required snapshot field is missing'), {
+            _tag: '@midnightntwrk/wallet-sdk-abstractions/SnapshotFormat/SnapshotRestoreError',
+          });
+        });
+        await firstValueFrom(
+          midnightSideEffectDependencies.startMidnightAccountWallet({
+            account:
+              midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
+            config,
+            store,
+            keyManager: createMockKeyManager({
+              keys$: of(createMockAccountKeys()),
+            }),
+          }),
+        );
+        expect(shieldedWalletMock.stop).toHaveBeenCalledOnce();
+        expect(unshieldedWalletMock.stop).toHaveBeenCalledTimes(
+          kind === 'dust' ? 1 : 0,
+        );
+        expect(dustWalletMock.stop).not.toHaveBeenCalled();
+        expect(store.removeWhere).toHaveBeenCalledOnce();
+        expect(store.clear).not.toHaveBeenCalled();
+        const predicate = vi.mocked(store.removeWhere).mock.calls[0][0];
+        expect(
+          predicate({
+            accountId: midnightAccount.accountId,
+          } as SerializedMidnightWallet),
+        ).toBe(true);
+        expect(
+          predicate({
+            accountId: 'healthy-sibling',
+          } as SerializedMidnightWallet),
+        ).toBe(false);
+      },
+    );
+
+    it('closes restored resources but retains readable cache when facade initialization fails', async () => {
+      vi.mocked(store.getAll).mockReturnValue(
+        of([
+          {
+            walletId: midnightAccount.walletId,
+            accountId: midnightAccount.accountId,
+            networkId: midnightAccount.blockchainSpecific.networkId,
+            serializedState: createSerializedState(),
+          },
+        ]),
+      );
+      const error = new Error('node initialization unavailable');
+      WalletFacadeInitMock.mockRejectedValueOnce(error);
+      const requestKeys = vi.fn(() => of(createMockAccountKeys()));
+      await expect(
+        firstValueFrom(
+          midnightSideEffectDependencies.startMidnightAccountWallet({
+            account:
+              midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
+            config,
+            store,
+            keyManager: createMockKeyManager({ keys$: defer(requestKeys) }),
+          }),
+        ),
+      ).rejects.toBe(error);
+      for (const wallet of [
+        shieldedWalletMock,
+        unshieldedWalletMock,
+        dustWalletMock,
+      ])
+        expect(wallet.stop).toHaveBeenCalledOnce();
+      expect(store.removeWhere).not.toHaveBeenCalled();
+      expect(requestKeys).toHaveBeenCalledOnce();
+    });
+
     it('discards unreadable persisted state and rebuilds from seed', async () => {
       const { networkId } = midnightAccount.blockchainSpecific;
       vi.mocked(store.getAll).mockReturnValue(
@@ -913,36 +1487,235 @@ describe('startMidnightAccountWallet', () => {
   });
 
   describe('wallet lifecycle', () => {
-    it('starts unshielded wallet immediately and defers shielded and dust wallets until keys are available', async () => {
-      const { networkId } = midnightAccount.blockchainSpecific;
-      vi.mocked(store.getAll).mockReturnValue(
-        of([
-          {
-            walletId: midnightAccount.walletId,
-            accountId: midnightAccount.accountId,
-            serializedState: createSerializedState(),
-            networkId,
+    const startLifecycleWallet = () =>
+      midnightSideEffectDependencies.startMidnightAccountWallet({
+        account: midnightAccount,
+        config,
+        store,
+        keyManager: createMockKeyManager({
+          keys$: of(createMockAccountKeys()),
+        }),
+      });
+
+    it.each(['fresh', 'restored'] as const)(
+      'starts real expiry sweeping for a %s wallet and stops it on teardown',
+      async mode => {
+        const actual = await vi.importActual<typeof WalletSdkFacade>(
+          '@midnightntwrk/wallet-sdk/facade',
+        );
+        let now = new Date('2030-01-01T00:02:00Z');
+        const clock = { now: () => now };
+        // Legacy reservations have no transaction bytes to query. This exercises
+        // the real sweep without involving an indexer or claiming funded expiry.
+        const saved = {
+          version: 'v2',
+          records: ['expired', 'future'].map(id => ({
+            identifiers: [id],
+            intentHashes: [],
+            inputs: { unshielded: [`${id}#0`] },
+            ttl:
+              id === 'expired'
+                ? '2030-01-01T00:01:00.000Z'
+                : '2030-01-01T00:03:00.000Z',
+            createdAt: '2030-01-01T00:00:00.000Z',
+            state: { _tag: 'Balanced' },
+          })),
+        };
+        if (mode === 'restored')
+          vi.mocked(store.getAll).mockReturnValue(
+            of([
+              {
+                accountId: midnightAccount.accountId,
+                walletId: midnightAccount.walletId,
+                networkId: midnightAccount.blockchainSpecific.networkId,
+                serializedState: {
+                  ...createSerializedState(),
+                  transactionLifecycle: SerialisedWalletState(
+                    JSON.stringify(saved),
+                  ),
+                },
+              },
+            ]),
+          );
+        let service:
+          | WalletSdkFacade.WalletFacade['transactionLifecycleService']
+          | undefined;
+        const started = vi.fn();
+        const stopped = vi.fn();
+        WalletFacadeInitMock.mockImplementationOnce(
+          async (
+            init: Parameters<typeof WalletSdkFacade.WalletFacade.init>[0],
+          ) => {
+            const configuration = actual.WalletFacade.resolveConfiguration(
+              init.configuration,
+            );
+            const txTraits = actual.lifecycleTransactionTraits(
+              configuration.forks.v9,
+            );
+            expect(Boolean(init.transactionLifecycleService)).toBe(
+              mode === 'restored',
+            );
+            service = init.transactionLifecycleService
+              ? await init.transactionLifecycleService(configuration, { clock })
+              : await TransactionLifecycleServiceImpl.init({
+                  configuration,
+                  clock,
+                  txTraits,
+                  initialState: Either.getOrThrow(
+                    Lifecycle.deserialize(JSON.stringify(saved), txTraits),
+                  ),
+                });
+            const lifecycle = service;
+            return {
+              ...walletFacadeMock,
+              transactionLifecycleService: {
+                start: async () => {
+                  started();
+                  await lifecycle.start();
+                },
+                serializeState: async () => lifecycle.serializeState(),
+              },
+              stop: async () => {
+                await lifecycle.stop();
+                stopped();
+              },
+            };
           },
-        ]),
+        );
+        const errors: unknown[] = [];
+        let wallet: MidnightWallet | undefined;
+        const subscription = startLifecycleWallet().subscribe({
+          next: value => {
+            wallet = value;
+          },
+          error: error => errors.push(error),
+        });
+        try {
+          await vi.waitFor(() => {
+            expect(errors).toEqual([]);
+            expect(wallet).toBeDefined();
+          });
+          await vi.waitFor(
+            async () => {
+              expect((await firstValueFrom(service!.state())).records).toEqual([
+                expect.objectContaining({ identifiers: ['future'] }),
+              ]);
+            },
+            { timeout: 3000 },
+          );
+          expect(started).toHaveBeenCalledOnce();
+          await firstValueFrom(wallet!.stop());
+          expect(stopped).toHaveBeenCalledOnce();
+          now = new Date('2030-01-01T00:04:00Z');
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          expect((await firstValueFrom(service!.state())).records).toEqual([
+            expect.objectContaining({ identifiers: ['future'] }),
+          ]);
+          expect(errors).toEqual([]);
+        } finally {
+          subscription.unsubscribe();
+          await service?.stop();
+        }
+      },
+      10_000,
+    );
+
+    it('fails startup and stops the facade when lifecycle startup rejects', async () => {
+      const error = new Error('lifecycle startup failed');
+      walletFacadeMock.transactionLifecycleService.start.mockRejectedValueOnce(
+        error,
       );
+      await expect(firstValueFrom(startLifecycleWallet())).rejects.toBe(error);
+      expect(walletFacadeMock.stop).toHaveBeenCalledOnce();
+      expect(store.upsert).not.toHaveBeenCalled();
+    });
 
-      const keyManager = createMockKeyManager();
+    it('never starts lifecycle polling after cancellation during dust startup', async () => {
+      let releaseDust!: () => void;
+      dustWalletMock.start.mockImplementationOnce(
+        async () =>
+          new Promise<void>(resolve => {
+            releaseDust = resolve;
+          }),
+      );
+      const subscription = startLifecycleWallet().subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(dustWalletMock.start).toHaveBeenCalledOnce();
+        });
+        subscription.unsubscribe();
+        releaseDust();
+        await flushScheduledWork();
+        expect(
+          walletFacadeMock.transactionLifecycleService.start,
+        ).not.toHaveBeenCalled();
+        expect(walletFacadeMock.stop).toHaveBeenCalledOnce();
+        expect(store.upsert).not.toHaveBeenCalled();
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
 
-      const result$ = midnightSideEffectDependencies.startMidnightAccountWallet(
-        {
+    it('does not publish or persist a wallet cancelled during lifecycle startup', async () => {
+      let releaseLifecycle!: () => void;
+      walletFacadeMock.transactionLifecycleService.start.mockImplementationOnce(
+        async () =>
+          new Promise<void>(resolve => {
+            releaseLifecycle = resolve;
+          }),
+      );
+      const next = vi.fn();
+      const subscription = startLifecycleWallet().subscribe({ next });
+      try {
+        await vi.waitFor(() => {
+          expect(
+            walletFacadeMock.transactionLifecycleService.start,
+          ).toHaveBeenCalledOnce();
+        });
+        subscription.unsubscribe();
+        releaseLifecycle();
+        await flushScheduledWork();
+        expect(walletFacadeMock.stop).toHaveBeenCalledOnce();
+        expect(next).not.toHaveBeenCalled();
+        expect(store.upsert).not.toHaveBeenCalled();
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+
+    it('defers every sync stream until account keys are available', async () => {
+      const keys$ = new Subject<AccountKeys>();
+      const subscription = midnightSideEffectDependencies
+        .startMidnightAccountWallet({
           account:
             midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
           config,
           store,
-          keyManager,
-        },
-      );
-
-      await firstValueFrom(result$);
-
-      expect(unshieldedWalletMock.start).toHaveBeenCalled();
-      expect(shieldedWalletMock.start).not.toHaveBeenCalled();
-      expect(dustWalletMock.start).not.toHaveBeenCalled();
+          keyManager: createMockKeyManager({ keys$ }),
+        })
+        .subscribe();
+      try {
+        await vi.waitFor(() => {
+          expect(keys$.observed).toBe(true);
+        });
+        expect(unshieldedWalletMock.start).not.toHaveBeenCalled();
+        expect(shieldedWalletMock.start).not.toHaveBeenCalled();
+        expect(dustWalletMock.start).not.toHaveBeenCalled();
+        expect(
+          walletFacadeMock.transactionLifecycleService.start,
+        ).not.toHaveBeenCalled();
+        keys$.next(createMockAccountKeys());
+        await vi.waitFor(() => {
+          expect(
+            walletFacadeMock.transactionLifecycleService.start,
+          ).toHaveBeenCalledOnce();
+        });
+        expect(unshieldedWalletMock.start).toHaveBeenCalledOnce();
+        expect(shieldedWalletMock.start).toHaveBeenCalledOnce();
+        expect(dustWalletMock.start).toHaveBeenCalledOnce();
+      } finally {
+        subscription.unsubscribe();
+      }
     });
 
     it('starts shielded wallet with sync keys derived from the account zswap seed, then dust wallet', async () => {
@@ -977,26 +1750,33 @@ describe('startMidnightAccountWallet', () => {
         },
       );
 
-      await firstValueFrom(result$);
+      await firstValueFrom(
+        result$.pipe(
+          tap(() => {
+            // Both streams must derive their OWN key from the seed buffer. Passing
+            // the cached object instead is invisible to the start() assertions below
+            // (the mocked fromSeed returns the same instance), so assert the
+            // derivation itself: without it, clear() zeroizing the cached copy on
+            // idle would wedge the running stream.
+            expect([
+              ...vi.mocked(ledger.ZswapSecretKeys.fromSeed).mock.calls[0][0],
+            ]).toEqual([...accountKeys.walletKeys.zswapKeyBuffer]);
+            expect([
+              ...vi.mocked(ledger.DustSecretKey.fromSeed).mock.calls[0][0],
+            ]).toEqual([...accountKeys.walletKeys.dustKeyBuffer]);
+          }),
+        ),
+      );
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      // Both streams must derive their OWN key from the seed buffer. Passing
-      // the cached object instead is invisible to the start() assertions below
-      // (the mocked fromSeed returns the same instance), so assert the
-      // derivation itself: without it, clear() zeroizing the cached copy on
-      // idle would wedge the running stream.
-      expect(ledger.ZswapSecretKeys.fromSeed).toHaveBeenCalledWith(
-        accountKeys.walletKeys.zswapKeyBuffer,
-      );
-      expect(ledger.DustSecretKey.fromSeed).toHaveBeenCalledWith(
-        accountKeys.walletKeys.dustKeyBuffer,
-      );
-      expect(shieldedWalletMock.start).toHaveBeenCalledWith(
-        zswapSecretKeysMock,
-      );
-      expect(dustWalletMock.start).toHaveBeenCalledWith(
-        accountKeys.walletKeys.dustSecretKey,
-      );
+      expect(shieldedWalletMock.start).toHaveBeenCalledWith({
+        v8: zswapSecretKeysMock,
+        v9: v9ZswapSecretKeysMock,
+      });
+      expect(dustWalletMock.start).toHaveBeenCalledWith({
+        v8: dustSecretKeyMock,
+        v9: v9DustSecretKeyMock,
+      });
     });
 
     it('starts dust even when the shielded start fails, and surfaces the failure', async () => {
@@ -1034,9 +1814,10 @@ describe('startMidnightAccountWallet', () => {
       await flushScheduledWork();
 
       try {
-        expect(dustWalletMock.start).toHaveBeenCalledWith(
-          accountKeys.walletKeys.dustSecretKey,
-        );
+        expect(dustWalletMock.start).toHaveBeenCalledWith({
+          v8: dustSecretKeyMock,
+          v9: v9DustSecretKeyMock,
+        });
         // Raised rather than swallowed, so the account watch can retry it and
         // eventually show the user a failure (ADR 15).
         expect(errors).toEqual([startError]);
@@ -1237,19 +2018,22 @@ describe('startMidnightAccountWallet', () => {
       );
 
       const subscription = result$.subscribe();
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await vi.waitFor(() => {
+        expect(areKeysAvailable$.observed).toBe(true);
+      });
 
+      expect(unshieldedWalletMock.start).not.toHaveBeenCalled();
       expect(dustWalletMock.start).not.toHaveBeenCalled();
 
       isAuthCancelled = false;
       areKeysAvailable$.next(true);
-      await new Promise(resolve => setTimeout(resolve, 0));
-
-      expect(dustWalletMock.start).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(dustWalletMock.start).toHaveBeenCalled();
+      });
       subscription.unsubscribe();
     });
 
-    it('stops the facade without starting any wallet when unsubscribed during async init', async () => {
+    it('skips construction when unsubscribed before restoration starts', async () => {
       const getAll$ = new Subject<SerializedMidnightWallet[]>();
       vi.mocked(store.getAll).mockReturnValue(getAll$);
 
@@ -1269,9 +2053,10 @@ describe('startMidnightAccountWallet', () => {
       subscription.unsubscribe();
 
       getAll$.next([]);
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await flushScheduledWork();
 
-      expect(walletFacadeMock.stop).toHaveBeenCalled();
+      expect(WalletFacadeInitMock).not.toHaveBeenCalled();
+      expect(store.get).not.toHaveBeenCalled();
       expect(unshieldedWalletMock.start).not.toHaveBeenCalled();
     });
 
@@ -1303,7 +2088,9 @@ describe('startMidnightAccountWallet', () => {
       );
 
       const subscription = result$.subscribe();
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await vi.waitFor(() => {
+        expect(unshieldedWalletMock.start).toHaveBeenCalled();
+      });
       subscription.unsubscribe();
 
       expect(walletFacadeMock.stop).toHaveBeenCalled();
@@ -1357,13 +2144,101 @@ describe('startMidnightAccountWallet', () => {
       walletFacadeMock.stop.mockResolvedValue(undefined);
     };
 
+    it('projects public progress, observed DUST mode and dust address', async () => {
+      vi.useFakeTimers();
+      const { facadeState$, subscription, getWallet } =
+        startWalletWithDrivableState();
+      try {
+        await vi.waitFor(() => {
+          expect(walletFacadeMock.state).toHaveBeenCalled();
+        });
+        const state = createMockFacadeState();
+        state.dust.protocolVersion = 9n;
+        state.dust.state = VariantState.seal(V2Tag, {
+          syncKind: 'projections',
+        });
+        state.shielded.progress.appliedIndex = 25n;
+        state.dust.progress.appliedIndex = 75n;
+        state.unshielded.progress.appliedId = 50n;
+        state.shielded.progress.isStrictlyComplete = () => false;
+        state.dust.progress.isStrictlyComplete = () => false;
+        state.unshielded.progress.isStrictlyComplete = () => false;
+        facadeState$.next(state);
+        await vi.advanceTimersByTimeAsync(0);
+
+        const wallet = getWallet()!;
+        const observed: unknown[] = [];
+        subscription.add(
+          wallet.syncProgress$.subscribe(value => observed.push(value)),
+        );
+        subscription.add(wallet.address$.subscribe());
+        facadeState$.next(state);
+        expect(observed.at(-1)).toEqual({
+          shielded: 0.25,
+          unshielded: 0.5,
+          dust: 0.75,
+          dustSyncKind: 'projections',
+          protocolVersions: { dust: 9n, shielded: 8n, unshielded: 8n },
+          indexerLiveness: 'InSync',
+          isConnected: { dust: true, shielded: true, unshielded: true },
+          isStrictlyComplete: {
+            shielded: false,
+            unshielded: false,
+            dust: false,
+          },
+        });
+        expect(
+          WalletSdkAddressFormat.DustAddress.codec.encode,
+        ).toHaveBeenCalledWith(
+          midnightAccount.blockchainSpecific.networkId,
+          state.dust.address,
+        );
+
+        const complete = createMockFacadeState();
+        complete.unshielded.progress.isStrictlyComplete = () => false;
+        facadeState$.next(complete);
+        expect(observed.at(-1)).toEqual({
+          shielded: 1,
+          unshielded: 1,
+          dust: 1,
+          dustSyncKind: undefined,
+          protocolVersions: { dust: 8n, shielded: 8n, unshielded: 8n },
+          indexerLiveness: 'InSync',
+          isConnected: { dust: true, shielded: true, unshielded: true },
+          isStrictlyComplete: {
+            shielded: true,
+            unshielded: false,
+            dust: true,
+          },
+        });
+        const disconnected = createMockFacadeState();
+        disconnected.dust.progress.isConnected = false;
+        disconnected.dust.progress.isStrictlyComplete = () => false;
+        disconnected.dust.progress.highestRelevantWalletIndex = 0n;
+        disconnected.unshielded.progress.indexerLiveness._tag = 'Behind';
+        facadeState$.next(disconnected);
+        expect(observed.at(-1)).toMatchObject({
+          dust: undefined,
+          indexerLiveness: 'Behind',
+          isConnected: { dust: false, shielded: true, unshielded: true },
+          isStrictlyComplete: { dust: false },
+        });
+      } finally {
+        subscription.unsubscribe();
+        await vi.advanceTimersByTimeAsync(0);
+        restoreSharedMocks();
+      }
+    });
+
     it('writes no further wallet state once stop() has been called', async () => {
       vi.useFakeTimers();
       try {
         const { facadeState$, subscription, getWallet } =
           startWalletWithDrivableState();
 
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.waitFor(() => {
+          expect(walletFacadeMock.state).toHaveBeenCalled();
+        });
         facadeState$.next(createMockFacadeState());
         await vi.advanceTimersByTimeAsync(0);
 
@@ -1391,7 +2266,9 @@ describe('startMidnightAccountWallet', () => {
         const { facadeState$, subscription, getWallet } =
           startWalletWithDrivableState();
 
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.waitFor(() => {
+          expect(walletFacadeMock.state).toHaveBeenCalled();
+        });
         facadeState$.next(createMockFacadeState());
         await vi.advanceTimersByTimeAsync(0);
 
@@ -1412,6 +2289,7 @@ describe('startMidnightAccountWallet', () => {
   describe('transaction history restore and lazy key migration', () => {
     const startRestoredWallet = (
       serializedState: SerializedMidnightWallet['serializedState'],
+      resetAuthorizations?: Record<string, string[]>,
     ) => {
       const { networkId } = midnightAccount.blockchainSpecific;
       vi.mocked(store.getAll).mockReturnValue(
@@ -1428,7 +2306,7 @@ describe('startMidnightAccountWallet', () => {
       return midnightSideEffectDependencies.startMidnightAccountWallet({
         account:
           midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
-        config,
+        config: { ...config, dustSyncResetAuthorizations: resetAuthorizations },
         store,
         keyManager: createMockKeyManager({
           keys$: of(createMockAccountKeys()),
@@ -1441,6 +2319,285 @@ describe('startMidnightAccountWallet', () => {
     const restoredHistoryBlob = () =>
       vi.mocked(WalletSdk.InMemoryTransactionHistoryStorage.restore).mock
         .calls[0][0];
+
+    it('does not skip history on an ordinary cached restore', async () => {
+      await firstValueFrom(startRestoredWallet(createSerializedState()));
+      expect(
+        vi.mocked(WalletSdkDustWallet.DustWallet).mock.calls[0][0],
+      ).toMatchObject({ skipLedgerV8DustHistory: false });
+    });
+
+    it.each([{}, { [midnightAccount.accountId]: ['1'] }])(
+      'rebuilds only Dust and keeps history with reset consent %j',
+      async resetAuthorizations => {
+        const modeCheck = vi
+          .spyOn(dustSync, 'resolveDustRestoreMode')
+          .mockReturnValueOnce('rebuild');
+        const factory = WalletSdkDustWallet.DustWallet(config as never);
+        const start = vi
+          .mocked(factory.startWithSeed)
+          .mockResolvedValueOnce(dustWalletMock as never);
+        vi.mocked(WalletSdkDustWallet.DustWallet).mockClear();
+        try {
+          const state = createSerializedState();
+          await firstValueFrom(startRestoredWallet(state, resetAuthorizations));
+          expect(modeCheck).toHaveBeenCalledWith(
+            SerialisedWalletState.toJSON(state.dust),
+            {
+              network: {
+                ...config,
+                dustSyncResetAuthorizations: resetAuthorizations,
+              },
+              authorizedPendingDustNullifiers:
+                resetAuthorizations?.[midnightAccount.accountId],
+            },
+          );
+          expect(start).toHaveBeenCalledOnce();
+          expect(factory.restore).not.toHaveBeenCalled();
+          expect(
+            vi.mocked(WalletSdkDustWallet.DustWallet).mock.calls[0][0],
+          ).toMatchObject({
+            skipLedgerV8DustHistory: false,
+            dustTimelineStartProbe: expect.any(Function) as unknown,
+          });
+          expect(
+            WalletSdkShielded.ShieldedWallet(config as never).restore,
+          ).toHaveBeenCalledWith(SerialisedWalletState.toJSON(state.shielded));
+          expect(
+            WalletSdkUnshielded.UnshieldedWallet(config as never).restore,
+          ).toHaveBeenCalledWith(
+            SerialisedWalletState.toJSON(state.unshielded),
+          );
+          expect(restoredHistoryBlob()).toBe(
+            SerialisedWalletState.toJSON(state.txHistory),
+          );
+          expect(store.removeWhere).not.toHaveBeenCalled();
+          expect(store.clear).not.toHaveBeenCalled();
+        } finally {
+          modeCheck.mockRestore();
+        }
+      },
+    );
+
+    it('blocks an unapproved projection restore before starting wallets or writing storage', async () => {
+      const state = {
+        ...createSerializedState(),
+        dust: SerialisedWalletState(
+          LaceSdkUtil.HexBytes.fromUTF8(
+            JSON.stringify({
+              syncKind: 'projections',
+              protocolVersion: '2001100',
+              offset: '3446045',
+            }),
+          ),
+        ),
+      };
+      await expect(firstValueFrom(startRestoredWallet(state))).rejects.toThrow(
+        'Saved wallet data has been retained',
+      );
+      expect(store.upsert).not.toHaveBeenCalled();
+      expect(store.removeWhere).not.toHaveBeenCalled();
+      expect(store.clear).not.toHaveBeenCalled();
+      expect(WalletSdkDustWallet.DustWallet).not.toHaveBeenCalled();
+      expect(WalletSdkShielded.ShieldedWallet).not.toHaveBeenCalled();
+      expect(WalletSdkUnshielded.UnshieldedWallet).not.toHaveBeenCalled();
+      expect(WalletFacadeInitMock).not.toHaveBeenCalled();
+    });
+
+    it('retains the entire cache when a Dust mode change is unsafe', async () => {
+      const modeCheck = vi
+        .spyOn(dustSync, 'resolveDustRestoreMode')
+        .mockImplementationOnce(() => {
+          throw new Error('Dust spends are pending');
+        });
+      try {
+        await expect(
+          firstValueFrom(startRestoredWallet(createSerializedState())),
+        ).rejects.toThrow('Dust spends are pending');
+        expect(store.removeWhere).not.toHaveBeenCalled();
+        expect(store.clear).not.toHaveBeenCalled();
+        expect(WalletFacadeInitMock).not.toHaveBeenCalled();
+      } finally {
+        modeCheck.mockRestore();
+      }
+    });
+
+    it('does not discard saved state when constructing the replacement Dust wallet fails', async () => {
+      const modeCheck = vi
+        .spyOn(dustSync, 'resolveDustRestoreMode')
+        .mockReturnValueOnce('rebuild');
+      const builder = vi
+        .spyOn(dustSync, 'createDustWallet')
+        .mockImplementationOnce(() => {
+          throw new Error('invalid configuration');
+        });
+      try {
+        await expect(
+          firstValueFrom(startRestoredWallet(createSerializedState())),
+        ).rejects.toThrow('invalid configuration');
+        expect(store.removeWhere).not.toHaveBeenCalled();
+        expect(store.clear).not.toHaveBeenCalled();
+        expect(shieldedWalletMock.stop).toHaveBeenCalledOnce();
+        expect(unshieldedWalletMock.stop).toHaveBeenCalledOnce();
+      } finally {
+        modeCheck.mockRestore();
+        builder.mockRestore();
+      }
+    });
+
+    it('retains history and closes partial restores when the Dust rebuild fails', async () => {
+      const modeCheck = vi
+        .spyOn(dustSync, 'resolveDustRestoreMode')
+        .mockReturnValueOnce('rebuild');
+      vi.mocked(
+        WalletSdkDustWallet.DustWallet(config as never).startWithSeed,
+      ).mockRejectedValueOnce(new Error('indexer offline'));
+      try {
+        await expect(
+          firstValueFrom(startRestoredWallet(createSerializedState())),
+        ).rejects.toThrow('indexer offline');
+        expect(store.removeWhere).not.toHaveBeenCalled();
+        expect(store.clear).not.toHaveBeenCalled();
+        expect(shieldedWalletMock.stop).toHaveBeenCalledOnce();
+        expect(unshieldedWalletMock.stop).toHaveBeenCalledOnce();
+      } finally {
+        modeCheck.mockRestore();
+      }
+    });
+
+    it('shares restored history between every wallet writer and the facade reader', async () => {
+      const restoredHistory = {
+        serialize: vi.fn().mockResolvedValue('restored-history'),
+      } as unknown as WalletSdk.InMemoryTransactionHistoryStorage;
+      vi.mocked(
+        WalletSdk.InMemoryTransactionHistoryStorage.restore,
+      ).mockReturnValueOnce(restoredHistory);
+
+      await firstValueFrom(startRestoredWallet(createSerializedState()));
+
+      const initArgument = WalletFacadeInitMock.mock.calls[0][0] as Parameters<
+        typeof WalletSdkFacade.WalletFacade.init
+      >[0];
+      const readerHistory = initArgument.configuration.txHistoryStorage;
+      expect(readerHistory).toBe(restoredHistory);
+      for (const factory of [
+        WalletSdkShielded.ShieldedWallet,
+        WalletSdkUnshielded.UnshieldedWallet,
+        WalletSdkDustWallet.DustWallet,
+      ]) {
+        const writerConfiguration = vi.mocked(factory).mock.calls[0][0];
+        expect(writerConfiguration.txHistoryStorage).not.toBe(readerHistory);
+        expect(await writerConfiguration.txHistoryStorage.serialize()).toBe(
+          'restored-history',
+        );
+        expect(writerConfiguration.txHistoryStorage).not.toBe(
+          txHistoryStorageMock,
+        );
+        expect(writerConfiguration.forks).toBeDefined();
+      }
+    });
+
+    it('routes restored wallet inclusions through the facade history wrapper', async () => {
+      await firstValueFrom(startRestoredWallet(createSerializedState()));
+      const init = WalletFacadeInitMock.mock.calls[0][0] as Parameters<
+        typeof WalletSdkFacade.WalletFacade.init
+      >[0];
+      const base = init.configuration.txHistoryStorage;
+      const gotFinalized = vi.fn(async () => undefined);
+      const wrapped = { ...base, gotFinalized };
+      const actual = await vi.importActual<typeof WalletSdkFacade>(
+        '@midnightntwrk/wallet-sdk/facade',
+      );
+      const configuration = {
+        ...actual.WalletFacade.resolveConfiguration(init.configuration),
+        txHistoryStorage: wrapped,
+      };
+      const entry = {
+        hash: 'included-transaction',
+        identifiers: ['included-transaction'],
+        status: 'SUCCESS',
+        finalizedBlock: {
+          timestamp: new Date('2030-01-01T00:00:00Z'),
+          hash: 'block',
+          height: 1,
+        },
+      } satisfies Parameters<
+        WalletSdk.InMemoryTransactionHistoryStorage['gotFinalized']
+      >[0];
+      for (const [factory, restore] of [
+        [init.shielded, WalletSdkShielded.ShieldedWallet],
+        [init.unshielded, WalletSdkUnshielded.UnshieldedWallet],
+        [init.dust, WalletSdkDustWallet.DustWallet],
+      ] as const) {
+        await factory(configuration);
+        const writer = vi.mocked(restore).mock.calls[0][0].txHistoryStorage;
+        await writer.gotFinalized(entry);
+      }
+      expect(gotFinalized).toHaveBeenCalledTimes(3);
+      expect(gotFinalized).toHaveBeenLastCalledWith(entry);
+      expect(init.configuration.txHistoryStorage).toBe(base);
+    });
+
+    it('restores saved lifecycle records with the facade clock', async () => {
+      const saved = {
+        version: 'v2',
+        records: [
+          {
+            identifiers: ['pending-id'],
+            intentHashes: ['intent-id'],
+            inputs: { unshielded: ['coin#0'] },
+            ttl: '2030-01-01T00:01:00.000Z',
+            createdAt: '2030-01-01T00:00:00.000Z',
+            state: { _tag: 'Balanced' },
+          },
+        ],
+      };
+      await firstValueFrom(
+        startRestoredWallet({
+          ...createSerializedState(),
+          transactionLifecycle: SerialisedWalletState(JSON.stringify(saved)),
+        }),
+      );
+      const init = WalletFacadeInitMock.mock.calls[0][0] as Parameters<
+        typeof WalletSdkFacade.WalletFacade.init
+      >[0];
+      const actual = await vi.importActual<typeof WalletSdkFacade>(
+        '@midnightntwrk/wallet-sdk/facade',
+      );
+      const clock = { now: () => new Date('2030-01-01T00:00:30Z') };
+      const createService = vi.spyOn(TransactionLifecycleServiceImpl, 'init');
+      const service = await init.transactionLifecycleService!(
+        actual.WalletFacade.resolveConfiguration(init.configuration),
+        { clock },
+      );
+      try {
+        expect(createService).toHaveBeenCalledWith(
+          expect.objectContaining({ clock }),
+        );
+        expect(JSON.parse(await service.serializeState())).toMatchObject(saved);
+        expect(store.removeWhere).not.toHaveBeenCalled();
+      } finally {
+        await service.stop();
+        createService.mockRestore();
+      }
+    });
+
+    it('rebuilds unreadable lifecycle state instead of silently dropping pending records', async () => {
+      await firstValueFrom(
+        startRestoredWallet({
+          ...createSerializedState(),
+          transactionLifecycle: SerialisedWalletState(
+            '{"version":"v99","records":[]}',
+          ),
+        }),
+      );
+      expect(store.removeWhere).toHaveBeenCalledOnce();
+      expect(WalletSdkShielded.ShieldedWallet).not.toHaveBeenCalled();
+      const init = WalletFacadeInitMock.mock.calls[0][0] as Parameters<
+        typeof WalletSdkFacade.WalletFacade.init
+      >[0];
+      expect(init.transactionLifecycleService).toBeUndefined();
+    });
 
     it('restores history from the current `txHistory` key', async () => {
       await firstValueFrom(
@@ -1530,8 +2687,9 @@ describe('startMidnightAccountWallet', () => {
         ),
       } as unknown as SerializedMidnightWallet['serializedState']).subscribe();
 
-      await new Promise(resolve => setTimeout(resolve, 0));
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await vi.waitFor(() => {
+        expect(store.upsert).toHaveBeenCalled();
+      });
 
       const persistedState = vi.mocked(store.upsert).mock.calls[0]?.[0]
         ?.serializedState;
@@ -1579,8 +2737,9 @@ describe('startMidnightAccountWallet', () => {
         txHistory: SerialisedWalletState('{"txHistory":[]}'),
       }).subscribe();
 
-      await new Promise(resolve => setTimeout(resolve, 0));
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await vi.waitFor(() => {
+        expect(store.upsert).toHaveBeenCalled();
+      });
 
       const persistedState = vi.mocked(store.upsert).mock.calls[0]?.[0]
         ?.serializedState;
@@ -1589,159 +2748,59 @@ describe('startMidnightAccountWallet', () => {
         shielded: SerialisedWalletState('shielded-state'),
         unshielded: SerialisedWalletState('unshielded-state'),
         txHistory: SerialisedWalletState('tx-history'),
+        transactionLifecycle: SerialisedWalletState(
+          '{"version":"v2","records":[]}',
+        ),
       });
 
       subscription.unsubscribe();
     });
   });
 
-  describe('balance method wrappers', () => {
-    const startWallet = async () => {
-      const keyManager = createMockKeyManager({
-        keys$: of(createMockAccountKeys()),
-      });
-      return firstValueFrom(
+  describe('facade builder delegation', () => {
+    const startWallet = async (keys$ = of(createMockAccountKeys())) =>
+      firstValueFrom(
         midnightSideEffectDependencies.startMidnightAccountWallet({
           account:
             midnightAccount as unknown as InMemoryWalletAccount<MidnightAccountProps>,
           config,
           store,
-          keyManager,
+          keyManager: createMockKeyManager({ keys$ }),
         }),
       );
-    };
-
-    const mockTx = { type: 'mock-tx' } as never;
+    const tx = { type: 'mock-tx' } as never;
     const ttl = new Date();
-
-    it('balanceUnprovenTransaction passes tokenKindsToBalance to the facade', async () => {
-      const wallet = await startWallet();
-
-      await firstValueFrom(
-        wallet.balanceUnprovenTransaction(mockTx, {
-          ttl,
-          tokenKindsToBalance: ['dust'],
-        }),
-      );
-
-      expect(walletFacadeMock.balanceUnprovenTransaction).toHaveBeenCalledWith(
-        mockTx,
-        expect.any(Object),
-        { ttl, tokenKindsToBalance: ['dust'] },
-      );
-    });
-
-    it('balanceUnprovenTransaction passes ttl when tokenKindsToBalance is not provided', async () => {
-      const wallet = await startWallet();
-
-      await firstValueFrom(wallet.balanceUnprovenTransaction(mockTx, { ttl }));
-
-      expect(walletFacadeMock.balanceUnprovenTransaction).toHaveBeenCalledWith(
-        mockTx,
-        expect.any(Object),
-        expect.objectContaining({ ttl }),
-      );
-    });
-
-    // The connector balancing steps run over the facade's sub-wallets, so
-    // that a failed step releases what the earlier ones reserved.
-    it('balanceFinalizedTransaction balances only the kinds it is given', async () => {
-      const balancing = { merge: vi.fn() };
-      shieldedWalletMock.balanceTransaction.mockResolvedValueOnce(balancing);
-      const wallet = await startWallet();
-
-      const recipe = await firstValueFrom(
-        wallet.balanceFinalizedTransaction(mockTx, {
-          ttl,
-          tokenKindsToBalance: ['shielded'],
-        }),
-      );
-
-      expect(shieldedWalletMock.balanceTransaction).toHaveBeenCalledWith(
-        zswapSecretKeysMock,
-        mockTx,
-      );
-      expect(
-        unshieldedWalletMock.balanceFinalizedTransaction,
-      ).not.toHaveBeenCalled();
-      expect(dustWalletMock.balanceTransactions).not.toHaveBeenCalled();
-      expect(recipe).toEqual({
-        type: 'FINALIZED_TRANSACTION',
-        originalTransaction: mockTx,
-        balancingTransaction: balancing,
-      });
-    });
-
-    it('balanceUnboundTransaction releases its shielded balancing, not the dApp transaction, when the fee cannot be paid', async () => {
-      const shieldedBalancing = { type: 'shielded-balancing' };
-      shieldedWalletMock.balanceTransaction.mockResolvedValueOnce(
-        shieldedBalancing,
-      );
-      shieldedWalletMock.revertTransaction.mockResolvedValueOnce(undefined);
-      // Adds inputs to the dApp transaction without reserving them.
-      unshieldedWalletMock.balanceUnboundTransaction.mockResolvedValueOnce(
-        mockTx,
-      );
-      dustWalletMock.balanceTransactions.mockRejectedValueOnce(
-        new Error('Insufficient DUST'),
-      );
-      const wallet = await startWallet();
-
-      await expect(
-        firstValueFrom(wallet.balanceUnboundTransaction(mockTx, { ttl })),
-      ).rejects.toThrow('Insufficient DUST');
-      expect(
-        shieldedWalletMock.revertTransaction,
-      ).toHaveBeenCalledExactlyOnceWith(shieldedBalancing);
-      expect(unshieldedWalletMock.revertTransaction).not.toHaveBeenCalled();
-      expect(walletFacadeMock.balanceUnboundTransaction).not.toHaveBeenCalled();
-    });
-
-    it('transferTransaction releases its reservations when the fee cannot be paid', async () => {
-      const transfer = { type: 'unshielded-transfer' };
-      unshieldedWalletMock.transferTransaction.mockResolvedValueOnce(transfer);
-      unshieldedWalletMock.revertTransaction.mockResolvedValueOnce(undefined);
-      dustWalletMock.balanceTransactions.mockRejectedValueOnce(
-        new Error('Insufficient DUST'),
-      );
-      const wallet = await startWallet();
-
-      await expect(
-        firstValueFrom(
-          wallet.transferTransaction(
-            [{ type: 'unshielded', outputs: [{}] }] as never,
-            { ttl },
-          ),
-        ),
-      ).rejects.toThrow('Insufficient DUST');
-      expect(
-        unshieldedWalletMock.revertTransaction,
-      ).toHaveBeenCalledExactlyOnceWith(transfer);
-      expect(walletFacadeMock.transferTransaction).not.toHaveBeenCalled();
-    });
-
-    it('initSwap releases its reservation when the fee cannot be paid', async () => {
-      const swap = { type: 'unshielded-swap' };
-      unshieldedWalletMock.initSwap.mockResolvedValueOnce(swap);
-      unshieldedWalletMock.revertTransaction.mockResolvedValueOnce(undefined);
-      dustWalletMock.balanceTransactions.mockRejectedValueOnce(
-        new Error('Insufficient DUST'),
-      );
-      const wallet = await startWallet();
-
-      await expect(
-        firstValueFrom(
-          wallet.initSwap({ unshielded: { aa: 1n } } as never, [], {
-            ttl,
-            payFees: true,
-          }),
-        ),
-      ).rejects.toThrow('Insufficient DUST');
-      expect(
-        unshieldedWalletMock.revertTransaction,
-      ).toHaveBeenCalledExactlyOnceWith(swap);
-      expect(walletFacadeMock.initSwap).not.toHaveBeenCalled();
-    });
+    it.each([
+      'balanceUnprovenTransaction',
+      'balanceFinalizedTransaction',
+      'balanceUnboundTransaction',
+    ] as const)(
+      '%s authenticates and delegates the handle and options without a second reservation wrapper',
+      async method => {
+        const wallet = await startWallet();
+        const options = { ttl, tokenKindsToBalance: ['dust'] as ['dust'] };
+        await firstValueFrom<unknown>(wallet[method](tx, options));
+        expect(walletFacadeMock[method]).toHaveBeenCalledExactlyOnceWith(
+          tx,
+          options,
+        );
+      },
+    );
+    // Reservation rollback now belongs to the real canary facade; see v2-facade-contract.test.ts.
+    it.each(['transferTransaction', 'initSwap'] as const)(
+      '%s preserves the SDK failure',
+      async method => {
+        const error = new Error('Insufficient DUST');
+        walletFacadeMock[method].mockRejectedValueOnce(error);
+        const wallet = await startWallet();
+        const result =
+          method === 'transferTransaction'
+            ? wallet.transferTransaction([], { ttl })
+            : wallet.initSwap({}, [], { ttl, payFees: true });
+        await expect(firstValueFrom(result)).rejects.toBe(error);
+        expect(walletFacadeMock[method]).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   describe('revert', () => {
@@ -1783,6 +2842,9 @@ describe('startMidnightAccountWallet', () => {
         shielded: SerialisedWalletState('shielded-serialized'),
         unshielded: SerialisedWalletState('unshielded-serialized'),
         txHistory: SerialisedWalletState('txhistory-serialized'),
+        transactionLifecycle: SerialisedWalletState(
+          '{"version":"v2","records":[]}',
+        ),
       },
     };
 
@@ -1838,7 +2900,7 @@ describe('startMidnightAccountWallet', () => {
       }
     });
 
-    it('skips the storage write when the serialized state is unchanged', async () => {
+    it('skips unchanged state but persists a lifecycle-only change', async () => {
       vi.useFakeTimers();
       try {
         const facadeState$ = new Subject<
@@ -1860,7 +2922,9 @@ describe('startMidnightAccountWallet', () => {
 
         // Let the async wallet init finish wiring the persist subscription
         // before the first state emission
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.waitFor(() => {
+          expect(walletFacadeMock.state).toHaveBeenCalled();
+        });
         facadeState$.next(createMockFacadeState());
         await vi.advanceTimersByTimeAsync(10);
         expect(store.upsert).toHaveBeenCalledTimes(1);
@@ -1870,6 +2934,19 @@ describe('startMidnightAccountWallet', () => {
         facadeState$.next(createMockFacadeState());
         await vi.advanceTimersByTimeAsync(6000);
         expect(store.upsert).toHaveBeenCalledTimes(1);
+
+        const lifecycle =
+          '{"version":"v2","records":[],"futureField":"changed"}';
+        walletFacadeMock.transactionLifecycleService.serializeState.mockResolvedValueOnce(
+          lifecycle,
+        );
+        facadeState$.next(createMockFacadeState());
+        await vi.advanceTimersByTimeAsync(6000);
+        expect(store.upsert).toHaveBeenCalledTimes(2);
+        expect(
+          vi.mocked(store.upsert).mock.calls[1][0].serializedState
+            .transactionLifecycle,
+        ).toBe(lifecycle);
 
         subscription.unsubscribe();
       } finally {
@@ -1907,7 +2984,9 @@ describe('startMidnightAccountWallet', () => {
           }),
         );
 
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.waitFor(() => {
+          expect(walletFacadeMock.state).toHaveBeenCalled();
+        });
         facadeState$.next(createMockFacadeState());
         const wallet = await walletPromise;
         await vi.advanceTimersByTimeAsync(0);

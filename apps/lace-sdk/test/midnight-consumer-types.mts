@@ -1,3 +1,4 @@
+import type { ProvingProvider as LedgerV9ProvingProvider } from '@midnightntwrk/ledger-v9';
 import * as midnight from '@laceio/sdk/midnight';
 import {
   buildMidnightTransfer,
@@ -367,6 +368,10 @@ export const attestedProving = async (
   const result = await getMidnightProvingProvider(wallet, providerProps);
   if (result.isOk()) {
     const provider: ProvingProvider = result.value;
+    const ledgerProvider: LedgerV9ProvingProvider = provider;
+    const material = await ledgerProvider.lookupKey('circuit');
+    const proverKey: Uint8Array | undefined = material?.proverKey;
+    void proverKey;
     const checked: (bigint | undefined)[] = await provider.check(
       new Uint8Array(),
       'circuit',

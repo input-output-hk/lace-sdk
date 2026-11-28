@@ -45,7 +45,13 @@ export const createInitializeSideEffects =
   (
     loadoutSideEffects: StorageSideEffects,
     watchAccount: WatchMidnightAccount,
-    storageSideEffects: StorageSideEffects = pageStorageSideEffects,
+    {
+      storageSideEffects = pageStorageSideEffects,
+      prepareAccountWatch = watch => watch,
+    }: {
+      storageSideEffects?: StorageSideEffects;
+      prepareAccountWatch?: (watch: SideEffect) => SideEffect;
+    } = {},
   ): LaceInitSync<SideEffect[]> =>
   () =>
     [
@@ -63,7 +69,9 @@ export const createInitializeSideEffects =
             requestResyncWallet,
             autoDismissMidnightSyncFailureOnResume,
             autoDismissMidnightSyncFailureOnSyncSuccess,
-            watchMidnightAccounts(midnightStateStorage, watchAccount),
+            prepareAccountWatch(
+              watchMidnightAccounts(midnightStateStorage, watchAccount),
+            ),
             ...loadoutSideEffects(midnightStateStorage),
           ].map(sideEffect =>
             sideEffect(actionObservables, stateObservables, dependencies),

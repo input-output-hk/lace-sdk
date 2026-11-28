@@ -3,10 +3,15 @@ import { vi } from 'vitest';
 
 import { createMidnightEngineHost } from '../../src/worker/engine-host';
 
-import { createMemoryStore } from './engine-host-fakes';
+import { createMemoryStore, encryptedSeedOf } from './engine-host-fakes';
 
 import type { DerivePendingMidnightActivity } from '../../src/worker/engine-operations';
-import type { MidnightWorkerStorageKind } from '../../src/worker/protocol';
+import type {
+  MidnightWorkerStorageKind,
+  MidnightEngineHost,
+  MidnightAttachRequest,
+  MidnightAttachResult,
+} from '../../src/worker/protocol';
 
 export const createHost = () => {
   const stores = new Map<
@@ -24,5 +29,23 @@ export const createHost = () => {
     derivePendingActivity,
     logger: dummyLogger,
   });
-  return { host, stores, createStore, derivePendingActivity };
+  const attach = host.attach;
+  const fixtureHost: Omit<MidnightEngineHost, 'attach'> & {
+    attach: (
+      request: Omit<MidnightAttachRequest, 'encryptedSeed'> &
+        Partial<Pick<MidnightAttachRequest, 'encryptedSeed'>>,
+    ) => Promise<MidnightAttachResult>;
+  } = {
+    ...host,
+    attach: async (
+      request: Omit<Parameters<typeof attach>[0], 'encryptedSeed'> &
+        Partial<Pick<Parameters<typeof attach>[0], 'encryptedSeed'>>,
+    ) =>
+      attach({
+        ...request,
+        encryptedSeed:
+          request.encryptedSeed ?? encryptedSeedOf(request.account),
+      }),
+  };
+  return { host: fixtureHost, stores, createStore, derivePendingActivity };
 };

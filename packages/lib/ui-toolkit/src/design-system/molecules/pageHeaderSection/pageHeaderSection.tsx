@@ -23,6 +23,7 @@ import { SearchBar } from '../searchBar/searchBar';
 type PageHeaderSectionProps = Omit<PageHeaderProps, 'stickyInScrollParent'> & {
   children?: React.ReactNode;
   contentStyle?: StyleProp<ViewStyle>;
+  onContentLayout?: (event: LayoutChangeEvent) => void;
   pageHeaderTestID?: string;
   collapseScrollY?: SharedValue<number>;
   stickyInScrollParent?: boolean;
@@ -31,6 +32,7 @@ type PageHeaderSectionProps = Omit<PageHeaderProps, 'stickyInScrollParent'> & {
 export const PageHeaderSection = ({
   children,
   contentStyle,
+  onContentLayout,
   pageHeaderTestID,
   collapseScrollY,
   stickyInScrollParent = false,
@@ -58,7 +60,6 @@ export const PageHeaderSection = ({
   }));
   const isTitleCollapseEnabled =
     shouldCollapseTitleOnScroll &&
-    !children &&
     !pageHeaderProps.showSearch &&
     !pageHeaderProps.compact;
   const hasSubtitleSpace =
@@ -134,7 +135,8 @@ export const PageHeaderSection = ({
   );
 
   const content = (
-    <Animated.View style={[styles.content, accessoryGapStyle]}>
+    <Animated.View
+      style={isTitleCollapseEnabled ? undefined : accessoryGapStyle}>
       <PageHeader
         {...pageHeaderProps}
         collapseScrollYProp={collapseScrollY}
@@ -144,7 +146,14 @@ export const PageHeaderSection = ({
       />
       {children && (
         <Animated.View
-          style={[styles.container, contentStyle, contentAnimatedStyle]}>
+          onLayout={onContentLayout}
+          style={[
+            styles.container,
+            contentStyle,
+            isTitleCollapseEnabled
+              ? styles.inlineAccessory
+              : contentAnimatedStyle,
+          ]}>
           {children}
         </Animated.View>
       )}
@@ -173,8 +182,8 @@ export const PageHeaderSection = ({
 };
 
 const styles = StyleSheet.create({
-  content: {
-    gap: spacing.S,
+  inlineAccessory: {
+    paddingTop: spacing.S,
   },
   stickyWrapper: {
     position: 'absolute',

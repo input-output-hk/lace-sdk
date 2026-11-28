@@ -1,4 +1,5 @@
 // Test-only import of engine internals: the package deliberately does not export its codec.
+
 // eslint-disable-next-line @nx/enforce-module-boundaries
 import {
   encodeMidnightFinalizedTx,
@@ -11,8 +12,10 @@ import type {
   OpaqueMidnightFinalizedTx,
   OpaqueMidnightRecipe,
 } from '@lace-module/midnight-sync/sdk';
-import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 import type { BalancingRecipe } from '@midnightntwrk/wallet-sdk/facade';
+import type { WalletTransaction } from '@midnightntwrk/wallet-sdk-abstractions';
+
+type FinalizedTransaction = WalletTransaction<'Finalized'>;
 
 const originOf = (
   engine: MidnightWallet,

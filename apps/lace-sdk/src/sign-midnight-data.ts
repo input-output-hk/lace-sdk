@@ -49,8 +49,8 @@ export const signMidnightData = async (
       return engine.signData(bytes).pipe(
         map(({ signature, verifyingKey }) => ({
           data,
-          signature,
-          verifyingKey,
+          signature: signature.value,
+          verifyingKey: verifyingKey.value,
         })),
       );
     }),

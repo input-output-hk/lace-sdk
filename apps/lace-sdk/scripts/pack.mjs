@@ -104,7 +104,7 @@ export const manifestForDistribution = distribution => {
     for (const [name, range] of Object.entries(publishedPeers)) {
       manifest.peerDependencies = {
         ...manifest.peerDependencies,
-        [name]: range,
+        [name]: manifest.peerDependencies?.[name] ?? range,
       };
       manifest.peerDependenciesMeta = {
         ...manifest.peerDependenciesMeta,

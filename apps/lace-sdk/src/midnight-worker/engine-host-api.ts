@@ -55,6 +55,7 @@ const STREAM_PROPERTIES: RemoteApiProperties<MidnightSessionStreams> = {
 /** How Messenger carries each member of the engine host: one call per operation, and the streams per caller. */
 export const MIDNIGHT_ENGINE_HOST_PROPERTIES: RemoteApiProperties<MidnightEngineHost> =
   {
+    inspectDustSyncReset: method,
     attach: method,
     detach: method,
     detachClient: method,

@@ -17,7 +17,10 @@ import type { AccountId } from '@lace-contract/wallet-repo';
  */
 export const createMidnightRegistryDependencies = (
   runtime: ModuleInitProps['runtime'],
-): Omit<MidnightSideEffectsDependencies, 'startMidnightAccountWallet'> => {
+): Omit<
+  MidnightSideEffectsDependencies,
+  'inspectDustSyncReset' | 'startMidnightAccountWallet'
+> => {
   const midnightWallets$ = midnightWalletsForRuntime(runtime);
   return {
     // The transaction executor and the dApp connector read ledger objects; they never load in Worker mode.

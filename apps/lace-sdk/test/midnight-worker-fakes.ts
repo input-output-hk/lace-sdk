@@ -35,6 +35,7 @@ import type {
   OpaqueMidnightRecipe,
 } from '@lace-module/midnight-sync/sdk';
 import type { Logger } from 'ts-log';
+import type { Mock, Mocked } from 'vitest';
 
 type LockRequest = {
   readonly agent: string;
@@ -202,18 +203,54 @@ export const workerStateView = {
   isStrictlyComplete: { shielded: true, unshielded: true, dust: true },
 };
 
+const createFakeStreams = (progress$: Subject<unknown>) => ({
+  address$: new BehaviorSubject(
+    tag({
+      shielded: fixture.midnightShieldedAddress,
+      unshielded: fixture.midnightUnshieldedAddress,
+      dust: fixture.midnightDustAddress,
+    }),
+  ),
+  areKeysAvailable$: new BehaviorSubject(tag(true)),
+  coinsByTokenType$: new BehaviorSubject(tag({ shielded: {}, unshielded: {} })),
+  syncProgress$: new BehaviorSubject(
+    tag({
+      shielded: Percent(1),
+      unshielded: Percent(1),
+      dust: Percent(1),
+      isStrictlyComplete: { shielded: true, unshielded: true, dust: true },
+    }),
+  ),
+  transactionHistory$: new BehaviorSubject(tag([])),
+  stateView$: new BehaviorSubject(tag(workerStateView)),
+  progress$,
+  status$: new BehaviorSubject({
+    engineGeneration: 'generation-1',
+    resets: 0,
+  }),
+});
+
 /**
  * The engine host of the worker, answering each operation with plain data as the real host does. Its streams are
  * those of one running engine of the fixture account.
  */
-export const createFakeEngineHost = () => {
+export const createFakeEngineHost = (): {
+  host: Mocked<Omit<MidnightEngineHost, 'streams'>> & {
+    streams: Mock<() => ReturnType<typeof createFakeStreams>>;
+  };
+  progress$: Subject<unknown>;
+  asHost: () => MidnightEngineHost;
+} => {
   const progress$ = new Subject<unknown>();
   const host = {
+    inspectDustSyncReset: vi.fn<MidnightEngineHost['inspectDustSyncReset']>(
+      async () => ({}),
+    ),
     attach: vi.fn<MidnightEngineHost['attach']>(async request => ({
       accountId: request.account.accountId as MidnightAccountId,
       walletId: fixture.walletId,
       networkId: fixture.networkId,
-      nightVerifyingKey: 'night-key',
+      nightVerifyingKey: { tag: 'schnorr', value: 'night-key' },
       engineGeneration: 'generation-1',
       resets: 0,
       settings: request.settings,
@@ -222,34 +259,7 @@ export const createFakeEngineHost = () => {
     detachClient: vi.fn<MidnightEngineHost['detachClient']>(
       async () => undefined,
     ),
-    streams: vi.fn(() => ({
-      address$: new BehaviorSubject(
-        tag({
-          shielded: fixture.midnightShieldedAddress,
-          unshielded: fixture.midnightUnshieldedAddress,
-          dust: fixture.midnightDustAddress,
-        }),
-      ),
-      areKeysAvailable$: new BehaviorSubject(tag(true)),
-      coinsByTokenType$: new BehaviorSubject(
-        tag({ shielded: {}, unshielded: {} }),
-      ),
-      syncProgress$: new BehaviorSubject(
-        tag({
-          shielded: Percent(1),
-          unshielded: Percent(1),
-          dust: Percent(1),
-          isStrictlyComplete: { shielded: true, unshielded: true, dust: true },
-        }),
-      ),
-      transactionHistory$: new BehaviorSubject(tag([])),
-      stateView$: new BehaviorSubject(tag(workerStateView)),
-      progress$,
-      status$: new BehaviorSubject({
-        engineGeneration: 'generation-1',
-        resets: 0,
-      }),
-    })),
+    streams: vi.fn(() => createFakeStreams(progress$)),
     build: vi.fn<MidnightEngineHost['build']>(async () => workerRecipe()),
     estimate: vi.fn<MidnightEngineHost['estimate']>(async () => ({
       dustFee: 2n,
@@ -265,8 +275,8 @@ export const createFakeEngineHost = () => {
       txId: 'worker-tx',
     })),
     signData: vi.fn<MidnightEngineHost['signData']>(async () => ({
-      signature: 'worker-signature',
-      verifyingKey: 'worker-key',
+      signature: { tag: 'schnorr', value: 'worker-signature' },
+      verifyingKey: { tag: 'schnorr', value: 'worker-key' },
     })),
     buildConnectorTransaction: vi.fn<
       MidnightEngineHost['buildConnectorTransaction']

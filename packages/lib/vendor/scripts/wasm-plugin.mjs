@@ -46,8 +46,8 @@
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
-// A wasm-bindgen browser entry: `midnight_<x>_wasm.js` (NOT `_bg.js`/`_fs.js`).
-const BROWSER_ENTRY_RE = /midnight_[a-z0-9_]+_wasm\.js$/;
+// Accept both ledger epochs; v9 puts its version after `_wasm`.
+const BROWSER_ENTRY_RE = /midnight_[a-z0-9_]+_wasm(?:_v[0-9]+)?\.js$/;
 
 /**
  * Parse the sibling node entry (`..._wasm_fs.js`) for the authoritative import

@@ -70,7 +70,10 @@ export const createAttestedProofServerAccess = (
   };
   const attested = async <T>(
     operation: ProofOperation,
-    use: (session: AttestedProvingSession) => Promise<T>,
+    use: (
+      session: AttestedProvingSession,
+      reportProgress: (event: AttestationProgressEvent) => void,
+    ) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> => {
     signal?.throwIfAborted();
@@ -92,7 +95,7 @@ export const createAttestedProofServerAccess = (
       signal?.throwIfAborted();
       currentPhase = phase;
       onProgress({ type: 'phase', phase, status: 'started' });
-      const result = await use(session);
+      const result = await use(session, reportProgress);
       onProgress({ type: 'phase', phase, status: 'completed' });
       return result;
     } catch (error) {
@@ -145,13 +148,39 @@ export const createAttestedProofServerAccess = (
       }),
     },
     provingService: {
-      prove: async transaction =>
-        attested('prove', async session =>
-          createProvingServiceFromTransport({
-            check: async payload => checkSession(session, payload),
-            prove: async payload => session.prove(payload),
-          }).prove(transaction),
-        ),
+      prove: async (transaction, version) =>
+        attested('prove', async (session, reportProgress) => {
+          let requests = 0;
+          let responses = 0;
+          let hasRequestFailed = false;
+          try {
+            return await createProvingServiceFromTransport({
+              check: async payload => checkSession(session, payload),
+              prove: async payload => {
+                requests++;
+                try {
+                  const response = await session.prove(payload);
+                  responses++;
+                  return response;
+                } catch (error) {
+                  hasRequestFailed = true;
+                  throw error;
+                }
+              },
+            }).prove(transaction, version);
+          } catch (error) {
+            // A successful HTTP response can still fail SDK decoding or proof validation.
+            // This locates the failure without blaming either endpoint for its cause.
+            if (!hasRequestFailed)
+              reportProgress({
+                type: 'phase',
+                phase: 'proving',
+                status: 'failed',
+                detail: `Local transaction proving failed outside the encrypted request (${requests} requests started; ${responses} responses received)`,
+              });
+            throw error;
+          }
+        }),
     },
     transport,
   };

@@ -32,6 +32,7 @@ import {
   holdKeyDerivation,
   PASSWORD,
   sealedAccount,
+  encryptedSeedOf,
   settings,
   unprovenRecipe,
   useFastKeyDerivation,
@@ -75,6 +76,7 @@ const attachTo =
     host.attach({
       clientId,
       account,
+      encryptedSeed: encryptedSeedOf(account),
       password: PASSWORD.slice(),
       settings: settings({ storage }),
     });
@@ -138,6 +140,7 @@ const isZeroed = (bytes: Uint8Array) => bytes.every(byte => byte === 0);
 // The proof of authority a client attached to none of the affected engines presents.
 const authorityOver = (account: Account, password: Uint8Array = PASSWORD) => ({
   account,
+  encryptedSeed: encryptedSeedOf(account),
   password: password.slice(),
 });
 
@@ -491,7 +494,9 @@ describe('engine-host-storage-operations', () => {
       settle();
 
       expect(eventsWhileHeld).toEqual([]);
-      expect(signedWhileHeld).toMatchObject({ signature: 'signature' });
+      expect(signedWhileHeld).toMatchObject({
+        signature: { tag: 'schnorr', value: 'signature' },
+      });
       await expect(submission.call).resolves.toEqual({ txId: 'tx-hash' });
       await untilRestarted();
       expect(events).toEqual([
@@ -1806,6 +1811,7 @@ describe('engine-host-storage-operations', () => {
         host.attach({
           clientId: 'tab-8',
           account: a,
+          encryptedSeed: encryptedSeedOf(a),
           password: WRONG_PASSWORD.slice(),
           settings: settings(),
         }),

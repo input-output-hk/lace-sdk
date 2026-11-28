@@ -38,6 +38,7 @@ export * from './inlineWindow/inlineWindow';
 export * from './DAppCard/DAppCard';
 export * from './heroBanner/heroBanner';
 export * from './pageHeader/pageHeader';
+export * from './pageHeader/usePageHeaderScrollLayout';
 export * from './pageHeaderSection/pageHeaderSection';
 export * from './searchBar/searchBar';
 export * from './stakingStatusCard/stakingStatusCard';

@@ -1,99 +1,111 @@
-import { randomBytes } from 'node:crypto';
-
-import { AuthSecret } from '@lace-contract/authentication-prompt';
 import { ByteArray } from '@lace-lib/util';
-import { createKeystore } from '@midnightntwrk/wallet-sdk/unshielded';
-import { firstValueFrom, of } from 'rxjs';
-import { beforeAll, describe, expect, it } from 'vitest';
+import {
+  verifySignature,
+  signatureVerifyingKey,
+} from '@midnightntwrk/ledger-v8';
+import { HDWallet, Roles } from '@midnightntwrk/wallet-sdk/hd';
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { describe, expect, it } from 'vitest';
 
 import {
-  buildAccountKeys,
-  createAccountKeyManager,
-  decryptKey,
+  createAccountKeys,
+  deriveEcdsaKey,
 } from '../../src/store/account-keys';
-import {
-  PASSWORD,
-  sealedAccount,
-  useFastKeyDerivation,
-} from '../worker/engine-host-fakes';
 
-import type { SideEffect } from '../../src/context';
+const seed = () => new Uint8Array(32).fill(1);
+const buffers = () =>
+  [1, 2, 3, 4].map(n => ByteArray(new Uint8Array(32).fill(n))) as [
+    ByteArray,
+    ByteArray,
+    ByteArray,
+    ByteArray,
+  ];
+const message = new TextEncoder().encode('midnight_signed_message:4:test');
 
-const seeds = () =>
-  [randomBytes(32), randomBytes(32), randomBytes(32)] as const;
-
-describe('account-keys', () => {
-  beforeAll(() => {
-    useFastKeyDerivation();
+describe('Midnight v2 account keys', () => {
+  it('derives ECDSA at role 4, independently of the existing Schnorr identity and account', () => {
+    const wallet = HDWallet.fromSeed(seed());
+    if (wallet.type !== 'seedOk') throw new Error('Invalid test seed');
+    try {
+      const schnorr = wallet.hdWallet
+        .selectAccount(0)
+        .selectRole(Roles.NightExternal)
+        .deriveKeyAt(0);
+      const ecdsa = wallet.hdWallet
+        .selectAccount(0)
+        .selectRole(Roles.EcdsaUnshielded)
+        .deriveKeyAt(0);
+      if (schnorr.type !== 'keyDerived' || ecdsa.type !== 'keyDerived')
+        throw new Error('Invalid test derivation');
+      expect(deriveEcdsaKey(seed(), 0)).toEqual(ecdsa.key);
+      expect(deriveEcdsaKey(seed(), 0)).not.toEqual(schnorr.key);
+      expect(deriveEcdsaKey(seed(), 1)).not.toEqual(ecdsa.key);
+    } finally {
+      wallet.hdWallet.clear();
+    }
   });
 
-  it('builds the ledger key objects and the unshielded keystore from the decrypted buffers, and clears them together', () => {
-    const [night, dust, zswap] = seeds();
-    const buffers = [
-      ByteArray(new Uint8Array(night)),
-      ByteArray(new Uint8Array(dust)),
-      ByteArray(new Uint8Array(zswap)),
-    ] as const;
+  it('preserves Schnorr public identity and verifies asynchronous signatures on v8', async () => {
+    const owned = buffers();
+    const keys = createAccountKeys(owned, 'undeployed');
+    try {
+      const publicKey = keys.unshieldedKeystore.getPublicKey();
+      expect(publicKey).toEqual({
+        tag: 'schnorr',
+        value: signatureVerifyingKey(Buffer.from(owned[0]).toString('hex')),
+      });
+      const signature = await keys.unshieldedKeystore.signDataAsync(message);
+      expect(signature.tag).toBe('schnorr');
+      expect(verifySignature(publicKey.value, message, signature.value)).toBe(
+        true,
+      );
+      expect(
+        verifySignature(publicKey.value, new Uint8Array([0]), signature.value),
+      ).toBe(false);
+    } finally {
+      keys.clear();
+    }
+  });
 
-    const keys = buildAccountKeys(buffers, 'undeployed');
+  it('verifies ECDSA independently with secp256k1/SHA-256 and rejects altered payloads', async () => {
+    const keys = createAccountKeys(buffers(), 'undeployed');
+    try {
+      const key = keys.ecdsaKeystore.getPublicKey();
+      const signature = await keys.ecdsaKeystore.signDataAsync(message);
+      expect(key.tag).toBe('ecdsa');
+      expect(signature.tag).toBe('ecdsa');
+      expect(Buffer.from(key.value, 'hex')).toHaveLength(33);
+      expect(
+        secp256k1.verify(
+          Buffer.from(signature.value, 'hex'),
+          message,
+          Buffer.from(key.value, 'hex'),
+          { prehash: true },
+        ),
+      ).toBe(true);
+      expect(
+        secp256k1.verify(
+          Buffer.from(signature.value, 'hex'),
+          new Uint8Array([0]),
+          Buffer.from(key.value, 'hex'),
+          { prehash: true },
+        ),
+      ).toBe(false);
+    } finally {
+      keys.clear();
+    }
+  });
 
-    expect(keys.unshieldedKeystore.getBech32Address().asString()).toBe(
-      createKeystore(night, 'undeployed').getBech32Address().asString(),
-    );
-    expect(keys.walletKeys.dustKeyBuffer).toBe(buffers[1]);
-    expect(keys.walletKeys.zswapKeyBuffer).toBe(buffers[2]);
-    expect(keys.walletKeys.zswapSecretKeys.coinPublicKey).toBeTypeOf('string');
+  it('wipes every owned buffer and revokes retained signing references on clear', async () => {
+    const owned = buffers();
+    const keys = createAccountKeys(owned, 'undeployed');
+    const schnorr = keys.unshieldedKeystore;
+    const ecdsa = keys.ecdsaKeystore;
     keys.clear();
-    for (const buffer of buffers)
-      expect([...buffer].every(byte => byte === 0)).toBe(true);
-  });
-
-  it('decrypts a sealed key with the auth secret and refuses another password', async () => {
-    const [night] = seeds();
-    const account = await sealedAccount({
-      seeds: [night, randomBytes(32), randomBytes(32)],
-    });
-    const { encryptedKey } = account.blockchainSpecific.nightExternalKey;
-
-    expect(
-      await decryptKey(
-        encryptedKey,
-        AuthSecret(ByteArray(new Uint8Array(PASSWORD))),
-      ),
-    ).toEqual(ByteArray(new Uint8Array(night)));
-    await expect(
-      decryptKey(encryptedKey, AuthSecret(ByteArray.fromUTF8('other'))),
-    ).rejects.toThrow();
-  });
-
-  it("serves the account's keys through the key manager from the side effect's auth secret, and destroys them", async () => {
-    const [night, dust, zswap] = seeds();
-    const account = await sealedAccount({ seeds: [night, dust, zswap] });
-    const dependencies = {
-      accessAuthSecret: (use: (secret: AuthSecret) => unknown) =>
-        use(AuthSecret(ByteArray(new Uint8Array(PASSWORD)))),
-    } as unknown as Parameters<SideEffect>[2];
-    const { keyManager, destroyAccountKeyManager } = createAccountKeyManager(
-      account,
-    )(
-      {} as Parameters<SideEffect>[0],
-      {} as Parameters<SideEffect>[1],
-      dependencies,
-    );
-
-    const keys = await firstValueFrom(keyManager.keys$);
-    expect(keys.unshieldedKeystore.getBech32Address().asString()).toBe(
-      createKeystore(night, account.blockchainSpecific.networkId)
-        .getBech32Address()
-        .asString(),
-    );
-    expect(await firstValueFrom(keyManager.areKeysAvailable$)).toBe(true);
-    destroyAccountKeyManager();
-    expect(
-      await firstValueFrom(keyManager.areKeysAvailable$.pipe(), {
-        defaultValue: false,
-      }),
-    ).toBe(false);
-    expect(of(1)).toBeDefined();
+    keys.clear();
+    expect(owned.every(buffer => buffer.every(byte => byte === 0))).toBe(true);
+    expect(() => schnorr.getSecretKey()).toThrow('cleared');
+    await expect(schnorr.signDataAsync(message)).rejects.toThrow('cleared');
+    await expect(ecdsa.signDataAsync(message)).rejects.toThrow('cleared');
   });
 });

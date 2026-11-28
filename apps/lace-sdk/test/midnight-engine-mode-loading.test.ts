@@ -1,5 +1,6 @@
 import { MidnightNetworkId } from '@lace-contract/midnight-context';
 import * as fixture from '@lace-contract/midnight-context/src/stub-data';
+import { ProtocolVersion } from '@midnightntwrk/wallet-sdk-abstractions';
 import { BehaviorSubject, of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -75,10 +76,12 @@ afterEach(() => {
 const pageModeAccount = fixture.midnightAccount;
 const recipe = {
   type: 'UNPROVEN_TRANSACTION',
+  protocolVersion: ProtocolVersion.MinSupportedVersion,
   transaction: ledgerFake({ id: 'built' }),
 } as unknown as BalancingRecipe;
 const signed = {
   type: 'UNPROVEN_TRANSACTION',
+  protocolVersion: ProtocolVersion.MinSupportedVersion,
   transaction: ledgerFake({ id: 'signed' }),
 } as unknown as BalancingRecipe;
 const pageModeWallet = () => {

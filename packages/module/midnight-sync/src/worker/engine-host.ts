@@ -13,6 +13,7 @@ import {
   firstValueFrom,
   from,
   map,
+  of,
   noop,
   race,
   ReplaySubject,
@@ -28,9 +29,11 @@ import {
 } from 'rxjs';
 
 import { signWithWallet } from '../signing/midnight-in-memory-transaction-signer';
-import { buildAccountKeys, decryptKey } from '../store/account-keys';
+import { loadAccountKeys, decryptKey } from '../store/account-keys';
 import { createStartMidnightAccountWallet } from '../store/dependencies';
+import { inspectDustSyncReset } from '../store/inspect-dust-sync-reset';
 import { createAccountKeyManager } from '../store/side-effects/account-key-manager';
+import { MidnightStartupCoordinator } from '../store/startup-coordinator';
 
 import { midnightEngineGeneration } from './codec';
 import {
@@ -82,6 +85,7 @@ import type {
   InMemoryWalletAccount,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { HexBytes } from '@lace-lib/util';
 import type { WithLogger } from '@lace-lib/util';
 import type { Observable, Subscription } from 'rxjs';
 
@@ -305,20 +309,13 @@ const opensKeys = async (
 const keyManagerFor = (
   account: InMemoryWalletAccount<MidnightAccountProps>,
   password: ByteArray,
+  encryptedSeed: HexBytes,
 ): AccountKeyManager => {
-  const { nightExternalKey, dustKey, zswapKey, networkId } =
-    account.blockchainSpecific;
   return createAccountKeyManager({
     requestKeys: () =>
       withPassword(password, secret =>
-        from(
-          Promise.all([
-            decryptKey(nightExternalKey.encryptedKey, secret),
-            decryptKey(dustKey.encryptedKey, secret),
-            decryptKey(zswapKey.encryptedKey, secret),
-          ]),
-        ),
-      ).pipe(map(keys => buildAccountKeys(keys, networkId))),
+        loadAccountKeys(account.blockchainSpecific, encryptedSeed, secret),
+      ),
   });
 };
 
@@ -390,6 +387,7 @@ export const createMidnightEngineHost = ({
   // checkpoints. A client attaching to one of their accounts keeps them.
   const deletedWallets = new Map<WalletId, Set<MidnightWorkerStorageKind>>();
   const inLane = createLanes();
+  const coordinator = new MidnightStartupCoordinator();
   // Bulk resync and wallet deletion span accounts. They wait for the attaches and detaches called before them, so
   // they see every session those make or end, and the attaches and detaches called after them wait until they end.
   const gate = createGate();
@@ -493,7 +491,7 @@ export const createMidnightEngineHost = ({
     const started = new ReplaySubject<MidnightWallet>(1);
     let first: MidnightWallet | undefined;
     const subscription = createStartMidnightAccountWallet(
-      { logger },
+      { logger, coordinator },
       { batchUpdates: session.batchUpdates },
     )({
       account: session.account,
@@ -642,6 +640,7 @@ export const createMidnightEngineHost = ({
     clientId,
     account,
     password,
+    encryptedSeed,
     settings,
     adopt,
     batchUpdates,
@@ -683,7 +682,7 @@ export const createMidnightEngineHost = ({
             settings,
             batchUpdates,
             password: owned,
-            keyManager: keyManagerFor(account, owned),
+            keyManager: keyManagerFor(account, owned, encryptedSeed),
             clients: new Set(),
             unsettled: 0,
           };
@@ -1150,6 +1149,42 @@ export const createMidnightEngineHost = ({
   };
 
   return {
+    inspectDustSyncReset: async ({
+      clientId,
+      networkId,
+      accountIds,
+      storage,
+    }) => {
+      const wallets: Record<string, MidnightWallet> = {};
+      for (const accountId of accountIds) {
+        const session = sessions.get(accountId);
+        if (
+          !session?.clients.has(clientId) ||
+          session.settings.storage !== storage ||
+          session.account.blockchainSpecific.networkId !== networkId
+        )
+          throw notAttached(accountId);
+        if (!session.running) throw failedEngine(accountId);
+        wallets[accountId] = session.running.engine;
+      }
+      return firstValueFrom(
+        inspectDustSyncReset(networkId, accountIds, {
+          storage: {
+            getAll: () =>
+              storeFor(storage)
+                .getAll()
+                .pipe(
+                  map(saved =>
+                    saved.filter(wallet =>
+                      accountIds.includes(wallet.accountId),
+                    ),
+                  ),
+                ),
+          },
+          wallets$: of(wallets),
+        }),
+      );
+    },
     attach,
     detach,
     detachClient,
@@ -1188,17 +1223,17 @@ export const createMidnightEngineHost = ({
           );
         }),
       ),
-    signData: async ({ data, ...caller }) =>
-      runOn(caller, engine => engine.signData(data).pipe(take(1))),
+    signData: async ({ data, scheme, ...caller }) =>
+      runOn(caller, engine => engine.signData(data, scheme).pipe(take(1))),
     buildConnectorTransaction: async ({ transaction, ...caller }) =>
       runOn(caller, engine => buildConnectorTransaction(engine, transaction)),
     checkCircuit: async ({ clientId, accountId, ...circuit }) =>
       runOn({ clientId, accountId }, engine =>
-        from(checkCircuitThroughPort(engine.proofCircuitProvider, circuit)),
+        from(checkCircuitThroughPort(engine, circuit)),
       ),
     proveCircuit: async ({ clientId, accountId, ...circuit }) =>
       runOn({ clientId, accountId }, engine =>
-        from(proveCircuitThroughPort(engine.proofCircuitProvider, circuit)),
+        from(proveCircuitThroughPort(engine, circuit)),
       ),
     transactionHistoryEntry: async ({ hash, ...caller }) =>
       runOn(caller, engine =>

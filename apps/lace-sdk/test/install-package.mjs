@@ -83,12 +83,16 @@ export const withInstalledPackage = async (prefix, use) => {
     // The canary-only entries' published-only peers stay out: the entries
     // load them lazily, so a consumer without them must still load the
     // package, and the workspace installs them only under passport-account.
+    // A peer shared with the wallet entry is still required by that entry.
     const publishedOnly = channelPublishedPeers('canary');
     for (const name of Object.keys({
       ...manifest.dependencies,
       ...manifestForDistribution(path.join(packageDirectory, 'dist'))
         .peerDependencies,
-    }).filter(name => !(name in publishedOnly))) {
+    }).filter(
+      name =>
+        !(name in publishedOnly) || name in (manifest.peerDependencies ?? {}),
+    )) {
       const link = path.join(nodeModules, name);
       fs.mkdirSync(path.dirname(link), { recursive: true });
       const source = findInstalledDependency(name);

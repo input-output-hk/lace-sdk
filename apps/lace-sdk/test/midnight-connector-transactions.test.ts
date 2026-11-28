@@ -9,7 +9,12 @@ import {
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { AccountId } from '@lace-contract/wallet-repo';
 import { BigNumber, Timestamp } from '@lace-lib/util';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import * as ledger from '@midnightntwrk/ledger-v8';
+import {
+  ProtocolVersion,
+  WalletTransaction,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 import {
   MidnightBech32m,
   ShieldedAddress,
@@ -47,7 +52,6 @@ import type { WalletWithMidnight } from '../src/midnight-wallet';
 import type { Activity } from '@lace-contract/activities';
 import type { MidnightWallet } from '@lace-contract/midnight-context';
 import type { DesiredOutput } from '@midnight-ntwrk/dapp-connector-api';
-import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 
 const networkId = MidnightSDKNetworkIds.Preview;
 const accountId = MidnightAccountId(stubData.walletId, 0, networkId);
@@ -77,10 +81,13 @@ const unshielded: DesiredOutput = {
 };
 const recipe = { type: 'UNPROVEN_TRANSACTION' };
 const signed = { type: 'SIGNED' };
-const finalized = ledgerFake({
-  transactionHash: () => 'actual-hash',
-  intents: new Map(),
-}) as unknown as FinalizedTransaction;
+const finalized = ledgerFake(
+  {
+    transactionHash: () => 'actual-hash',
+    intents: new Map(),
+  },
+  'Finalized',
+);
 
 type FakeCoin = {
   utxo: { intentHash: string; outputNo: number; type: string; value: bigint };
@@ -91,6 +98,21 @@ const setup = () => {
   const engine = {
     accountId,
     networkId,
+    adoptTransaction: vi.fn(
+      (bytes: Uint8Array, stage: WalletTransaction.Stage) =>
+        of(
+          WalletTransaction.adopt(
+            stage,
+            ledger.Transaction.deserialize(
+              'signature',
+              'proof',
+              stage === 'Finalized' ? 'binding' : 'pre-binding',
+              bytes,
+            ),
+            ProtocolVersion.MinSupportedVersion,
+          ),
+        ),
+    ),
     balanceFinalizedTransaction: vi.fn(() => of(recipe)),
     balanceUnboundTransaction: vi.fn(() => of(recipe)),
     transferTransaction: vi.fn(() => of(recipe)),
@@ -119,7 +141,10 @@ const setup = () => {
         },
       }),
     ),
-    nightVerifyingKey: ledger.signatureVerifyingKey(ledger.sampleSigningKey()),
+    nightVerifyingKey: {
+      tag: 'schnorr',
+      value: ledger.signatureVerifyingKey(ledger.sampleSigningKey()),
+    },
   };
   const activities$ = new BehaviorSubject<Record<AccountId, Activity[]>>({});
   const dispatch = vi.fn(
@@ -208,7 +233,9 @@ describe('connector transaction contracts', () => {
       const { engine, wallet } = setup();
       const decode = vi
         .spyOn(ledger.Transaction, 'deserialize')
-        .mockReturnValue(finalized);
+        .mockReturnValue(
+          readMidnightTransaction(finalized) as ledger.FinalizedTransaction,
+        );
       const now = Date.now();
       const result = await balance(wallet, {
         tx: 'abcd',
@@ -219,12 +246,19 @@ describe('connector transaction contracts', () => {
         'signature',
         'proof',
         binding,
-        Buffer.from('abcd', 'hex'),
+        Uint8Array.from(Buffer.from('abcd', 'hex')),
       );
-      expect(engine[method]).toHaveBeenCalledWith(finalized, {
-        ttl: expect.any(Date) as unknown,
-        tokenKindsToBalance: ['shielded', 'unshielded'],
-      });
+      expect(engine[method]).toHaveBeenCalledWith(
+        WalletTransaction.adopt(
+          binding === 'binding' ? 'Finalized' : 'Unbound',
+          readMidnightTransaction(finalized),
+          ProtocolVersion.MinSupportedVersion,
+        ),
+        {
+          ttl: expect.any(Date) as unknown,
+          tokenKindsToBalance: ['shielded', 'unshielded'],
+        },
+      );
       const ttl = (
         engine[method].mock.calls[0] as unknown as [unknown, { ttl: Date }]
       )[1].ttl.getTime();
@@ -241,14 +275,20 @@ describe('connector transaction contracts', () => {
     balanceMidnightUnsealedTransaction,
   ])('defaults balancing to all fee kinds', async balance => {
     const { engine, wallet } = setup();
-    vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(finalized);
+    vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(
+      readMidnightTransaction(finalized) as ledger.FinalizedTransaction,
+    );
     expect((await balance(wallet, { tx: 'abcd' })).isOk()).toBe(true);
     const calls = [
       ...engine.balanceFinalizedTransaction.mock.calls,
       ...engine.balanceUnboundTransaction.mock.calls,
     ];
     expect(calls[0]).toEqual([
-      finalized,
+      WalletTransaction.adopt(
+        balance === balanceMidnightSealedTransaction ? 'Finalized' : 'Unbound',
+        readMidnightTransaction(finalized),
+        ProtocolVersion.MinSupportedVersion,
+      ),
       { ttl: expect.any(Date) as unknown, tokenKindsToBalance: undefined },
     ]);
   });
@@ -260,7 +300,9 @@ describe('connector transaction contracts', () => {
     'propagates balance failure before signing',
     async (balance, method) => {
       const { engine, wallet } = setup();
-      vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(finalized);
+      vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(
+        readMidnightTransaction(finalized) as ledger.FinalizedTransaction,
+      );
       const failure = new Error('Insufficient DUST');
       engine[method].mockImplementation(() => throwError(() => failure));
       expect((await balance(wallet, { tx: 'abcd' })).unwrapErr()).toBe(failure);
@@ -337,6 +379,7 @@ describe('connector transaction contracts', () => {
       const { engine, wallet } = setup();
       const swap = {
         type: 'UNPROVEN_TRANSACTION',
+        protocolVersion: ProtocolVersion.MinSupportedVersion,
         transaction: { id: 'swap' },
       };
       engine.initSwap.mockReturnValue(of(swap));
@@ -378,7 +421,11 @@ describe('connector transaction contracts', () => {
 
   it('releases the balanced intent, fee included, when signing fails', async () => {
     const { engine, wallet } = setup();
-    const swap = { type: 'UNPROVEN_TRANSACTION', transaction: { id: 'swap' } };
+    const swap = {
+      type: 'UNPROVEN_TRANSACTION',
+      protocolVersion: ProtocolVersion.MinSupportedVersion,
+      transaction: { id: 'swap' },
+    };
     engine.initSwap.mockReturnValue(of(swap));
     engine.signRecipe.mockReturnValue(
       throwError(() => new Error('signer unavailable')),
@@ -632,11 +679,14 @@ describe('connector transaction contracts', () => {
 
   it('releases only the balancing transaction when signing a dApp transaction fails', async () => {
     const { wallet, engine } = setup();
-    vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(finalized);
+    vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(
+      readMidnightTransaction(finalized) as ledger.FinalizedTransaction,
+    );
     const balancing = { id: 'balancing' };
     // The dApp's transaction may spend coins an earlier build reserved.
     const sealed = {
       type: 'FINALIZED_TRANSACTION',
+      protocolVersion: ProtocolVersion.MinSupportedVersion,
       originalTransaction: finalized,
       balancingTransaction: balancing,
     };
@@ -652,13 +702,16 @@ describe('connector transaction contracts', () => {
     expect(result.unwrapErr().message).toBe('signer unavailable');
     expect(engine.revert).toHaveBeenCalledExactlyOnceWith({
       type: 'UNPROVEN_TRANSACTION',
+      protocolVersion: ProtocolVersion.MinSupportedVersion,
       transaction: balancing,
     });
   });
 
   it('releases nothing when signing a dApp transaction that needed no balancing transaction fails', async () => {
     const { wallet, engine } = setup();
-    vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(finalized);
+    vi.spyOn(ledger.Transaction, 'deserialize').mockReturnValue(
+      readMidnightTransaction(finalized) as ledger.FinalizedTransaction,
+    );
     // Unshielded balancing adds inputs to the dApp's transaction without
     // reserving them.
     engine.balanceUnboundTransaction.mockReturnValue(
@@ -700,20 +753,23 @@ describe('connector transaction contracts', () => {
 });
 
 const spending = () =>
-  ledgerFake({
-    ...finalized,
-    intents: new Map([
-      [
-        1,
-        {
-          guaranteedUnshieldedOffer: {
-            inputs: [{ intentHash: 'input', outputNo: 0 }],
-            outputs: [],
+  ledgerFake(
+    {
+      ...readMidnightTransaction(finalized),
+      intents: new Map([
+        [
+          1,
+          {
+            guaranteedUnshieldedOffer: {
+              inputs: [{ intentHash: 'input', outputNo: 0 }],
+              outputs: [],
+            },
           },
-        },
-      ],
-    ]),
-  }) as unknown as FinalizedTransaction;
+        ],
+      ]),
+    },
+    'Finalized',
+  );
 const spendingTx = (engine: Engine) => valueOf(engine, spending());
 
 describe('submission reconciliation', () => {
@@ -882,7 +938,7 @@ describe('submission reconciliation', () => {
           selectAllMap$: throwError(() => new Error('activities unavailable')),
         };
       if (stage === 'derive')
-        Object.defineProperty(spent, 'intents', {
+        Object.defineProperty(readMidnightTransaction(spent), 'intents', {
           get: () => {
             throw new Error('derive failed');
           },

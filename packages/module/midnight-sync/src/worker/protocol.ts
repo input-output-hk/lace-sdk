@@ -5,6 +5,7 @@ import type { Activity } from '@lace-contract/activities';
 import type {
   AttestationProgressEvent,
   MidnightAccountId,
+  PendingDustNullifiersByAccount,
   MidnightAccountProps,
   MidnightNetworkConfig,
   MidnightSDKNetworkId,
@@ -17,10 +18,12 @@ import type {
   InMemoryWalletAccount,
   WalletId,
 } from '@lace-contract/wallet-repo';
+import type { HexBytes } from '@lace-lib/util';
 import type {
   groupMidnightConnectorInputs,
   groupMidnightConnectorOutputs,
 } from '@lace-lib/vendor/midnight-connector-transaction';
+import type { Signing } from '@midnightntwrk/wallet-sdk';
 import type { WalletEntry } from '@midnightntwrk/wallet-sdk';
 import type { Observable } from 'rxjs';
 
@@ -59,6 +62,7 @@ export type MidnightWorkerCaller = {
 
 /** Starts the account's engine, or attaches the client to the engine already running for it. */
 export type MidnightAttachRequest = {
+  readonly encryptedSeed: HexBytes;
   readonly clientId: string;
   readonly account: InMemoryWalletAccount<MidnightAccountProps>;
   /**
@@ -79,7 +83,7 @@ export type MidnightAttachResult = {
   readonly accountId: MidnightAccountId;
   readonly walletId: WalletId;
   readonly networkId: MidnightSDKNetworkId;
-  readonly nightVerifyingKey: string;
+  readonly nightVerifyingKey: MidnightWallet['nightVerifyingKey'];
   /** The account-engine generation that every opaque value of this engine carries. */
   readonly engineGeneration: string;
   /** How many times the account's checkpoint has been reset in this worker. */
@@ -215,6 +219,7 @@ export type MidnightCircuitKeyMaterial = {
 
 /** A dApp circuit to check or prove through the account's proof server. */
 export type MidnightCircuitRequest = {
+  readonly ledgerVersion?: 'v8' | 'v9';
   readonly serializedPreimage: Uint8Array;
   readonly keyLocation: string;
   /** Absent when the proof server holds the circuit's material, as for the ledger's built-in circuits. */
@@ -226,6 +231,12 @@ export type MidnightCircuitRequest = {
  * an account's engine runs only for a client attached to it.
  */
 export type MidnightEngineHost = {
+  inspectDustSyncReset: (request: {
+    readonly clientId: string;
+    readonly networkId: MidnightSDKNetworkId;
+    readonly accountIds: AccountId[];
+    readonly storage: MidnightWorkerStorageKind;
+  }) => Promise<PendingDustNullifiersByAccount>;
   attach: (request: MidnightAttachRequest) => Promise<MidnightAttachResult>;
   /** Detaches the client from the account's engine, which stops once no client and no submission remain. */
   detach: (caller: MidnightWorkerCaller) => Promise<void>;
@@ -271,8 +282,14 @@ export type MidnightEngineHost = {
     },
   ) => Promise<{ txId: string }>;
   signData: (
-    request: MidnightWorkerCaller & { readonly data: Uint8Array },
-  ) => Promise<{ signature: string; verifyingKey: string }>;
+    request: MidnightWorkerCaller & {
+      readonly data: Uint8Array;
+      readonly scheme?: 'ecdsa' | 'schnorr';
+    },
+  ) => Promise<{
+    signature: Signing.Signature;
+    verifyingKey: Signing.SignatureVerifyingKey;
+  }>;
   buildConnectorTransaction: (
     request: MidnightWorkerCaller & {
       readonly transaction: MidnightConnectorRequest;

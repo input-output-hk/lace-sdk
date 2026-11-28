@@ -13,10 +13,8 @@ import type {
   WalletWithMidnight,
 } from './midnight-wallet';
 import type { Result } from '@lace-lib/util';
-import type {
-  KeyMaterialProvider,
-  ProvingProvider,
-} from '@midnight-ntwrk/dapp-connector-api';
+import type { KeyMaterialProvider } from '@midnight-ntwrk/dapp-connector-api';
+import type { ProvingProvider } from '@midnightntwrk/ledger-v9';
 import type { Observable } from 'rxjs';
 
 /** Options for an account-bound circuit provider. */
@@ -28,7 +26,7 @@ export type GetMidnightProvingProviderProps = MidnightAccountProps & {
    */
   keyMaterialProvider: KeyMaterialProvider;
   /**
-   * How long each `check` or `prove` call may take, in milliseconds, including
+   * How long each `lookupKey`, `check` or `prove` call may take, in milliseconds, including
    * the `keyMaterialProvider` lookup; 10 minutes by default.
    * At most 2^31 - 1 (about 24.8 days); any other value, including `Infinity`, is
    * refused with a `RangeError`. A timeout stops waiting; it does not cancel the
@@ -44,6 +42,7 @@ const withinTimeout = async <T>(
 
 /**
  * Captures one account identity and resolves its current engine on every use.
+ * `lookupKey` resolves circuit material locally without contacting the engine or prover.
  * No proof-server URL or wallet keys are exposed. Factory failures are `Err`;
  * `check`/`prove` reject on transport or attestation failure without fallback,
  * and on timeout.
@@ -90,6 +89,8 @@ export const getMidnightProvingProvider = async (
       { onKeyMaterialError: 'propagate' },
     );
     return Ok({
+      lookupKey: async keyLocation =>
+        withinTimeout(provider.lookupKey(keyLocation), proveTimeout),
       check: async (serializedPreimage, keyLocation) =>
         withinTimeout(
           provider.check(serializedPreimage, keyLocation),

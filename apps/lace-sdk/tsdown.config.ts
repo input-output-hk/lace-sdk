@@ -403,7 +403,7 @@ const FORBIDDEN_EXTERNAL = FORBIDDEN_PACKAGE_PATTERNS.map(
 // Cardano never reaches them. The worker bundles Polkadot (WORKER_EXTERNAL).
 const MIDNIGHT_WASM_EXTERNAL = [
   /^@midnight-ntwrk\//,
-  /^@midnightntwrk\/(?:ledger|onchain-runtime)-v\d+/,
+  /^@midnightntwrk\/(?:ledger|onchain-runtime|zkir)-v\d+/,
 ];
 const POLKADOT_EXTERNAL = [/^@polkadot\//];
 // The Midnight wallet SDK packages publish import-only export maps, so
@@ -424,8 +424,8 @@ const MIDNIGHT_IMPORT_ONLY = [
 const NON_PERMISSIVE_EXTERNAL = [/^@subsquid\//];
 const BUNDLES_IMPORT_ONLY = (format: 'esm' | 'cjs') =>
   format === 'cjs' && CHANNEL === 'canary';
-// The bundled wallet SDK reaches Node builtins (its prover client's worker
-// and msgpack code) that the browser shims below cannot serve: readFileSync,
+// The bundled wallet SDK reaches Node builtins through its prover workers,
+// msgpack and compression code that browser shims cannot serve: readFileSync,
 // pathToFileURL, createRequire. The CommonJS output runs in Node only, so
 // those stay the real modules for the modules of that graph, as `crypto`
 // does for every module; the Cardano and Bitcoin code keeps the shims it has
@@ -441,7 +441,7 @@ const CJS_NODE_BUILTINS = new Set([
   'worker_threads',
 ]);
 const BUNDLED_WALLET_SDK_IMPORTER =
-  /[/\\]node_modules[/\\](?:@midnightntwrk[/\\]wallet-sdk|web-worker|msgpackr|@effect[/\\]platform)/;
+  /[/\\]node_modules[/\\](?:@midnightntwrk[/\\]wallet-sdk|web-worker|msgpackr|fflate|@effect[/\\]platform)/;
 const nodeBuiltinsForCjs: Plugin = {
   name: 'node-builtins-for-cjs',
   resolveId(source, importer) {
@@ -710,7 +710,7 @@ const WORKER_EXTERNAL = [
 // import fails to load there unless the app pre-bundles it, as the Midnight
 // guide asks for @subsquid/scale-codec.
 const WORKER_PACKAGE_IMPORTS = [
-  /^@midnight-ntwrk\/ledger-v\d+$/,
+  /^@midnight(?:-ntwrk|ntwrk)\/ledger-v\d+$/,
   /^@subsquid\/scale-codec$/,
 ];
 // The worker bundles @laceio/cardano where the entries import it

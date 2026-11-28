@@ -48,7 +48,7 @@ export const createStoreVeriteeAttestedProver = (
       verifier: {
         LocalCheckFailedError,
         AttestationVerificationError,
-        createVerifier: (config, signal) => {
+        createVerifier: (config, signal, observeChannelFetch) => {
           // Keep the verifier's request timeouts while cancelling all network
           // phases belonging to this operation, including the encrypted proxy.
           const fetchImpl: typeof fetch = async (input, init) =>
@@ -77,7 +77,9 @@ export const createStoreVeriteeAttestedProver = (
                 RealWardenClient.fromConfig(config, { fetchImpl }),
               channelBinder:
                 overrides?.channelBinder ??
-                AkxChannelBinder.fromConfig(config, { fetchImpl }),
+                AkxChannelBinder.fromConfig(config, {
+                  fetchImpl: observeChannelFetch?.(fetchImpl) ?? fetchImpl,
+                }),
             },
             config,
           );

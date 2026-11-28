@@ -29,7 +29,9 @@
     "midnight.proof-server.custom.*",
     "midnight.proof-server.local-host.description",
     "v2.portfolio.midnight-banner.description",
-    "lace-next.swap-orders.*"
+    "lace-next.swap-orders.*",
+    "midnight.filtered-dust-sync.*",
+    "midnight.fee-recovery.*"
   ],
   "pendingCriticalRestore": {
     "patterns": [

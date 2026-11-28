@@ -16,6 +16,8 @@ export type SyncOperationStatus =
 export type SyncOperationBase = {
   operationId: SyncOperationId;
   description: TranslationKey;
+  /** Short diagnostic shown in the expanded account sync status. */
+  statusDetail?: TranslationKey;
   startedAt: Timestamp;
 };
 
@@ -62,6 +64,8 @@ export type SyncOperation =
   | SyncOperationPending;
 
 export type AccountSyncStatus = {
+  /** Last observed sync mode, retained when an operation completes or fails. */
+  usesFastSync?: boolean;
   lastSuccessfulSync?: Timestamp;
   /**
    * When the account's last sync round ended with at least one failed

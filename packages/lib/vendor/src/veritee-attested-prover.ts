@@ -73,6 +73,8 @@ export type VeriteeVerifier = {
   createVerifier(
     config: VerifierConfig,
     signal?: AbortSignal,
+    /** Apply only to the channel binder's fetch to include safe HTTP diagnostics. */
+    observeChannelFetch?: (fetchImpl: typeof fetch) => typeof fetch,
   ): {
     establishVerifiedSession(
       onPhase?: (event: PhaseEvent) => void,
@@ -282,6 +284,40 @@ const toVeriteeAttestationError = (
   return mapped;
 };
 
+const describeChannelFailure = (error: unknown): string => {
+  if (
+    error instanceof Error &&
+    error.name === 'AttestationVerificationError' &&
+    error.cause instanceof Error
+  )
+    error = error.cause;
+  const message = error instanceof Error ? error.message : '';
+  // The pinned verifier flattens fetch errors into ChannelBindingError messages.
+  // Match known signatures; never display arbitrary messages, URLs or proof bodies.
+  if (
+    (error instanceof Error && error.name === 'TimeoutError') ||
+    /\b(timeout|timed out)\b/i.test(message)
+  )
+    return 'Encrypted proof request timed out';
+  if (
+    (error instanceof Error && error.name === 'AbortError') ||
+    /\baborted\b/i.test(message)
+  )
+    return 'Encrypted proof request was aborted';
+  const status = /returned HTTP ([1-5][0-9]{2})\b/.exec(message)?.[1];
+  if (status) return `Attestation proxy returned HTTP ${status}`;
+  if (message.includes('failed to reach '))
+    return 'Encrypted proof request could not reach the attestation proxy';
+  if (message.includes('proxy response failed authentication'))
+    return 'Encrypted proof response failed authentication';
+  if (
+    message.includes('malformed HTTP tunnel response') ||
+    message.includes('failed to parse JSON')
+  )
+    return 'Encrypted proof response could not be decoded';
+  return 'Encrypted proof request failed (unclassified channel error)';
+};
+
 /**
  * `/prove` payloads travel as AEAD records tunneled through the AKX channel.
  * The enclave proxy forwards to `/prove` only, so the session offers nothing
@@ -289,18 +325,201 @@ const toVeriteeAttestationError = (
  */
 const createTunneledSession = (
   session: VerifiedSession,
-): AttestedProvingSession => ({
-  prove: async payload => {
-    const response = await session.prove({ body: payload });
-    if (response.status !== 200) {
-      throw new Error(
-        `Proof server returned ${response.status} through the attested channel`,
-      );
-    }
-    return response.body;
-  },
-  close: async () => session.close(),
-});
+  onEvent: (event: AttestationProgressEvent) => void,
+  httpDiagnostics: ReturnType<typeof createChannelDiagnostics>,
+): AttestedProvingSession => {
+  const established = performance.now();
+  let requests = 0;
+  let inFlight = 0;
+  let peakInFlight = 0;
+  let firstFailure: string | undefined;
+  let isClosed = false;
+  const publishFailure = () => {
+    if (!firstFailure || isClosed) return;
+    onEvent({
+      type: 'phase',
+      phase: 'proving',
+      status: 'failed',
+      detail: [
+        firstFailure,
+        `Proof calls: ${requests}; peak overlapping calls: ${peakInFlight}.`,
+        httpDiagnostics.summary(),
+      ].join('\n'),
+    });
+  };
+  return {
+    prove: async payload => {
+      const started = performance.now();
+      const request = ++requests;
+      inFlight++;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      const reportFailure = (detail: string) => {
+        // The first failure can invalidate the session; later 404s must not replace it.
+        firstFailure ??= `First failure: proof call #${request}: ${detail} (elapsed ${(
+          (performance.now() - started) /
+          1000
+        ).toFixed(1)} s; started ${((started - established) / 1000).toFixed(
+          1,
+        )} s after initial handshake; ${
+          inFlight - 1
+        } other calls in flight at failure).`;
+        publishFailure();
+      };
+      try {
+        let response: Awaited<ReturnType<VerifiedSession['prove']>>;
+        try {
+          response = await session.prove({ body: payload });
+        } catch (error) {
+          reportFailure(describeChannelFailure(error));
+          throw error;
+        }
+        if (response.status !== 200) {
+          reportFailure(
+            `Proof server returned HTTP ${response.status} inside the encrypted channel`,
+          );
+          throw new Error(
+            `Proof server returned ${response.status} through the attested channel`,
+          );
+        }
+        return response.body;
+      } finally {
+        inFlight--;
+      }
+    },
+    close: async () => {
+      isClosed = true;
+      await session.close();
+    },
+  };
+};
+
+const PROXY_ERROR_REASONS = [
+  'unknown or expired session',
+  'session handshake not complete',
+  'record authentication failed',
+  'malformed tunnel request',
+  'tunnel path is not allowed',
+  'upstream DApp transport error',
+] as const;
+
+// Read only a small, bounded diagnostic copy; never consume the verifier's response.
+const readProxyReason = async (response: Response): Promise<string> => {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    reader = response.clone().body?.getReader();
+    if (!reader) return 'reason unavailable';
+    const read = async () => {
+      let text = '';
+      let size = 0;
+      const decoder = new TextDecoder();
+      while (reader) {
+        const { value, done: isDone } = await reader.read();
+        if (isDone) return text.trim();
+        size += value.length;
+        if (size > 256) return undefined;
+        text += decoder.decode(value, { stream: true });
+      }
+      return undefined;
+    };
+    const text = await Promise.race([
+      read(),
+      new Promise<undefined>(resolve => {
+        timer = setTimeout(() => {
+          resolve(undefined);
+        }, 250);
+      }),
+    ]);
+    return (
+      PROXY_ERROR_REASONS.find(reason => reason === text) ??
+      'reason unavailable'
+    );
+  } catch {
+    return 'reason unavailable';
+  } finally {
+    clearTimeout(timer);
+    void reader?.cancel().catch(() => undefined);
+  }
+};
+
+const createChannelDiagnostics = () => {
+  const history: string[] = [];
+  let requests = 0;
+  let inFlight = 0;
+  let peak = 0;
+  let handshake = 0;
+  let established: number | undefined;
+  let firstFailure: string | undefined;
+  const record = (line: string) => {
+    history.push(line);
+    if (history.length > 12) history.shift();
+  };
+  const wrap: (fetchImpl: typeof fetch) => typeof fetch =
+    fetchImpl => async (input, init) => {
+      const path = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      ).pathname;
+      if (!path.endsWith('/proxy')) {
+        const response = await fetchImpl(input, init);
+        if (path.endsWith('/session/complete') && response.ok) {
+          established = performance.now();
+          handshake++;
+        }
+        return response;
+      }
+      const request = ++requests;
+      const started = performance.now();
+      const age =
+        established === undefined
+          ? 'unknown'
+          : `${((started - established) / 1000).toFixed(3)} s`;
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      const context = `handshake ${handshake}, age ${age}, ${
+        inFlight - 1
+      } other HTTP requests in flight`;
+      record(`#${request} sent: ${context}.`);
+      try {
+        const response = await fetchImpl(input, init).finally(() => {
+          inFlight--;
+        });
+        const line = `#${request} HTTP ${response.status} after ${(
+          (performance.now() - started) /
+          1000
+        ).toFixed(3)} s`;
+        record(line);
+        if (!response.ok) {
+          // Reserve first place at response arrival, before reading any diagnostic body.
+          const isFirst = firstFailure === undefined;
+          if (isFirst) firstFailure = `${line}; ${context}`;
+          const reason = await readProxyReason(response);
+          record(`#${request} proxy reason: ${reason}.`);
+          if (isFirst) firstFailure = `${line}: ${reason}; ${context}`;
+        }
+        return response;
+      } catch (error) {
+        const line = `#${request} ${describeChannelFailure(error)} after ${(
+          (performance.now() - started) /
+          1000
+        ).toFixed(3)} s`;
+        firstFailure ??= `${line}; ${context}`;
+        record(line);
+        throw error;
+      }
+    };
+  return {
+    wrap,
+    summary: () =>
+      requests === 0
+        ? 'HTTP request tracing unavailable for this verifier.'
+        : [
+            `Proxy requests: ${requests}; peak overlapping HTTP requests: ${peak}.`,
+            ...(firstFailure ? [`First HTTP failure: ${firstFailure}.`] : []),
+            'Recent HTTP events (client order; server arrival order is unknown):',
+            ...history,
+          ].join('\n'),
+  };
+};
 
 type VeriteeAttestedProverProps = {
   networkId: string;
@@ -367,7 +586,12 @@ export const createVeriteeAttestedProverWith = (
       };
       // A fresh verifier per run: re-verification is per-proof,
       // never the library's session-TTL cadence.
-      const operationVerifier = verifier.createVerifier(config, signal);
+      const httpDiagnostics = createChannelDiagnostics();
+      const operationVerifier = verifier.createVerifier(
+        config,
+        signal,
+        httpDiagnostics.wrap,
+      );
       let currentPhase: VeriteeAttestationPhaseId = 'obtain-evidence';
       try {
         const session = await operationVerifier.establishVerifiedSession(
@@ -379,7 +603,7 @@ export const createVeriteeAttestedProverWith = (
             if (mapped) onEvent(mapped);
           },
         );
-        return createTunneledSession(session);
+        return createTunneledSession(session, onEvent, httpDiagnostics);
       } catch (error) {
         throw toVeriteeAttestationError(error, currentPhase, verifier);
       }

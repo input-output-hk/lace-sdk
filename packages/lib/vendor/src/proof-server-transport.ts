@@ -1,10 +1,15 @@
+import * as ledgerV8 from '@midnightntwrk/ledger-v8';
+import * as ledgerV9 from '@midnightntwrk/ledger-v9';
 import {
-  createCheckPayload,
-  createProvingPayload,
-  parseCheckResult,
-} from '@midnight-ntwrk/ledger-v8';
-import { fromProvingProvider } from '@midnightntwrk/wallet-sdk/capabilities/proving';
-import { Effect } from 'effect';
+  fromV8ProvingProvider,
+  fromV9ProvingProvider,
+  ProvingError,
+} from '@midnightntwrk/wallet-sdk/capabilities/proving';
+import {
+  ProtocolVersion,
+  WalletTransaction,
+} from '@midnightntwrk/wallet-sdk-abstractions';
+import { Effect, Either } from 'effect';
 
 import { createProvingProviderFromCircuits } from './midnight-proving-provider';
 
@@ -14,10 +19,11 @@ import type {
   ProofServerTransport,
 } from './midnight-proof-servers';
 import type { ProvingProviderOptions } from './midnight-proving-provider';
-import type * as ledger from '@midnight-ntwrk/ledger-v8';
+import type * as ledger from '@midnightntwrk/ledger-v8';
 import type {
-  ProvingService,
-  UnboundTransaction,
+  VersionedProvingService,
+  AnyVersionUnboundTransaction,
+  AnyVersionUnprovenTransaction,
 } from '@midnightntwrk/wallet-sdk/capabilities/proving';
 import type { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';
 
@@ -28,7 +34,10 @@ import type { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';
  * Both use the same selection, including attestation for a TEE server.
  */
 export type ProofServerAccess = {
-  provingService: ProvingService<UnboundTransaction>;
+  provingService: VersionedProvingService<
+    AnyVersionUnboundTransaction,
+    AnyVersionUnprovenTransaction
+  >;
   circuits: ProofCircuitProvider;
 };
 
@@ -37,15 +46,24 @@ export const createCircuitProviderFromTransport = (
   transport: ProofServerTransport,
 ): ProofCircuitProvider => ({
   check: async (request, signal) =>
-    parseCheckResult(
+    (request.ledgerVersion === 'v9' ? ledgerV9 : ledgerV8).parseCheckResult(
       await transport.check(
-        createCheckPayload(request.serializedPreimage, request.keyMaterial?.ir),
+        (request.ledgerVersion === 'v9'
+          ? ledgerV9
+          : ledgerV8
+        ).createCheckPayload(
+          request.serializedPreimage,
+          request.keyMaterial?.ir,
+        ),
         signal,
       ),
     ),
   prove: async (request, signal) =>
     transport.prove(
-      createProvingPayload(
+      (request.ledgerVersion === 'v9'
+        ? ledgerV9
+        : ledgerV8
+      ).createProvingPayload(
         request.serializedPreimage,
         request.overwriteBindingInput,
         request.keyMaterial,
@@ -114,18 +132,54 @@ export const createProvingProviderFromTransport = (
     options,
   );
 
-/** Adapts a transport to the wallet SDK's transaction-level `ProvingService`. */
-export const createProvingServiceFromTransport = (
-  transport: ProofServerTransport,
-): ProvingService<UnboundTransaction> => {
-  const effectService = fromProvingProvider(
-    createProvingProviderFromTransport(transport),
-  );
+/** Route on the transaction's build epoch, rejecting a mismatched WASM object. */
+export const createVersionedProvingService = (
+  circuits: ProofCircuitProvider,
+  decorateError: (error: ProvingError) => ProvingError = error => error,
+): ProofServerAccess['provingService'] => {
+  const providerFor = (ledgerVersion: 'v8' | 'v9') =>
+    createProvingProviderFromCircuits({
+      check: async request => circuits.check({ ...request, ledgerVersion }),
+      prove: async request => circuits.prove({ ...request, ledgerVersion }),
+    });
+  const v8 = fromV8ProvingProvider(providerFor('v8'));
+  const v9 = fromV9ProvingProvider(providerFor('v9'));
   return {
-    prove: async transaction =>
-      Effect.runPromise(effectService.prove(transaction)),
+    prove: async (transaction, version) => {
+      const ledgerVersion =
+        version >= ProtocolVersion.V9NativeForkVersion ? 'v9' : 'v8';
+      if (ledgerVersion === 'v9' && transaction instanceof ledgerV9.Transaction)
+        return Effect.runPromise(
+          v9
+            .prove(transaction)
+            .pipe(
+              Effect.mapError(error =>
+                error instanceof ProvingError ? decorateError(error) : error,
+              ),
+            ),
+        );
+      if (ledgerVersion === 'v8' && transaction instanceof ledgerV8.Transaction)
+        return Effect.runPromise(
+          v8
+            .prove(transaction)
+            .pipe(
+              Effect.mapError(error =>
+                error instanceof ProvingError ? decorateError(error) : error,
+              ),
+            ),
+        );
+      throw new Error(
+        `Transaction does not match proving epoch ${ledgerVersion}`,
+      );
+    },
   };
 };
+
+/** Adapts a transport to the wallet SDK's versioned transaction service. */
+export const createProvingServiceFromTransport = (
+  transport: ProofServerTransport,
+): ProofServerAccess['provingService'] =>
+  createVersionedProvingService(createCircuitProviderFromTransport(transport));
 
 /** Access to a proof server reachable as-is, with no attestation step. */
 export const createProofServerAccess = (
@@ -154,17 +208,27 @@ export const createScopedProofServerAccess = (
   return {
     circuits: unscoped.circuits,
     provingService: {
-      prove: async transaction =>
+      prove: async (transaction, version) =>
         (operations.get(transaction) ?? unscoped.provingService).prove(
           transaction,
+          version,
         ),
     },
     finalizeRecipe: async (facade, recipe, onProgress) => {
-      const transaction =
+      const handle =
         recipe.type === 'UNPROVEN_TRANSACTION'
           ? recipe.transaction
           : recipe.balancingTransaction;
-      if (!transaction) return facade.finalizeRecipe(recipe);
+      if (!handle) return facade.finalizeRecipe(recipe);
+      const unwrapped = WalletTransaction.unwrapWithin<object>(
+        handle,
+        ProtocolVersion.epochOf(
+          handle.protocolVersion,
+          ProtocolVersion.V9NativeForkVersion,
+        ),
+      );
+      if (Either.isLeft(unwrapped)) throw unwrapped.left;
+      const transaction = unwrapped.right;
       if (operations.has(transaction))
         throw new Error('This transaction is already being finalized');
       const access = onProgress
@@ -176,8 +240,8 @@ export const createScopedProofServerAccess = (
         status: 'started',
       });
       operations.set(transaction, {
-        prove: async tx => {
-          const proven = await access.prove(tx);
+        prove: async (tx, version) => {
+          const proven = await access.prove(tx, version);
           onProgress?.({
             type: 'phase',
             phase: 'transaction-finalizing',

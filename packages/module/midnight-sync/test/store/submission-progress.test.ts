@@ -3,7 +3,16 @@ import {
   createProgressSubmissionService,
   observeSubmission,
 } from '@lace-lib/vendor/midnight-submission-service';
-import { PolkadotNodeClient } from '@midnightntwrk/wallet-sdk/node-client/effect';
+import { Transaction } from '@midnightntwrk/ledger-v8';
+import { classifySubmissionFailure } from '@midnightntwrk/wallet-sdk/capabilities/submission';
+import {
+  NodeClientError,
+  PolkadotNodeClient,
+} from '@midnightntwrk/wallet-sdk/node-client/effect';
+import {
+  WalletTransaction,
+  ProtocolVersion,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 import { Effect, Stream } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -13,7 +22,6 @@ import {
   trackSendSubmission,
 } from '../../src/store/send-proof-progress';
 
-import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 import type { SubmissionEvent } from '@midnightntwrk/wallet-sdk/capabilities/submission';
 import type * as NodeClientExports from '@midnightntwrk/wallet-sdk/node-client/effect';
 
@@ -25,7 +33,11 @@ vi.mock(
   }),
 );
 const tx = () =>
-  ({ serialize: () => new Uint8Array([1]) } as unknown as FinalizedTransaction);
+  WalletTransaction.adopt(
+    'Finalized',
+    Transaction.fromParts('undeployed').mockProve(),
+    ProtocolVersion.MinSupportedVersion,
+  );
 const event = (_tag: SubmissionEvent['_tag']) => ({ _tag } as SubmissionEvent);
 const setup = (events: Stream.Stream<SubmissionEvent, Error>) => {
   const send = vi.fn(() => events);
@@ -94,6 +106,54 @@ describe('observed submission', () => {
     ).rejects.toThrow();
     expect(send).toHaveBeenCalledTimes(1);
     await service.close();
+  });
+  it.each([
+    [
+      'invalid transaction',
+      new NodeClientError.TransactionInvalidError({
+        message: 'invalid',
+        txData: new Uint8Array(),
+      }),
+      'NotIncluded',
+    ],
+    [
+      'dropped transaction',
+      new NodeClientError.TransactionDroppedError({
+        message: 'dropped',
+        txData: new Uint8Array(),
+      }),
+      'Undetermined',
+    ],
+    ['network failure', new Error('node disconnected'), 'Undetermined'],
+  ] as const)(
+    'preserves the SDK reservation classification for a %s',
+    async (_description, failure, expected) => {
+      const { service, send } = setup(Stream.fail(failure));
+      try {
+        const outcome = await service.submitTransaction(tx(), 'Finalized').then(
+          () => undefined,
+          (error: unknown) => classifySubmissionFailure(error),
+        );
+        expect(outcome?._tag).toBe(expected);
+        expect(send).toHaveBeenCalledTimes(1);
+      } finally {
+        await service.close();
+      }
+    },
+  );
+  it('keeps an uncertain outcome when the stream ends after inclusion', async () => {
+    const { service } = setup(
+      Stream.make(event('Submitted'), event('InBlock')),
+    );
+    try {
+      const outcome = await service.submitTransaction(tx(), 'Finalized').then(
+        () => undefined,
+        (error: unknown) => classifySubmissionFailure(error),
+      );
+      expect(outcome?._tag).toBe('Undetermined');
+    } finally {
+      await service.close();
+    }
   });
   it('detaches observers and respects the requested target stage', async () => {
     const { service } = setup(

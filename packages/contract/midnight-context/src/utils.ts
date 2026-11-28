@@ -44,7 +44,10 @@ const WEBSOCKET_SCHEMES: Record<string, string | undefined> = {
   'wss:': 'wss:',
 };
 
-export const convertHttpUrlToWebsocket = (url: string): string => {
+export const convertHttpUrlToWebsocket = (
+  url: string,
+  appendSubscriptionPath = true,
+): string => {
   const websocketUrl = new URL(url);
   const scheme = WEBSOCKET_SCHEMES[websocketUrl.protocol];
   if (!scheme)
@@ -52,7 +55,8 @@ export const convertHttpUrlToWebsocket = (url: string): string => {
       `Cannot derive a websocket URL from scheme "${websocketUrl.protocol}"`,
     );
   websocketUrl.protocol = scheme;
-  websocketUrl.pathname = `${websocketUrl.pathname.replace(/\/+$/, '')}/ws`;
+  if (appendSubscriptionPath)
+    websocketUrl.pathname = `${websocketUrl.pathname.replace(/\/+$/, '')}/ws`;
   return websocketUrl.toString();
 };
 
@@ -84,7 +88,12 @@ export const isPartialMidnightNetworkConfig = (
     typeof item === 'object' &&
     item !== null &&
     Object.keys(item).every(key =>
-      ['nodeAddress', 'proofServer', 'indexerAddress'].includes(key),
+      [
+        'nodeAddress',
+        'proofServer',
+        'indexerAddress',
+        'filteredDustSyncIndexer',
+      ].includes(key),
     )
   );
 };

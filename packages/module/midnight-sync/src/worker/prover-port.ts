@@ -1,4 +1,6 @@
 import { assertProofServerRouting } from '@lace-lib/vendor/midnight-proof-servers';
+import { ProtocolVersion } from '@midnightntwrk/wallet-sdk-abstractions';
+import { firstValueFrom } from 'rxjs';
 
 import { MidnightWorkerError } from './protocol';
 
@@ -6,7 +8,7 @@ import type {
   MidnightCircuitRequest,
   MidnightEngineSettings,
 } from './protocol';
-import type { ProofCircuitProvider } from '@lace-contract/midnight-context';
+import type { MidnightWallet } from '@lace-contract/midnight-context';
 
 /**
  * The seam every Worker-mode proof crosses: circuit requests in, results out. An account's engine proves through
@@ -14,7 +16,22 @@ import type { ProofCircuitProvider } from '@lace-contract/midnight-context';
  * attested one, or one in the browser) plugs in as another port, without a function or a ledger object ever
  * crossing the worker boundary.
  */
-type MidnightProverPort = ProofCircuitProvider;
+type MidnightProverEngine = Pick<
+  MidnightWallet,
+  'proofCircuitProvider' | 'state'
+>;
+
+// Resolve at use time: a retained provider can outlive a fork or engine replacement.
+const circuitEpoch = async (
+  engine: MidnightProverEngine,
+  requested: MidnightCircuitRequest['ledgerVersion'],
+): Promise<'v8' | 'v9'> => {
+  if (requested) return requested;
+  const { activeProtocolVersion } = await firstValueFrom(engine.state());
+  return activeProtocolVersion >= ProtocolVersion.V9NativeForkVersion
+    ? 'v9'
+    : 'v8';
+};
 
 /**
  * Refuses settings that Worker mode cannot prove with. An attested prover is an app-supplied function, which
@@ -38,31 +55,43 @@ export const assertWorkerProofServer = ({
  * Checks a dApp circuit through the port, which builds the proof server's check payload from the preimage and the
  * circuit's ZKIR and parses its answer.
  *
- * @param port - The account's prover port.
+ * @param engine - The account engine owning the prover and current ledger epoch.
  * @param request - The circuit, with the key material the page resolved.
  */
 export const checkCircuitThroughPort = async (
-  port: MidnightProverPort,
-  { serializedPreimage, keyLocation, keyMaterial }: MidnightCircuitRequest,
+  engine: MidnightProverEngine,
+  {
+    ledgerVersion,
+    serializedPreimage,
+    keyLocation,
+    keyMaterial,
+  }: MidnightCircuitRequest,
 ): Promise<(bigint | undefined)[]> =>
-  port.check({ serializedPreimage, keyLocation, keyMaterial });
+  engine.proofCircuitProvider.check({
+    ledgerVersion: await circuitEpoch(engine, ledgerVersion),
+    serializedPreimage,
+    keyLocation,
+    keyMaterial,
+  });
 
 /**
  * Proves a dApp circuit through the port and returns the proof bytes.
  *
- * @param port - The account's prover port.
+ * @param engine - The account engine owning the prover and current ledger epoch.
  * @param request - The circuit, with the key material the page resolved and the binding input to overwrite.
  */
 export const proveCircuitThroughPort = async (
-  port: MidnightProverPort,
+  engine: MidnightProverEngine,
   {
+    ledgerVersion,
     serializedPreimage,
     keyLocation,
     keyMaterial,
     overwriteBindingInput,
   }: MidnightCircuitRequest & { readonly overwriteBindingInput?: bigint },
 ): Promise<Uint8Array> =>
-  port.prove({
+  engine.proofCircuitProvider.prove({
+    ledgerVersion: await circuitEpoch(engine, ledgerVersion),
     serializedPreimage,
     keyLocation,
     keyMaterial,

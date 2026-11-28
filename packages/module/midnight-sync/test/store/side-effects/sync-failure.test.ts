@@ -2,6 +2,7 @@ import { failuresActions } from '@lace-contract/failures';
 import { syncActions } from '@lace-contract/sync';
 import { Timestamp } from '@lace-lib/util';
 import { testSideEffect } from '@lace-lib/util-dev';
+import { EMPTY } from 'rxjs';
 import { describe, it } from 'vitest';
 
 import {
@@ -57,6 +58,7 @@ describe('autoDismissMidnightSyncFailureOnSyncSuccess', () => {
       ({ cold, expectObservable }) => ({
         actionObservables: {
           sync: {
+            applySyncOperationSnapshot$: EMPTY,
             completeSyncOperation$: cold('a', {
               a: syncActions.sync.completeSyncOperation({
                 accountId: midnightAccountId,
@@ -83,12 +85,62 @@ describe('autoDismissMidnightSyncFailureOnSyncSuccess', () => {
     );
   });
 
+  it('dismisses only when the new operation snapshot completes', () => {
+    testSideEffect(
+      autoDismissMidnightSyncFailureOnSyncSuccess,
+      ({ cold, expectObservable }) => ({
+        actionObservables: {
+          sync: {
+            completeSyncOperation$: EMPTY,
+            applySyncOperationSnapshot$: cold('ab', {
+              a: syncActions.sync.applySyncOperationSnapshot({
+                accountId: midnightAccountId,
+                operation: {
+                  operationId: `${midnightAccountId}-midnight-sync`,
+                  description: 'sync.operation.midnight-wallet-sync',
+                  startedAt: Timestamp(0),
+                  status: 'InProgress',
+                  type: 'Indeterminate',
+                },
+              }),
+              b: syncActions.sync.applySyncOperationSnapshot({
+                accountId: midnightAccountId,
+                operation: {
+                  operationId: `${midnightAccountId}-midnight-sync`,
+                  description: 'sync.operation.midnight-wallet-sync',
+                  startedAt: Timestamp(0),
+                  status: 'Completed',
+                  completedAt: Timestamp(1),
+                },
+              }),
+            }),
+          },
+        },
+        stateObservables: {
+          failures: {
+            selectFailureById$: cold('a', {
+              a: selectFailureFor(midnightAccountId),
+            }),
+          },
+        },
+        assertion: sideEffect$ => {
+          expectObservable(sideEffect$).toBe('-a', {
+            a: failuresActions.failures.dismissFailure(
+              MidnightSyncFailureId(midnightAccountId),
+            ),
+          });
+        },
+      }),
+    );
+  });
+
   it('leaves a still-broken account alone when a sibling recovers', () => {
     testSideEffect(
       autoDismissMidnightSyncFailureOnSyncSuccess,
       ({ cold, expectObservable }) => ({
         actionObservables: {
           sync: {
+            applySyncOperationSnapshot$: EMPTY,
             completeSyncOperation$: cold('a', {
               a: syncActions.sync.completeSyncOperation({
                 accountId: siblingAccountId,
@@ -118,6 +170,7 @@ describe('autoDismissMidnightSyncFailureOnSyncSuccess', () => {
       ({ cold, expectObservable }) => ({
         actionObservables: {
           sync: {
+            applySyncOperationSnapshot$: EMPTY,
             completeSyncOperation$: cold('a', {
               a: syncActions.sync.completeSyncOperation({
                 accountId: cardanoAccountId,

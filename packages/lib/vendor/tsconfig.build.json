@@ -24,7 +24,6 @@
     "src/proof-server-transport.ts",
     "src/midnight-connector-transaction.ts",
     "src/midnight-sign-data.ts",
-    "src/midnight-facade-reservations.ts",
     "src/attested-proving-service.ts",
     "src/veritee-attested-prover.ts",
     "src/veritee-trust-roots.ts"

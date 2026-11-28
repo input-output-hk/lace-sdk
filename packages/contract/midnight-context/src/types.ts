@@ -1,4 +1,5 @@
 import type {
+  PendingDustNullifiersByAccount,
   MidnightNetworksConfig,
   PartialMidnightNetworksConfig,
   MidnightNetworkConfig,
@@ -34,13 +35,12 @@ import type {
 import type { Serializable } from '@lace-lib/util-store';
 import type { ProofCircuitProvider } from '@lace-lib/vendor/midnight-proof-servers';
 import type { ProofActivity } from '@lace-lib/vendor/wasm-proof-backend';
+import type { RawTokenType } from '@midnightntwrk/ledger-v8';
 import type {
-  DustSecretKey,
-  RawTokenType,
-  SignatureVerifyingKey,
-  ZswapSecretKeys,
-} from '@midnight-ntwrk/ledger-v8';
-import type { WalletEntry } from '@midnightntwrk/wallet-sdk';
+  Signing,
+  WalletEntry,
+  WalletTransaction,
+} from '@midnightntwrk/wallet-sdk';
 import type { WalletFacade } from '@midnightntwrk/wallet-sdk/facade';
 import type { Roles } from '@midnightntwrk/wallet-sdk/hd';
 import type { UnshieldedKeystore } from '@midnightntwrk/wallet-sdk/unshielded';
@@ -71,6 +71,8 @@ export type MidnightAccountPublicKeys = {
 
 export type MidnightContextSliceState = {
   supportsWasmProver: boolean;
+  /** Whether this runtime can apply engine settings rather than delegating to a host. */
+  canConfigureEngine: boolean;
   defaultNetworksConfig: MidnightNetworksConfig;
   defaultTestNetNetworkId: MidnightSDKTestNetworkId;
   userNetworksConfigOverrides: PartialMidnightNetworksConfig;
@@ -145,6 +147,8 @@ export type MidnightWalletSerialisedState = {
    * renamed persist it under the legacy key `unshieldedTxHistory`.
    */
   txHistory: SerialisedWalletState;
+  /** Absent on profiles saved before lifecycle persistence was introduced. */
+  transactionLifecycle?: SerialisedWalletState;
 };
 
 export type MidnightWalletAddress = {
@@ -154,9 +158,31 @@ export type MidnightWalletAddress = {
 };
 
 type MidnightWalletSyncProgress = {
-  dust: Percent;
-  shielded: Percent;
-  unshielded: Percent;
+  dust: Percent | undefined;
+  /** Observed DUST synchronization mode; absent before a v9 state is available. */
+  dustSyncKind?: 'events' | 'projections';
+  shielded: Percent | undefined;
+  unshielded: Percent | undefined;
+  /** Component versions scope connection history across SDK protocol handovers. */
+  protocolVersions?: {
+    dust: bigint;
+    shielded: bigint;
+    unshielded: bigint;
+  };
+  isConnected?: {
+    dust: boolean;
+    shielded: boolean;
+    unshielded: boolean;
+  };
+  /** Absent for adapters that do not expose the SDK's indexer/node comparison. */
+  indexerLiveness?:
+    | 'Ahead'
+    | 'Behind'
+    | 'InSync'
+    | 'Skipped'
+    | 'Unavailable'
+    | 'Unknown'
+    | 'WrongNetwork';
   isStrictlyComplete: {
     dust: boolean;
     shielded: boolean;
@@ -191,12 +217,6 @@ type KeepOnlyFirstParameter<Function_ extends (...args: any[]) => any> = (
     : never
 ) => ReturnType<Function_>;
 
-type SkipSecondParameter<Function_ extends (...args: any[]) => any> = (
-  ...params: Parameters<Function_> extends [infer First, any, ...infer Rest]
-    ? [First, ...Rest]
-    : never
-) => ReturnType<Function_>;
-
 type SkipSecondAndThirdParameters<Function_ extends (...args: any[]) => any> = (
   ...params: Parameters<Function_> extends [
     infer First,
@@ -207,47 +227,30 @@ type SkipSecondAndThirdParameters<Function_ extends (...args: any[]) => any> = (
     ? [First, ...Rest]
     : never
 ) => ReturnType<Function_>;
-
-type SkipThirdParameter<Function_ extends (...args: any[]) => any> = (
-  ...params: Parameters<Function_> extends [
-    infer First,
-    infer Second,
-    any,
-    ...infer Rest,
-  ]
-    ? [First, Second, ...Rest]
-    : never
-) => ReturnType<Function_>;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export type ObservableWalletFacade = MakePropertiesObservable<
   Pick<
     WalletFacade,
+    | 'balanceFinalizedTransaction'
+    | 'balanceUnboundTransaction'
+    | 'balanceUnprovenTransaction'
     | 'calculateTransactionFee'
+    | 'estimateTransactionFee'
     | 'finalizeTransaction'
+    | 'initSwap'
     | 'revert'
     | 'state'
     | 'stop'
     | 'submitTransaction'
+    | 'transferTransaction'
   > & {
     finalizeRecipe: (
       recipe: Parameters<WalletFacade['finalizeRecipe']>[0],
       onProgress?: (event: AttestationProgressEvent) => void,
     ) => ReturnType<WalletFacade['finalizeRecipe']>;
-    balanceFinalizedTransaction: SkipSecondParameter<
-      WalletFacade['balanceFinalizedTransaction']
-    >;
-    balanceUnboundTransaction: SkipSecondParameter<
-      WalletFacade['balanceUnboundTransaction']
-    >;
-    balanceUnprovenTransaction: SkipSecondParameter<
-      WalletFacade['balanceUnprovenTransaction']
-    >;
     deregisterFromDustGeneration: KeepOnlyFirstParameter<
       WalletFacade['deregisterFromDustGeneration']
-    >;
-    estimateTransactionFee: SkipSecondParameter<
-      WalletFacade['estimateTransactionFee']
     >;
     registerNightUtxosForDustGeneration: SkipSecondAndThirdParameters<
       WalletFacade['registerNightUtxosForDustGeneration']
@@ -256,10 +259,6 @@ export type ObservableWalletFacade = MakePropertiesObservable<
     signUnprovenTransaction: SkipLastParameter<
       WalletFacade['signUnprovenTransaction']
     >;
-    transferTransaction: SkipSecondParameter<
-      WalletFacade['transferTransaction']
-    >;
-    initSwap: SkipThirdParameter<WalletFacade['initSwap']>;
   }
 >;
 
@@ -267,6 +266,10 @@ export type ObservableWalletFacade = MakePropertiesObservable<
 export type { ProofCircuitProvider } from '@lace-lib/vendor/midnight-proof-servers';
 
 export type MidnightWallet = ObservableWalletFacade & {
+  adoptTransaction: <S extends WalletTransaction.Stage>(
+    bytes: Uint8Array,
+    stage: S,
+  ) => Observable<WalletTransaction<S>>;
   accountId: MidnightAccountId;
   address$: Observable<MidnightWalletAddress>;
   areKeysAvailable$: Observable<boolean>;
@@ -275,11 +278,15 @@ export type MidnightWallet = ObservableWalletFacade & {
     hash: string,
   ) => Observable<WalletEntry | undefined>;
   networkId: MidnightSDKNetworkId;
-  nightVerifyingKey: SignatureVerifyingKey;
+  nightVerifyingKey: Signing.SignatureVerifyingKey;
   proofCircuitProvider: ProofCircuitProvider;
   signData: (
     data: Uint8Array,
-  ) => Observable<{ signature: string; verifyingKey: string }>;
+    scheme?: 'ecdsa' | 'schnorr',
+  ) => Observable<{
+    signature: Signing.Signature;
+    verifyingKey: Signing.SignatureVerifyingKey;
+  }>;
   syncProgress$: Observable<MidnightWalletSyncProgress>;
   transactionHistory$: Observable<readonly WalletEntry[]>;
   walletId: WalletId;
@@ -354,23 +361,14 @@ export type SerializedMidnightWallet = AccountRef & {
 
 export type AccountKeys = {
   unshieldedKeystore: UnshieldedKeystore;
+  ecdsaKeystore: UnshieldedKeystore;
   walletKeys: {
     dustKeyBuffer: ByteArray;
     zswapKeyBuffer: ByteArray;
-    /**
-     * Pre-computed dust secret key from dustKeyBuffer.
-     * Avoids repeated DustSecretKey.fromSeed() calls.
-     */
-    dustSecretKey: DustSecretKey;
-    /**
-     * Pre-computed zswap secret keys from zswapKeyBuffer.
-     * Avoids repeated ZswapSecretKeys.fromSeed() calls during sync.
-     */
-    zswapSecretKeys: ZswapSecretKeys;
   };
   /**
    * Clears all sensitive key data from memory by filling buffers with zeros
-   * and calling clear() on ledger key objects.
+   * including both signature schemes.
    * Should be called when keys are no longer needed (e.g., on idle timeout).
    * Implementers must clear all key buffers including the night secret key.
    */
@@ -444,6 +442,10 @@ export type AttestationProgressState = {
 };
 
 export type StartMidnightAccountWalletParams = {
+  /** The encrypted root seed, decrypted only in the engine context for the ECDSA role. */
+  getEncryptedSeed?: () => Promise<HexBytes>;
+  /** Local restoration, key preparation and sibling barrier. False once ready for network startup. */
+  onPreparationStatusChange?: (isPreparing: boolean) => void;
   /** Reads the Veritee ledger indexer URL, resolved afresh for each attestation run. */
   getVeriteeLedgerIndexerUrl?: () => Promise<string>;
   config: MidnightNetworkConfig;
@@ -453,6 +455,11 @@ export type StartMidnightAccountWalletParams = {
 };
 
 export type MidnightSideEffectsDependencies = {
+  inspectDustSyncReset: (
+    networkId: MidnightSDKNetworkId,
+    accountIds: AccountId[],
+    storage: Pick<CollectionStorage<SerializedMidnightWallet>, 'getAll'>,
+  ) => Observable<PendingDustNullifiersByAccount>;
   /**
    * The running engines that run in this JavaScript context, for consumers that need their ledger objects. Errors
    * when an engine runs in a worker, which such consumers cannot use.

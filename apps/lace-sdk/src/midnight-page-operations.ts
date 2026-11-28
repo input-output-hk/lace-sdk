@@ -39,13 +39,9 @@ export const pageOperationsOf = (engine: MidnightWallet) => ({
     request: Parameters<typeof buildConnectorTransaction>[1],
   ) => buildConnectorTransaction(engine, request),
   checkCircuit: (request: Parameters<typeof checkCircuitThroughPort>[1]) =>
-    defer(async () =>
-      checkCircuitThroughPort(engine.proofCircuitProvider, request),
-    ),
+    defer(async () => checkCircuitThroughPort(engine, request)),
   proveCircuit: (request: Parameters<typeof proveCircuitThroughPort>[1]) =>
-    defer(async () =>
-      proveCircuitThroughPort(engine.proofCircuitProvider, request),
-    ),
+    defer(async () => proveCircuitThroughPort(engine, request)),
   preparePendingActivity: (
     transaction: Parameters<typeof preparePendingActivity>[1],
     derive: Parameters<typeof preparePendingActivity>[2],

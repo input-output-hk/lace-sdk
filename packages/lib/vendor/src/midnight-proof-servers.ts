@@ -201,6 +201,7 @@ export const assertProofServerRouting = (
 
 /** Circuit data stays inside the wallet's proving boundary for every backend. */
 export type ProofCircuitRequest = {
+  ledgerVersion?: 'v8' | 'v9';
   serializedPreimage: Uint8Array;
   keyLocation: string;
   keyMaterial?: {

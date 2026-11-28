@@ -2,13 +2,14 @@ import {
   defaultTxTtlLength,
   NIGHT_TOKEN_ID,
 } from '@lace-contract/midnight-context';
+import { ByteArray, HexBytes } from '@lace-lib/util';
 import {
-  deserializeMidnightSealedTransaction,
-  deserializeMidnightUnsealedTransaction,
   groupMidnightConnectorInputs,
   groupMidnightConnectorOutputs,
 } from '@lace-lib/vendor/midnight-connector-transaction';
-import { addressFromKey } from '@midnight-ntwrk/ledger-v8';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import { addressFromKey } from '@midnightntwrk/ledger-v8';
+import { WalletTransaction } from '@midnightntwrk/wallet-sdk-abstractions';
 import {
   DustAddress,
   MidnightBech32m,
@@ -22,7 +23,6 @@ import {
   defaultIfEmpty,
   defer,
   endWith,
-  from,
   ignoreElements,
   map,
   of,
@@ -72,7 +72,6 @@ import type {
   MidnightWallet,
 } from '@lace-contract/midnight-context';
 import type { AccountId } from '@lace-contract/wallet-repo';
-import type { FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 import type {
   BalancingRecipe,
   CombinedTokenTransfer,
@@ -86,7 +85,7 @@ import type { Observable } from 'rxjs';
 
 /** Derives the Pending activity of a submission; injected because it belongs to another module (ADR 14). */
 export type DerivePendingMidnightActivity = (params: {
-  deserializedTx: FinalizedTransaction;
+  deserializedTx: ReturnType<typeof readMidnightTransaction>;
   accountId: AccountId;
   ownUserAddressHex: string;
   nightUtxos: readonly UtxoWithMeta[];
@@ -136,7 +135,7 @@ const recipeFor = (
 const finalizedFor = (
   engine: MidnightWallet,
   value: OpaqueMidnightFinalizedTx,
-): FinalizedTransaction => {
+): WalletTransaction<'Finalized'> => {
   assertBuiltBy(engine, midnightValueOriginOf(value));
   return decodeMidnightFinalizedTx(value);
 };
@@ -145,7 +144,7 @@ const encodeRecipe = (engine: MidnightWallet) => (recipe: BalancingRecipe) =>
   encodeMidnightRecipe(recipe, originOf(engine));
 
 const encodeFinalized =
-  (engine: MidnightWallet) => (transaction: FinalizedTransaction) =>
+  (engine: MidnightWallet) => (transaction: WalletTransaction<'Finalized'>) =>
     encodeMidnightFinalizedTx(transaction, originOf(engine));
 
 const defaultTtl = () => new Date(Date.now() + defaultTxTtlLength);
@@ -333,7 +332,12 @@ export const estimateFee = (
                   : constructUnshieldedTransaction;
               return {
                 state,
-                tx: construct({ networkId: engine.networkId, transfers, ttl }),
+                tx: construct({
+                  networkId: engine.networkId,
+                  transfers,
+                  ttl,
+                  protocolVersion: state.activeProtocolVersion,
+                }),
                 isFirstDesignation: false,
               };
             }),
@@ -343,6 +347,7 @@ export const estimateFee = (
               state,
               tx: constructDustDesignationTransaction({
                 networkId: engine.networkId,
+                protocolVersion: state.activeProtocolVersion,
                 address: destination,
                 nightUtxos: nightCoins,
                 nightVerifyingKey: engine.nightVerifyingKey,
@@ -358,12 +363,19 @@ export const estimateFee = (
       engine.areKeysAvailable$.pipe(take(1)),
     ]).pipe(
       switchMap(([{ state, tx, isFirstDesignation }, areKeysAvailable]) => {
-        const availableDust = state.dust.balance(new Date());
-        return estimatePreparedMidnightFee(engine, tx, {
-          isDustDesignation: isFirstDesignation,
-          dustBalance: availableDust,
-          areKeysAvailable,
-        }).pipe(
+        const availableDust = state.dust.availableCoins.reduce(
+          (total, coin) => total + coin.generatedNow,
+          0n,
+        );
+        return estimatePreparedMidnightFee(
+          engine,
+          WalletTransaction.adopt('Unproven', tx, state.activeProtocolVersion),
+          {
+            isDustDesignation: isFirstDesignation,
+            dustBalance: availableDust,
+            areKeysAvailable,
+          },
+        ).pipe(
           map(dustFee => {
             if (dustFee > availableDust)
               throw new Error('Insufficient spendable DUST');
@@ -444,9 +456,9 @@ export const preparePendingActivity = (
       take(1),
       map(({ unshielded }) =>
         derive({
-          deserializedTx,
+          deserializedTx: readMidnightTransaction(deserializedTx),
           accountId: engine.accountId,
-          ownUserAddressHex: addressFromKey(engine.nightVerifyingKey),
+          ownUserAddressHex: addressFromKey(engine.nightVerifyingKey.value),
           nightUtxos: [
             ...unshielded.availableCoins,
             ...unshielded.pendingCoins,
@@ -482,6 +494,7 @@ const reservedBy = (recipe: BalancingRecipe): BalancingRecipe | undefined =>
     ? recipe
     : recipe.balancingTransaction && {
         type: 'UNPROVEN_TRANSACTION',
+        protocolVersion: recipe.protocolVersion,
         transaction: recipe.balancingTransaction,
       };
 
@@ -587,29 +600,36 @@ export const buildConnectorTransaction = (
     const ttl = defaultTtl();
     switch (request.kind) {
       case 'balance-sealed':
-        return from(deserializeMidnightSealedTransaction(request.tx)).pipe(
-          switchMap(transaction =>
-            engine.balanceFinalizedTransaction(transaction, {
-              ttl,
-              tokenKindsToBalance: tokenKindsToBalance(request.payFees),
-            }),
-          ),
-          switchMap(recipe =>
-            signAndProve(engine, recipe, { sign: true, proveTimeout }),
-          ),
-        );
+        return engine
+          .adoptTransaction(
+            ByteArray.fromHex(HexBytes(request.tx)),
+            'Finalized',
+          )
+          .pipe(
+            switchMap(transaction =>
+              engine.balanceFinalizedTransaction(transaction, {
+                ttl,
+                tokenKindsToBalance: tokenKindsToBalance(request.payFees),
+              }),
+            ),
+            switchMap(recipe =>
+              signAndProve(engine, recipe, { sign: true, proveTimeout }),
+            ),
+          );
       case 'balance-unsealed':
-        return from(deserializeMidnightUnsealedTransaction(request.tx)).pipe(
-          switchMap(transaction =>
-            engine.balanceUnboundTransaction(transaction, {
-              ttl,
-              tokenKindsToBalance: tokenKindsToBalance(request.payFees),
-            }),
-          ),
-          switchMap(recipe =>
-            signAndProve(engine, recipe, { sign: true, proveTimeout }),
-          ),
-        );
+        return engine
+          .adoptTransaction(ByteArray.fromHex(HexBytes(request.tx)), 'Unbound')
+          .pipe(
+            switchMap(transaction =>
+              engine.balanceUnboundTransaction(transaction, {
+                ttl,
+                tokenKindsToBalance: tokenKindsToBalance(request.payFees),
+              }),
+            ),
+            switchMap(recipe =>
+              signAndProve(engine, recipe, { sign: true, proveTimeout }),
+            ),
+          );
       case 'transfer': {
         const outputs = groupMidnightConnectorOutputs(
           request.desiredOutputs,

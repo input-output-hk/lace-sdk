@@ -1,23 +1,13 @@
 import type { ImageSourcePropType } from 'react-native';
 
 import React, { useCallback, useMemo } from 'react';
-import {
-  Platform,
-  StyleSheet,
-  View,
-  type LayoutChangeEvent,
-} from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-} from 'react-native-reanimated';
+import { StyleSheet, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 
 import { spacing, useTheme } from '../../design-tokens';
 import { Column, Icon, SettingsCard } from '../atoms';
-import { PageHeaderSection } from '../molecules';
-import { getPageHeaderBackgroundHeights } from '../molecules/pageHeader/pageHeader';
+import { PageHeaderSection, usePageHeaderScrollLayout } from '../molecules';
 import { GenericFlashList } from '../organisms';
-import { usePageHeaderCollapseScroll } from '../util';
 
 import { PageContainerTemplate } from './pageContainerTemplate/pageContainerTemplate';
 
@@ -60,37 +50,17 @@ export const OptionList = ({
 }: OptionListProps) => {
   const isTitleCollapseEnabled = !showSearch;
   const { theme } = useTheme();
-  const { collapseScrollY, onScroll } = usePageHeaderCollapseScroll();
-  const initialHeaderHeight = getPageHeaderBackgroundHeights(
-    Boolean(subtitle),
-  ).fullBackground;
-  const collapseLayout = useSharedValue({
-    expandedHeight: initialHeaderHeight,
-    height: initialHeaderHeight,
-  });
-  const pageHeight = useSharedValue(0);
-  const measurePage = useCallback(
-    (event: LayoutChangeEvent) => {
-      const { height } = event.nativeEvent.layout;
-      if (height > 0) pageHeight.value = height;
-    },
-    [pageHeight],
-  );
-  // Counter the clip's layout origin so Android receives touch coordinates in
-  // a stable native viewport throughout the gesture.
-  const scrollFrameStyle = useAnimatedStyle(() => ({
-    top: -collapseLayout.value.height,
-    height: pageHeight.value,
-  }));
-  const contentStyle = useAnimatedStyle(() => ({
-    paddingTop: collapseLayout.value.expandedHeight,
-    transform: [
-      {
-        translateY:
-          collapseLayout.value.height - collapseLayout.value.expandedHeight,
-      },
-    ],
-  }));
+  const {
+    collapseLayout,
+    collapseScrollY,
+    measurePage,
+    onScroll,
+    scrollClipStyle,
+    scrollFrameStyle,
+    scrollViewportStyle,
+    scrollContentSpacing,
+    scrollContentOffset,
+  } = usePageHeaderScrollLayout(Boolean(subtitle));
 
   const headerSection = useMemo(
     () => (
@@ -162,17 +132,17 @@ export const OptionList = ({
         onLayout={isTitleCollapseEnabled ? measurePage : undefined}>
         {headerSection}
         {isTitleCollapseEnabled ? (
-          <View testID="option-list-scroll-clip" style={styles.scrollClip}>
+          <View testID="option-list-scroll-clip" style={scrollClipStyle}>
             <Animated.ScrollView
               testID="option-list-scroll-view"
-              style={[styles.scrollFrame, scrollFrameStyle]}
+              style={[scrollFrameStyle, scrollViewportStyle]}
               contentContainerStyle={styles.listContent}
               removeClippedSubviews={false}
               onScroll={onScroll}
               scrollEventThrottle={16}>
               <Animated.View
                 testID="option-list-scroll-content"
-                style={contentStyle}>
+                style={[scrollContentSpacing, scrollContentOffset]}>
                 {options.map((item, index) => (
                   <React.Fragment key={item.id}>
                     {index > 0 && <ItemSeparator />}
@@ -202,14 +172,6 @@ export const OptionList = ({
 const styles = StyleSheet.create({
   fillSpace: {
     flex: 1,
-  },
-  scrollClip: { flex: 1, overflow: 'hidden' },
-  scrollFrame: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    // Match the header's center when a web scrollbar consumes layout width.
-    ...Platform.select({ web: { scrollbarGutter: 'stable both-edges' } }),
   },
   listContent: {
     paddingBottom: spacing.XXXXL,

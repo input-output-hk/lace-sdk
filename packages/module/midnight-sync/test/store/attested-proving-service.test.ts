@@ -3,6 +3,9 @@ import {
   FIXTURE_CONFIG,
 } from '@input-output-hk/veritee-attestation-verifier/mocks';
 import { MidnightSDKNetworkIds } from '@lace-contract/midnight-context';
+import { Transaction } from '@midnightntwrk/ledger-v8';
+import { Transaction as TransactionV9 } from '@midnightntwrk/ledger-v9';
+import { ProtocolVersion } from '@midnightntwrk/wallet-sdk-abstractions';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -22,6 +25,11 @@ import type {
   AttestationPhaseId,
   AttestationProgressEvent,
 } from '@lace-contract/midnight-context';
+
+vi.mock('@midnightntwrk/ledger-v9', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  createProvingPayload: () => new Uint8Array([1]),
+}));
 
 const VERITEE_PROOF_SERVER_URL = 'https://api.proofserver.wastedp.io';
 
@@ -78,6 +86,67 @@ const proveCalls = ({
     (total, channel) => total + channel.proveCalls,
     0,
   );
+
+it.each(['proxy', 'server', 'local-before', 'local-after'] as const)(
+  'keeps %s diagnostics through the real v9 SDK error wrapper',
+  async failure => {
+    const { access, dependencies, events } = createAccess();
+    const bind = dependencies.channelBinder.bind.bind(
+      dependencies.channelBinder,
+    );
+    const close = vi.fn(async () => undefined);
+    vi.spyOn(dependencies.channelBinder, 'bind').mockImplementation(
+      async (...args) => {
+        const channel = await bind(...args);
+        vi.spyOn(channel, 'close').mockImplementation(close);
+        vi.spyOn(channel, 'prove').mockImplementation(async () => {
+          if (failure === 'proxy')
+            throw new Error(
+              'https://secret/proxy returned HTTP 502 (upstream)',
+            );
+          return {
+            status: failure === 'server' ? 422 : 200,
+            headers: {},
+            body: new TextEncoder().encode('secret proof response'),
+          };
+        });
+        return channel;
+      },
+    );
+    const transaction = TransactionV9.fromParts('undeployed');
+    vi.spyOn(transaction, 'prove').mockImplementation(async provider => {
+      if (failure !== 'local-before')
+        await provider.prove(new Uint8Array([1]), 'midnight/zswap/output');
+      throw new Error('secret local transaction details');
+    });
+    await expect(
+      access.provingService.prove(
+        transaction,
+        ProtocolVersion.V9NativeForkVersion,
+      ),
+    ).rejects.toThrow('Failed to prove transaction');
+    const failed = events.filter(
+      event => event.type === 'phase' && event.status === 'failed',
+    );
+    expect(failed).toHaveLength(1);
+    const detail =
+      failure === 'proxy'
+        ? 'Attestation proxy returned HTTP 502'
+        : failure === 'server'
+        ? 'Proof server returned HTTP 422 inside the encrypted channel'
+        : `Local transaction proving failed outside the encrypted request (${
+            failure === 'local-before' ? 0 : 1
+          } requests started; ${
+            failure === 'local-before' ? 0 : 1
+          } responses received)`;
+    expect(failed[0]).toMatchObject({
+      phase: 'proving',
+      detail: expect.stringContaining(detail) as string,
+    });
+    expect(JSON.stringify(failed)).not.toContain('secret');
+    expect(close).toHaveBeenCalledTimes(1);
+  },
+);
 
 describe('createAttestedProofServerAccess', () => {
   it('runs all attestation phases in order, then forwards the payload through the attested channel', async () => {
@@ -330,13 +399,15 @@ describe('createAttestedProofServerAccess', () => {
       };
       const access = createAttestedProofServerAccess(driver, () => undefined);
       const prove = vi.fn().mockResolvedValue('proven');
-      const transaction = { prove } as unknown as Parameters<
-        typeof access.provingService.prove
-      >[0];
+      const transaction = Transaction.fromParts('undeployed');
+      vi.spyOn(transaction, 'prove').mockImplementation(prove);
 
-      await expect(access.provingService.prove(transaction)).resolves.toBe(
-        'proven',
-      );
+      await expect(
+        access.provingService.prove(
+          transaction,
+          ProtocolVersion.MinSupportedVersion,
+        ),
+      ).resolves.toBe('proven');
       // The SDK drives the circuit-level provider the session is adapted
       // into; it must be the session, not any other transport.
       const [provider] = prove.mock.calls[0] as [

@@ -11,6 +11,7 @@ import {
   finalized,
   PASSWORD,
   sealedAccount,
+  encryptedSeedOf,
   settings,
   useFastKeyDerivation,
 } from './engine-host-fakes';
@@ -93,6 +94,7 @@ describe('engine-host-generations', () => {
     host.attach({
       clientId,
       account,
+      encryptedSeed: encryptedSeedOf(account),
       password: PASSWORD.slice(),
       settings: settings(),
     });

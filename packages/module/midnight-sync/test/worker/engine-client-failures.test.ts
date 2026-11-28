@@ -918,7 +918,9 @@ describe('test:engine-client-failures', () => {
       ({ method }) => method === 'attach' || method === 'detach',
     );
 
-    expect(signed).toMatchObject({ signature: 'signature' });
+    expect(signed).toMatchObject({
+      signature: { tag: 'schnorr', value: 'signature' },
+    });
     expect(membership.map(({ method }) => method)).toEqual([
       'attach',
       'detach',
@@ -957,7 +959,9 @@ describe('test:engine-client-failures', () => {
       replacement.engines[0].signData(new Uint8Array([1])),
     );
 
-    expect(signed).toMatchObject({ signature: 'signature' });
+    expect(signed).toMatchObject({
+      signature: { tag: 'schnorr', value: 'signature' },
+    });
     expect(
       workers.connections[0].calls
         .map(({ method }) => method)
@@ -1032,7 +1036,9 @@ describe('test:engine-client-failures', () => {
       ({ method }) => method === 'attach' || method === 'detach',
     );
 
-    expect(signed).toMatchObject({ signature: 'signature' });
+    expect(signed).toMatchObject({
+      signature: { tag: 'schnorr', value: 'signature' },
+    });
     expect(attachesWhileHeld).toBe(1);
     expect(membership.map(({ method }) => method)).toEqual([
       'attach',

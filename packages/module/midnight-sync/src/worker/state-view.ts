@@ -110,9 +110,9 @@ export const strictCompletionOfState = ({
   shielded,
   dust,
 }: FacadeState): MidnightStateView['isStrictlyComplete'] => ({
-  unshielded: unshielded.state.progress.isStrictlyComplete(),
-  shielded: shielded.state.progress.isStrictlyComplete(),
-  dust: dust.state.progress.isStrictlyComplete(),
+  unshielded: unshielded.progress.isStrictlyComplete(),
+  shielded: shielded.progress.isStrictlyComplete(),
+  dust: dust.progress.isStrictlyComplete(),
 });
 
 /**

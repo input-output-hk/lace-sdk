@@ -140,20 +140,27 @@ const entryPoints = {
 //     never pull the Cardano domain layer, the Ledger signing tree, or the
 //     Midnight engine (ADR 37).
 const LIGHT_ENTRY_EXCLUSIONS = {
-  index: ['@midnight-ntwrk/ledger-v8', '@midnightntwrk/wallet-sdk'],
+  index: [
+    '@midnightntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v9',
+    '@midnightntwrk/wallet-sdk',
+  ],
   'ledger-cardano-app': [
     '@lace-lib/cardano-hardware-ledger',
-    '@midnight-ntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v9',
     '@midnightntwrk/wallet-sdk',
   ],
   webhid: [
     '@lace-lib/cardano-hardware-ledger',
-    '@midnight-ntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v9',
     '@midnightntwrk/wallet-sdk',
   ],
   'trezor-connect': [
     '@lace-lib/cardano-hardware-trezor',
-    '@midnight-ntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v9',
     '@midnightntwrk/wallet-sdk',
   ],
   qr: [
@@ -162,7 +169,8 @@ const LIGHT_ENTRY_EXCLUSIONS = {
     '@lace-lib/cardano-hardware-ledger',
     '@lace-lib/cardano-key-management',
     '@lace-lib/cardano-util',
-    '@midnight-ntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v9',
     '@midnightntwrk/wallet-sdk',
   ],
   zxcvbn: [
@@ -171,7 +179,8 @@ const LIGHT_ENTRY_EXCLUSIONS = {
     '@lace-lib/cardano-hardware-ledger',
     '@lace-lib/cardano-key-management',
     '@lace-lib/cardano-util',
-    '@midnight-ntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v8',
+    '@midnightntwrk/ledger-v9',
     '@midnightntwrk/wallet-sdk',
   ],
 };

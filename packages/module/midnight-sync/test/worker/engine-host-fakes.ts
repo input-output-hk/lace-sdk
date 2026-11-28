@@ -10,8 +10,13 @@ import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { WalletId } from '@lace-contract/wallet-repo';
 import { SecretBox } from '@lace-lib/core';
 import { HexBytes } from '@lace-lib/util';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import * as ledger from '@midnightntwrk/ledger-v8';
 import { Roles } from '@midnightntwrk/wallet-sdk/hd';
+import {
+  ProtocolVersion,
+  WalletTransaction,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 import { BehaviorSubject, EMPTY, Observable, of, ReplaySubject } from 'rxjs';
 import { vi } from 'vitest';
 
@@ -80,6 +85,17 @@ export const WRONG_PASSWORD = new TextEncoder().encode('wrong password');
 // Undeployed, so that the stub addresses are valid for the default account.
 export const networkId = stubData.networkId;
 
+const encryptedSeeds = new Map<string, HexBytes>();
+export const encryptedSeedOf = (
+  account: InMemoryWalletAccount<MidnightAccountProps>,
+): HexBytes => {
+  const seed = encryptedSeeds.get(
+    account.blockchainSpecific.nightExternalKey.encryptedKey,
+  );
+  if (!seed) throw new Error('Missing test wallet seed');
+  return seed;
+};
+
 export const sealedAccount = async ({
   walletId = 'wallet-a',
   accountIndex = 0,
@@ -102,6 +118,7 @@ export const sealedAccount = async ({
     index: 0,
     role,
   });
+  encryptedSeeds.set(night, await key(randomBytes(32)));
   return {
     blockchainName: 'Midnight',
     accountId: MidnightAccountId(WalletId(walletId), accountIndex, network),
@@ -184,7 +201,7 @@ const transactionNetwork = MidnightSDKNetworkIds.Preview;
 const signingKey = ledger.sampleSigningKey();
 export const verifyingKey = ledger.signatureVerifyingKey(signingKey);
 
-export const unproven = () => {
+const rawUnproven = () => {
   const token = ledger.nativeToken().raw;
   const intent = ledger.Intent.new(new Date(Date.now() + 3_600_000));
   intent.guaranteedUnshieldedOffer = ledger.UnshieldedOffer.new(
@@ -207,20 +224,33 @@ export const unproven = () => {
     intent,
   );
 };
-export const finalized = () => unproven().mockProve();
+export const protocolVersion = ProtocolVersion.MinSupportedVersion;
+export const unproven = () =>
+  WalletTransaction.adopt('Unproven', rawUnproven(), protocolVersion);
+export const finalized = () =>
+  WalletTransaction.adopt(
+    'Finalized',
+    rawUnproven().mockProve(),
+    protocolVersion,
+  );
 // A transaction without contract calls proves without asking the prover for anything.
 export const unbound = async () =>
-  unproven().prove(
-    {
-      check: async () => [],
-      prove: async () => {
-        throw new Error('nothing to prove');
+  WalletTransaction.adopt(
+    'Unbound',
+    await rawUnproven().prove(
+      {
+        check: async () => [],
+        prove: async () => {
+          throw new Error('nothing to prove');
+        },
       },
-    },
-    ledger.CostModel.initialCostModel(),
+      ledger.CostModel.initialCostModel(),
+    ),
+    protocolVersion,
   );
 export const unprovenRecipe = (): BalancingRecipe => ({
   type: 'UNPROVEN_TRANSACTION',
+  protocolVersion,
   transaction: unproven(),
 });
 
@@ -255,7 +285,7 @@ export const facadeState = ({
   availableCoins = [nightCoin(10n)],
   pendingCoins = [] as UtxoWithMeta[],
   dustCoins = [] as DustCoin[],
-  spendableDust = 100n,
+  spendableDust,
   synced = { unshielded: false, shielded: false, dust: false },
 }: {
   availableCoins?: UtxoWithMeta[];
@@ -265,22 +295,26 @@ export const facadeState = ({
   synced?: { unshielded: boolean; shielded: boolean; dust: boolean };
 } = {}): FacadeState =>
   ({
+    activeProtocolVersion: protocolVersion,
     unshielded: {
       availableCoins,
       pendingCoins,
-      state: syncState(synced.unshielded),
+      ...syncState(synced.unshielded),
     },
     dust: {
       totalCoins: dustCoins,
-      availableCoins: dustCoins,
+      availableCoins:
+        spendableDust === undefined
+          ? dustCoins
+          : [{ generatedNow: spendableDust }],
       pendingCoins: [],
       balance: () => spendableDust,
-      state: syncState(synced.dust),
+      ...syncState(synced.dust),
     },
     shielded: {
       coinPublicKey: { toHexString: () => 'c0' },
       encryptionPublicKey: { toHexString: () => 'e0' },
-      state: syncState(synced.shielded),
+      ...syncState(synced.shielded),
     },
   } as unknown as FacadeState);
 
@@ -346,7 +380,7 @@ const createFakeEngine = (
       accountId: account.accountId,
       walletId: account.walletId,
       networkId: account.blockchainSpecific.networkId,
-      nightVerifyingKey: verifyingKey,
+      nightVerifyingKey: { tag: 'schnorr', value: verifyingKey },
       address$,
       areKeysAvailable$: params.keyManager.areKeysAvailable$,
       coinsByTokenType$,
@@ -359,11 +393,12 @@ const createFakeEngine = (
       initSwap: vi.fn(() => of(unprovenRecipe())),
       registerNightUtxosForDustGeneration: vi.fn(() => of(unprovenRecipe())),
       balanceUnprovenTransaction: vi.fn((transaction: unknown) =>
-        of({ type: 'UNPROVEN_TRANSACTION', transaction }),
+        of({ type: 'UNPROVEN_TRANSACTION', protocolVersion, transaction }),
       ),
       balanceFinalizedTransaction: vi.fn((originalTransaction: unknown) =>
         of({
           type: 'FINALIZED_TRANSACTION',
+          protocolVersion,
           originalTransaction,
           balancingTransaction: unproven(),
         }),
@@ -371,6 +406,7 @@ const createFakeEngine = (
       balanceUnboundTransaction: vi.fn((baseTransaction: unknown) =>
         of({
           type: 'UNBOUND_TRANSACTION',
+          protocolVersion,
           baseTransaction,
           balancingTransaction: unproven(),
         }),
@@ -378,13 +414,32 @@ const createFakeEngine = (
       signRecipe: vi.fn((recipe: BalancingRecipe) => of(recipe)),
       finalizeRecipe: vi.fn(() => of(finalized())),
       revert: vi.fn(() => of(undefined)),
-      submitTransaction: vi.fn(
-        (transaction: { transactionHash: () => string }) =>
-          of(transaction.transactionHash()),
+      submitTransaction: vi.fn((transaction: WalletTransaction<'Finalized'>) =>
+        of(readMidnightTransaction(transaction).transactionHash()),
       ),
       estimateTransactionFee: vi.fn(() => of(7n)),
       calculateTransactionFee: vi.fn(() => of(6n)),
-      signData: vi.fn(() => of({ signature: 'signature', verifyingKey })),
+      signData: vi.fn(() =>
+        of({
+          signature: { tag: 'schnorr', value: 'signature' },
+          verifyingKey: { tag: 'schnorr', value: verifyingKey },
+        }),
+      ),
+      adoptTransaction: vi.fn(
+        (bytes: Uint8Array, stage: WalletTransaction.Stage) =>
+          of(
+            WalletTransaction.adopt(
+              stage,
+              ledger.Transaction.deserialize(
+                'signature',
+                stage === 'Unproven' ? 'pre-proof' : 'proof',
+                stage === 'Finalized' ? 'binding' : 'pre-binding',
+                bytes,
+              ),
+              protocolVersion,
+            ),
+          ),
+      ),
       getTransactionHistoryEntryByHash: vi.fn((hash: string) =>
         of({ hash, status: 'SUCCESS' }),
       ),

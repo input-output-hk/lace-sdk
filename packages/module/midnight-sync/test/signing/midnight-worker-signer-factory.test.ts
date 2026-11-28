@@ -28,7 +28,10 @@ const remoteEngine = () =>
     remote: true,
     signTransaction: vi.fn(() => of(signed)),
     signData: vi.fn(() =>
-      of({ signature: '11'.repeat(4), verifyingKey: '22'.repeat(4) }),
+      of({
+        signature: { tag: 'schnorr', value: '11'.repeat(4) },
+        verifyingKey: { tag: 'schnorr', value: '22'.repeat(4) },
+      }),
     ),
   } as unknown as MidnightRemoteEngine & {
     signTransaction: ReturnType<typeof vi.fn>;

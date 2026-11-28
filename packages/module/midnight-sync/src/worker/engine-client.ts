@@ -45,6 +45,7 @@ import type {
   AttestationProgressEvent,
   MidnightAccountProps,
   MidnightEngine,
+  MidnightSideEffectsDependencies,
   MidnightNetworkConfig,
   MidnightRemoteEngine,
   StartMidnightAccountWalletParams,
@@ -55,7 +56,7 @@ import type {
   InMemoryWalletAccount,
   WalletId,
 } from '@lace-contract/wallet-repo';
-import type { WithLogger } from '@lace-lib/util';
+import type { HexBytes, WithLogger } from '@lace-lib/util';
 
 /** Why a connection to the engine host ended. */
 type MidnightEngineRuntimeEndReason =
@@ -235,6 +236,7 @@ type MidnightEngineClientOptions = WithLogger & {
 
 /** The page side of Worker mode for one app instance. */
 export type MidnightEngineClient = {
+  readonly inspectDustSyncReset: MidnightSideEffectsDependencies['inspectDustSyncReset'];
   /**
    * Worker mode's `startMidnightAccountWallet`. Emits the account's remote engine once attached, and again after
    * each re-attach. When the worker ends, the engine's streams complete and the next attach waits until a public
@@ -862,7 +864,8 @@ export const createMidnightEngineClient = ({
       stop: () => defer(detach),
       getTransactionHistoryEntryByHash: hash =>
         run(async () => host.transactionHistoryEntry({ ...caller, hash })),
-      signData: data => run(async () => host.signData({ ...caller, data })),
+      signData: (data, scheme) =>
+        run(async () => host.signData({ ...caller, data, scheme })),
       signTransaction: (request, onProgress) =>
         withProgress(onProgress, operationId =>
           run(async () =>
@@ -946,6 +949,7 @@ export const createMidnightEngineClient = ({
   const attach$ = (
     account: Account,
     config: MidnightNetworkConfig,
+    getEncryptedSeed: (() => Promise<HexBytes>) | undefined,
   ): Observable<MidnightRemoteEngineClient> =>
     new Observable<MidnightRemoteEngineClient>(subscriber => {
       const { accountId } = account;
@@ -973,12 +977,17 @@ export const createMidnightEngineClient = ({
       let post = 0;
       const sendAttach = async () =>
         withPassword(async password => {
+          if (!getEncryptedSeed)
+            throw new Error('Missing Midnight wallet seed loader');
+          const encryptedSeed = await getEncryptedSeed();
+          if (isClosed || connection.end) return undefined;
           connection.posts += 1;
           post = connection.posts;
           return host.attach({
             clientId,
             account,
             password,
+            encryptedSeed,
             settings: { config, attestedProver, storage },
             adopt,
             batchUpdates,
@@ -1061,11 +1070,12 @@ export const createMidnightEngineClient = ({
   const startAccountEngine = ({
     account,
     config,
+    getEncryptedSeed,
   }: StartMidnightAccountWalletParams): Observable<MidnightRemoteEngineClient> =>
     combineLatest([gateOpen$, failures$]).pipe(
       filter(([isOpen, failures]) => isOpen && !failures[account.accountId]),
       take(1),
-      switchMap(() => attach$(account, config)),
+      switchMap(() => attach$(account, config, getEncryptedSeed)),
       repeat(),
     );
 
@@ -1110,6 +1120,16 @@ export const createMidnightEngineClient = ({
   };
 
   return {
+    inspectDustSyncReset: (networkId, accountIds) =>
+      defer(async () => {
+        const connection = connectionFor();
+        return connection.host.inspectDustSyncReset({
+          clientId: connection.clientId,
+          networkId,
+          accountIds,
+          storage,
+        });
+      }),
     startAccountEngine,
     startFailures$: failures$.asObservable(),
     requestEngine,

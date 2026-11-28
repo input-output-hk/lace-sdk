@@ -91,14 +91,17 @@ export const createWorkerSdkStoreInit = ({
           surfaceMidnightEngineFailures(client),
         ],
         watchAccount,
-        () => [
-          createWorkerDeleteWalletSideEffect(client),
-          createWorkerClearWalletStateOnResync(client),
-        ],
+        {
+          storageSideEffects: () => [
+            createWorkerDeleteWalletSideEffect(client),
+            createWorkerClearWalletStateOnResync(client),
+          ],
+        },
       )(props, dependencies),
       sideEffectDependencies: {
         ...createMidnightRegistryDependencies(props.runtime),
         startMidnightAccountWallet: client.startAccountEngine,
+        inspectDustSyncReset: client.inspectDustSyncReset,
         ...auth,
       },
     };

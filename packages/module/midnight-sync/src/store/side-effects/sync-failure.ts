@@ -1,7 +1,16 @@
 import { autoDismissFailureOnSuccess } from '@lace-contract/failures';
 import { isInMemoryMidnightAccount } from '@lace-contract/midnight-context';
 import { Timestamp } from '@lace-lib/util';
-import { from, map, mergeMap, pairwise, startWith, withLatestFrom } from 'rxjs';
+import {
+  from,
+  filter,
+  map,
+  merge,
+  mergeMap,
+  pairwise,
+  startWith,
+  withLatestFrom,
+} from 'rxjs';
 
 import { MidnightSyncFailureId } from '../../value-objects/midnight-sync-failure-id.vo';
 
@@ -70,7 +79,7 @@ export const surfaceMidnightEngineFailures =
 /**
  * Dismiss a Midnight account's sync failure once its own sync recovers.
  *
- * The `completeSyncOperation` for `${accountId}-midnight-sync` is the
+ * A completed operation snapshot or `completeSyncOperation` for `${accountId}-midnight-sync` is the
  * "recovered" signal, whichever route got there — transparent retry, the
  * failure's tap-to-retry `restartWalletWatch`, or the resubscription `whileActive`
  * performs on unlock.
@@ -81,10 +90,15 @@ export const surfaceMidnightEngineFailures =
  * place until its OWN sync completes.
  */
 export const autoDismissMidnightSyncFailureOnSyncSuccess: SideEffect = (
-  { sync: { completeSyncOperation$ } },
+  { sync: { completeSyncOperation$, applySyncOperationSnapshot$ } },
   { failures: { selectFailureById$ } },
 ) =>
-  completeSyncOperation$.pipe(
+  merge(
+    completeSyncOperation$,
+    applySyncOperationSnapshot$.pipe(
+      filter(({ payload }) => payload.operation.status === 'Completed'),
+    ),
+  ).pipe(
     map(({ payload }) => MidnightSyncFailureId(payload.accountId)),
     autoDismissFailureOnSuccess(selectFailureById$),
   );

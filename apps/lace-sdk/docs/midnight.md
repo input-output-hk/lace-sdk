@@ -21,9 +21,9 @@ npm install @laceio/sdk@canary
 npm view @laceio/sdk@canary peerDependencies
 ```
 
-Then install each package that `npm view` lists, at the version it lists:
+For the `/midnight` entry, install the following peers at the versions shown by `npm view`:
 
-- `@midnight-ntwrk/ledger-v8`
+- `@midnightntwrk/ledger-v8` and `@midnightntwrk/ledger-v9`
 - `@midnightntwrk/wallet-sdk`
 - `@midnightntwrk/wallet-sdk-abstractions`
 - `@midnightntwrk/wallet-sdk-address-format`
@@ -33,18 +33,18 @@ Then install each package that `npm view` lists, at the version it lists:
 The peers are optional so that consumers of the other entries need not install them; the `/midnight` entry needs
 all of them. The entry ships as ESM and CommonJS: in plain Node.js it loads through both `import` and
 `require()`. Both builds load the ledger, `@polkadot/api`, `@polkadot/api-base`, `@polkadot/util` and
-`@subsquid/scale-codec` from your install. They reach the wallet SDK packages differently: the ESM build imports
-your installed copies, while the CommonJS build carries its own copy of the `@midnightntwrk/*` packages, which
+`@subsquid/scale-codec` from your install. They reach the Midnight Wallet SDK (`@midnightntwrk/wallet-sdk*`) packages differently: the ESM build imports
+your installed copies, while the CommonJS build carries its own copy of the `@midnightntwrk/wallet-sdk*` packages, which
 publish import-only entry points that `require()` cannot load.
-Your `@midnightntwrk/*` peers therefore serve the ESM build and the type declarations; the CommonJS build does not
-load them. Its CommonJS build requires `@midnight-ntwrk/ledger-v8`, whose `node` export is an ES module, so
+Your Midnight Wallet SDK peers therefore serve the ESM build and the type declarations; the CommonJS build does not
+load them. Its CommonJS build requires the ledger packages, whose `node` exports are ES modules, so
 `require()` needs a Node.js release that loads ES modules through `require()` without a flag: 20.19 or later on
-the 20 line, 22.12 or later otherwise. Compile with `skipLibCheck: true`, as for the rest of the SDK.
+the 20 line, 22.12 or later otherwise. Compile with `skipLibCheck: true`, as for the rest of the Lace SDK.
 
-In [Worker mode](#worker-mode), the worker carries its own copies of the wallet SDK packages, Polkadot and
+In [Worker mode](#worker-mode), the worker carries its own copies of the Midnight Wallet SDK packages, Polkadot and
 `@laceio/cardano`, and loads only the ledger and `@subsquid/scale-codec` from your install. The peers you install
-still serve the page. The worker's copies are the versions that this SDK release bundles: a newer version that you
-install reaches the page only, and a fix in those packages reaches the worker with an SDK release.
+still serve the page. The worker's copies are the versions that this Lace SDK release bundles: a newer version that you
+install reaches the page only, and a fix in those packages reaches the worker with a Lace SDK release.
 
 In a browser, the page needs Node.js polyfills in both modes: `@laceio/cardano` reads the `Buffer` global, and its
 dependencies read the `global` and `process` globals and import Node's `events` module when they load. With Vite,
@@ -66,7 +66,9 @@ export default {
   plugins: [
     nodePolyfills({ globals: { Buffer: true, global: true, process: true } }),
   ],
-  optimizeDeps: { exclude: ['@midnight-ntwrk/ledger-v8'] },
+  optimizeDeps: {
+    exclude: ['@midnightntwrk/ledger-v8', '@midnightntwrk/ledger-v9'],
+  },
   worker: { format: 'es' },
 };
 ```
@@ -246,6 +248,23 @@ each call, built from that same config: `AkxEvidenceProvider.fromConfig(config)`
 `wardenClient` and `channelBinder` keys. Supply reviewed AMD root certificates as `trustRoots`; never derive them
 from a prover's responses, and do not cache the verifier or the session.
 
+Failed proving progress includes safe diagnostic text in the phase event's `detail`: Veritee request timeouts,
+proxy HTTP failures, proof-server HTTP responses inside the encrypted channel, or channel authentication/decoding
+failures, with elapsed request time. Local transaction processing failures report requests started and responses
+received. A local failure after a response can still result from an invalid server response; these diagnostics
+locate the failure, rather than assigning fault. Raw response bodies, URLs and transaction data are omitted.
+The diagnostic survives the Midnight Wallet SDK's generic proving-error wrapper; the rejected error is unchanged.
+The first failure is retained, with proof-call counts and overlap. For HTTP-level diagnostics, accept the optional
+third argument in `createVerifier(config, signal, observeChannelFetch)` and pass
+`observeChannelFetch?.(fetchImpl) ?? fetchImpl` as the channel binder's `fetchImpl` only. The extension does this
+automatically. Hosts that omit it still receive proof-call diagnostics, explicitly marked as lacking HTTP tracing.
+HTTP details include request numbers, time since the latest completed handshake, duration to response headers,
+overlap, the first HTTP failure, and the latest 12 events. Only exact recognized proxy error reasons are included;
+reading a diagnostic response copy is limited to 256 bytes and 250 ms. Request order is the client's observation,
+not proof of server arrival order. A proxy reason of `unknown or expired session` accompanying a 404 does not
+distinguish session loss from expiry; age and preceding failures help investigate which, but do not establish
+the cause. Closed sessions stop emitting failure details.
+
 A generic `createAttestedProver` works without the private package. Ordinary `/midnight` imports need neither
 that package nor browser globals.
 
@@ -302,7 +321,7 @@ const workerModule = createMidnightModule({
       nodePolyfills({ globals: { Buffer: true, global: true, process: true } }),
     ],
     optimizeDeps: {
-      exclude: ['@midnight-ntwrk/ledger-v8'],
+      exclude: ['@midnightntwrk/ledger-v8', '@midnightntwrk/ledger-v9'],
       include: ['@subsquid/scale-codec'],
     },
     worker: { format: 'es' },
@@ -659,9 +678,11 @@ has unshielded outputs; an intent signs when it has unshielded inputs or outputs
 `submitMidnightTx` once submission is authorised.
 
 `getMidnightProvingProvider(wallet, { keyMaterialProvider, accountId?, startTimeout?, proveTimeout? })` returns
-`Result<ProvingProvider, Error>` whose `check(preimage, keyLocation)` and
+`Result<ProvingProvider, Error>` compatible with ledger v9. Its `lookupKey(keyLocation)` resolves raw circuit material
+on the page without calling the engine or prover. Its `check(preimage, keyLocation)` and
 `prove(preimage, keyLocation, overwriteBindingInput?)` use the captured account's current prover and reject on
-failure. Each call re-resolves that account, so it never uses a stopped engine or another account or network. The
+failure. Each check or proof re-resolves the account and its current ledger version, including after a fork or engine
+replacement, to select the matching built-in circuit material. It never switches to another account or network. The
 provider exposes no prover URL or wallet key. `KeyMaterialProvider` supplies the circuit's prover and verifier keys
 and ZKIR. When its lookup fails for a protocol circuit (a `midnight/`-prefixed key location), the built-in circuits
 are used; any other error from the provider reaches the caller. Obtain consent to disclose the preimage and
@@ -710,7 +731,7 @@ Every helper that proves takes `proveTimeout` in milliseconds, with one default 
 `makeMidnightTransfer`, `makeMidnightIntent` and `getMidnightProvingProvider`. The default is 10 minutes and the
 maximum is 2^31 - 1 ms (about 24.8 days), the longest delay a timer honours; any other value, including `Infinity`,
 is refused with a `RangeError` returned as an `Err`. The same range applies to `submitTimeout` and to every
-helper's `startTimeout`. A timeout stops the helper waiting; it does not cancel the proving work. For `getMidnightProvingProvider` the timeout applies to each `check` or `prove` call and also covers
+helper's `startTimeout`. A timeout stops the helper waiting; it does not cancel the proving work. For `getMidnightProvingProvider` the timeout applies to each `lookupKey`, `check` or `prove` call and also covers
 the `KeyMaterialProvider` lookup, so a slow key server can make that call time out.
 
 ## Errors

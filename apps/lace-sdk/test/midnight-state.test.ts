@@ -123,12 +123,12 @@ const makeEngine = (id = accountId, night = 1n) => {
       shielded: {
         coinPublicKey: coin,
         encryptionPublicKey: encryption,
-        state: syncState(synced),
+        ...syncState(synced),
       },
       unshielded: {
         availableCoins: [{ utxo: { type: NIGHT_TOKEN_ID, value: night } }],
         pendingCoins: [],
-        state: syncState(synced),
+        ...syncState(synced),
       },
       dust: {
         totalCoins: [
@@ -141,7 +141,7 @@ const makeEngine = (id = accountId, night = 1n) => {
           },
         ],
         availableCoins: [{ generatedNow: 25n }],
-        state: syncState(synced),
+        ...syncState(synced),
       },
     } as unknown as FacadeState);
   // Like the engine's, the state stream does not complete; a stopped wallet's goes silent.
@@ -602,6 +602,7 @@ describe('public Midnight state', () => {
       },
     ): WalletEntry => ({
       hash,
+      lifecycle: { status: 'finalized' },
       protocolVersion: 1,
       identifiers: [],
       timestamp: new Date(123000),

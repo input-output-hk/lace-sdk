@@ -1,5 +1,5 @@
 import type { ProofCircuitProvider } from './midnight-proof-servers';
-import type * as ledger from '@midnight-ntwrk/ledger-v8';
+import type * as ledger from '@midnightntwrk/ledger-v9';
 
 // The circuit-level proving provider over any circuit provider: the one piece of the proof-server transport that a
 // page needs without the ledger. It stays a module of its own, with no value import of the ledger or the wallet SDK,
@@ -52,6 +52,7 @@ export const createProvingProviderFromCircuits = (
     }
   };
   return {
+    lookupKey: keyMaterial,
     check: async (serializedPreimage, keyLocation) =>
       circuits.check({
         serializedPreimage,

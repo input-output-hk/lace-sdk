@@ -116,10 +116,8 @@ export * as m from './modules-midnight';
 
 export { getMidnightProvingProvider } from './midnight-proving-provider';
 export type { GetMidnightProvingProviderProps } from './midnight-proving-provider';
-export type {
-  KeyMaterialProvider,
-  ProvingProvider,
-} from '@midnight-ntwrk/dapp-connector-api';
+export type { KeyMaterialProvider } from '@midnight-ntwrk/dapp-connector-api';
+export type { ProvingProvider } from '@midnightntwrk/ledger-v9';
 export type { AttestationProgressEvent } from '@lace-contract/midnight-context';
 export { createVeriteeAttestedProver } from '@lace-module/midnight-sync/sdk';
 export type {

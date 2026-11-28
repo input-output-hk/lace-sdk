@@ -1,16 +1,13 @@
 import { HexBytes } from '@lace-lib/util';
-import { Transaction } from '@midnight-ntwrk/ledger-v8';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import * as v8 from '@midnightntwrk/ledger-v8';
+import * as v9 from '@midnightntwrk/ledger-v9';
+import {
+  ProtocolVersion,
+  WalletTransaction,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 
 import type { MidnightAccountId } from '@lace-contract/midnight-context';
-import type {
-  Binding,
-  FinalizedTransaction,
-  PreBinding,
-  PreProof,
-  Proof,
-  SignatureEnabled,
-  UnprovenTransaction,
-} from '@midnight-ntwrk/ledger-v8';
 import type { BalancingRecipe } from '@midnightntwrk/wallet-sdk/facade';
 import type { Tagged } from 'type-fest';
 
@@ -31,8 +28,7 @@ export type MidnightValueOrigin = {
  * silently strip a ledger object of its methods.
  */
 export type OpaqueMidnightRecipe = Tagged<
-  MidnightValueOrigin &
-    (
+  MidnightValueOrigin & { readonly protocolVersion: bigint } & (
       | {
           readonly type: 'FINALIZED_TRANSACTION';
           readonly originalTransaction: Uint8Array;
@@ -54,6 +50,7 @@ export type OpaqueMidnightRecipe = Tagged<
 /** A proved, signed and bound transaction as serialized ledger bytes, with its activity hash. */
 export type OpaqueMidnightFinalizedTx = Tagged<
   MidnightValueOrigin & {
+    readonly protocolVersion: bigint;
     readonly transaction: Uint8Array;
     /** The transaction's hash, which is the `activityId` of its activity. */
     readonly activityHash: string;
@@ -79,32 +76,50 @@ export const midnightEngineGeneration = (engine: object): string => {
   return generation;
 };
 
-type Markers = readonly [
-  SignatureEnabled['instance'],
-  PreProof['instance'] | Proof['instance'],
-  Binding['instance'] | PreBinding['instance'],
-];
+const markers = {
+  Unproven: ['signature', 'pre-proof', 'pre-binding'],
+  Unbound: ['signature', 'proof', 'pre-binding'],
+  Finalized: ['signature', 'proof', 'binding'],
+} as const;
 
-const UNPROVEN: Markers = ['signature', 'pre-proof', 'pre-binding'];
-const UNBOUND: Markers = ['signature', 'proof', 'pre-binding'];
-const FINALIZED: Markers = ['signature', 'proof', 'binding'];
-
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
-// The markers are the ledger's own check of the transaction kind: bytes of another kind fail to deserialize.
-const deserialize = (markers: Markers, raw: unknown, field: string) => {
+const deserialize = <S extends WalletTransaction.Stage>({
+  stage,
+  raw,
+  field,
+  version,
+}: {
+  stage: S;
+  raw: unknown;
+  field: string;
+  version: unknown;
+}): WalletTransaction<S> => {
   if (!(raw instanceof Uint8Array))
     throw new TypeError(
       `Expected the Midnight transaction value's ${field} as bytes`,
     );
+  if (
+    typeof version !== 'bigint' ||
+    version < ProtocolVersion.MinSupportedVersion ||
+    version >= ProtocolVersion.MaxSupportedVersion
+  )
+    throw new TypeError(
+      'Expected a supported Midnight transaction protocol version',
+    );
+  const protocolVersion = ProtocolVersion.ProtocolVersion(version);
   try {
-    return Transaction.deserialize(...markers, raw);
+    const [signature, proof, binding] = markers[stage];
+    return WalletTransaction.adopt(
+      stage,
+      version >= ProtocolVersion.V9NativeForkVersion
+        ? v9.Transaction.deserialize(signature, proof, binding, raw)
+        : v8.Transaction.deserialize(signature, proof, binding, raw),
+      protocolVersion,
+    );
   } catch (error) {
     throw new Error(
-      `The Midnight transaction value's ${field} is not a (${markers.join(
-        ', ',
-      )}) transaction: ${messageOf(error)}`,
+      `The Midnight transaction value's ${field} is not a ${stage} transaction: ${String(
+        error,
+      )}`,
     );
   }
 };
@@ -136,29 +151,53 @@ export const encodeMidnightRecipe = (
   recipe: BalancingRecipe,
   { accountId, engineGeneration }: MidnightValueOrigin,
 ): OpaqueMidnightRecipe => {
-  const origin = { accountId, engineGeneration };
+  if (
+    ![
+      'UNPROVEN_TRANSACTION',
+      'UNBOUND_TRANSACTION',
+      'FINALIZED_TRANSACTION',
+    ].includes(recipe.type)
+  )
+    throw new TypeError(`Unknown Midnight recipe type ${String(recipe.type)}`);
+  const transaction =
+    recipe.type === 'UNPROVEN_TRANSACTION'
+      ? recipe.transaction
+      : recipe.type === 'UNBOUND_TRANSACTION'
+      ? recipe.baseTransaction
+      : recipe.originalTransaction;
+  const origin = {
+    accountId,
+    engineGeneration,
+    protocolVersion: BigInt(transaction.protocolVersion),
+  };
   switch (recipe.type) {
     case 'UNPROVEN_TRANSACTION':
       return {
         ...origin,
         type: recipe.type,
-        transaction: recipe.transaction.serialize(),
+        transaction: Uint8Array.from(recipe.transaction.serialize()),
       } as OpaqueMidnightRecipe;
     case 'UNBOUND_TRANSACTION':
       return {
         ...origin,
         type: recipe.type,
-        baseTransaction: recipe.baseTransaction.serialize(),
+        baseTransaction: Uint8Array.from(recipe.baseTransaction.serialize()),
         ...(recipe.balancingTransaction && {
-          balancingTransaction: recipe.balancingTransaction.serialize(),
+          balancingTransaction: Uint8Array.from(
+            recipe.balancingTransaction.serialize(),
+          ),
         }),
       } as OpaqueMidnightRecipe;
     case 'FINALIZED_TRANSACTION':
       return {
         ...origin,
         type: recipe.type,
-        originalTransaction: recipe.originalTransaction.serialize(),
-        balancingTransaction: recipe.balancingTransaction.serialize(),
+        originalTransaction: Uint8Array.from(
+          recipe.originalTransaction.serialize(),
+        ),
+        balancingTransaction: Uint8Array.from(
+          recipe.balancingTransaction.serialize(),
+        ),
       } as OpaqueMidnightRecipe;
     default:
       throw new TypeError(
@@ -190,42 +229,50 @@ export const decodeMidnightRecipe = (
     case 'UNPROVEN_TRANSACTION':
       return {
         type: value.type,
-        transaction: deserialize(
-          UNPROVEN,
-          fields.transaction,
-          'transaction',
-        ) as UnprovenTransaction,
+        protocolVersion: ProtocolVersion.ProtocolVersion(value.protocolVersion),
+        transaction: deserialize({
+          stage: 'Unproven',
+          raw: fields.transaction,
+          field: 'transaction',
+          version: value.protocolVersion,
+        }),
       };
     case 'UNBOUND_TRANSACTION':
       return {
         type: value.type,
-        baseTransaction: deserialize(
-          UNBOUND,
-          fields.baseTransaction,
-          'baseTransaction',
-        ) as Transaction<SignatureEnabled, Proof, PreBinding>,
+        protocolVersion: ProtocolVersion.ProtocolVersion(value.protocolVersion),
+        baseTransaction: deserialize({
+          stage: 'Unbound',
+          raw: fields.baseTransaction,
+          field: 'baseTransaction',
+          version: value.protocolVersion,
+        }),
         balancingTransaction:
           fields.balancingTransaction === undefined
             ? undefined
-            : (deserialize(
-                UNPROVEN,
-                fields.balancingTransaction,
-                'balancingTransaction',
-              ) as UnprovenTransaction),
+            : deserialize({
+                stage: 'Unproven',
+                raw: fields.balancingTransaction,
+                field: 'balancingTransaction',
+                version: value.protocolVersion,
+              }),
       };
     case 'FINALIZED_TRANSACTION':
       return {
         type: value.type,
-        originalTransaction: deserialize(
-          FINALIZED,
-          fields.originalTransaction,
-          'originalTransaction',
-        ) as FinalizedTransaction,
-        balancingTransaction: deserialize(
-          UNPROVEN,
-          fields.balancingTransaction,
-          'balancingTransaction',
-        ) as UnprovenTransaction,
+        protocolVersion: ProtocolVersion.ProtocolVersion(value.protocolVersion),
+        originalTransaction: deserialize({
+          stage: 'Finalized',
+          raw: fields.originalTransaction,
+          field: 'originalTransaction',
+          version: value.protocolVersion,
+        }),
+        balancingTransaction: deserialize({
+          stage: 'Unproven',
+          raw: fields.balancingTransaction,
+          field: 'balancingTransaction',
+          version: value.protocolVersion,
+        }),
       };
     default:
       throw new TypeError(
@@ -238,14 +285,15 @@ export const decodeMidnightRecipe = (
 
 /** Serializes a proved transaction, recording where it comes from and its activity hash. */
 export const encodeMidnightFinalizedTx = (
-  transaction: FinalizedTransaction,
+  transaction: WalletTransaction<'Finalized'>,
   { accountId, engineGeneration }: MidnightValueOrigin,
 ): OpaqueMidnightFinalizedTx =>
   ({
     accountId,
     engineGeneration,
-    transaction: transaction.serialize(),
-    activityHash: transaction.transactionHash(),
+    protocolVersion: BigInt(transaction.protocolVersion),
+    transaction: Uint8Array.from(transaction.serialize()),
+    activityHash: readMidnightTransaction(transaction).transactionHash(),
   } as OpaqueMidnightFinalizedTx);
 
 /**
@@ -255,14 +303,18 @@ export const encodeMidnightFinalizedTx = (
  */
 export const decodeMidnightFinalizedTx = (
   value: OpaqueMidnightFinalizedTx,
-): FinalizedTransaction => {
+): WalletTransaction<'Finalized'> => {
   assertOrigin(value);
-  const transaction = deserialize(
-    FINALIZED,
-    (value as { transaction?: unknown }).transaction,
-    'transaction',
-  ) as FinalizedTransaction;
-  if (transaction.transactionHash() !== value.activityHash)
+  const transaction = deserialize({
+    stage: 'Finalized',
+    raw: (value as { transaction?: unknown }).transaction,
+    field: 'transaction',
+    version: value.protocolVersion,
+  });
+  if (
+    readMidnightTransaction(transaction).transactionHash() !==
+    value.activityHash
+  )
     throw new Error(
       `The Midnight transaction value's activity hash ${String(
         value.activityHash,

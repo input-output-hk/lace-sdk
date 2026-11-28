@@ -78,9 +78,8 @@ export const mapStatusToActivityType = (
   tokenBalanceChanges?: Array<{ amount: ReturnType<typeof BigNumber> }>,
 ): ActivityType => {
   switch (status) {
-    // PARTIAL_SUCCESS is a terminal on-chain outcome, not an in-flight state: this
-    // history only ever holds confirmed, on-block transactions. Mapping it to
-    // Pending stranded transfers on "Sending".
+    // PARTIAL_SUCCESS is a terminal on-chain outcome. Mapping it to Pending
+    // stranded transfers on "Sending".
     case 'SUCCESS':
     case 'PARTIAL_SUCCESS': {
       const isReceive =
@@ -90,6 +89,8 @@ export const mapStatusToActivityType = (
     }
     case 'FAILURE':
       return ActivityType.Failed;
+    case undefined:
+      return ActivityType.Pending;
   }
 };
 
@@ -122,7 +123,7 @@ export const deriveUnshieldedActivity = ({
   );
 
   const isSelfTransfer =
-    status !== 'FAILURE' &&
+    (status === 'SUCCESS' || status === 'PARTIAL_SUCCESS') &&
     netChanges.length === 0 &&
     (createdUtxos.length > 0 || spentUtxos.length > 0);
 

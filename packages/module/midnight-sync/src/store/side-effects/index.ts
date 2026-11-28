@@ -1,12 +1,14 @@
 import { createAccountKeyManager } from '../account-keys';
 
+import { deferMidnightStartupUntilUnlocked } from './defer-startup';
+import {
+  createRecoverMissingFeesSideEffect,
+  clearRecoveredFeesOnReset,
+} from './fee-recovery';
 import { createInitializeSideEffects } from './initialize';
 import { watchProofActivities, dismissProofActivity } from './proof-activities';
 import { migrateUnavailableProofServerSelection } from './proof-server-kill-switch';
-import {
-  createResetSyncStateSideEffect,
-  resyncWalletOnConfigChangeFromFeatureFlags,
-} from './resync';
+import { createResetSyncStateSideEffect } from './resync';
 import {
   clearTeeAttestationProgressOnNewTx,
   watchTeeAttestationProgress,
@@ -20,7 +22,8 @@ import { createWatchMidnightAccount } from './watch';
 export const initializeSideEffects = createInitializeSideEffects(
   storage => [
     createResetSyncStateSideEffect(storage),
-    resyncWalletOnConfigChangeFromFeatureFlags,
+    createRecoverMissingFeesSideEffect(),
+    clearRecoveredFeesOnReset,
     migrateUnavailableProofServerSelection,
     watchProofActivities,
     dismissProofActivity,
@@ -28,4 +31,5 @@ export const initializeSideEffects = createInitializeSideEffects(
     clearTeeAttestationProgressOnNewTx,
   ],
   createWatchMidnightAccount(createAccountKeyManager),
+  { prepareAccountWatch: deferMidnightStartupUntilUnlocked },
 );

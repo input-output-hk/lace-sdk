@@ -11,7 +11,7 @@ import { FEATURE_FLAG_NETWORK_TYPE } from '@lace-contract/network';
 import { AccountId } from '@lace-contract/wallet-repo';
 import { SecretBox } from '@lace-lib/core';
 import { FEATURE_FLAG_MIDNIGHT } from '@lace-module/midnight-sync/sdk';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import * as ledger from '@midnightntwrk/ledger-v8';
 import { createKeystore } from '@midnightntwrk/wallet-sdk/unshielded';
 import {
   DustAddress,
@@ -133,11 +133,10 @@ const nodeApplied =
     networkIds.every(
       networkId => overrides[networkId].nodeAddress !== undefined,
     );
-// QANet's public endpoints equal the contract defaults, so no override is stored.
+// Preview and QANet use the contract defaults, so neither stores an override.
 const publicApplied = nodeApplied(
   MidnightSDKNetworkIds.MainNet,
   MidnightSDKNetworkIds.PreProd,
-  MidnightSDKNetworkIds.Preview,
 );
 
 const currentNetwork = async (wallet: MidnightWallet) =>
@@ -186,7 +185,10 @@ describe('Midnight loadout', () => {
             )
             .asString(),
           unshielded: createKeystore(
-            Buffer.from(props.nightExternalKey.encryptedKey, 'hex'),
+            {
+              kind: 'schnorr',
+              secret: Buffer.from(props.nightExternalKey.encryptedKey, 'hex'),
+            },
             props.networkId,
           )
             .getBech32Address()
@@ -336,17 +338,14 @@ describe('Midnight loadout', () => {
     expect(await currentNetwork(wallet)).toEqual({
       networkId: MidnightSDKNetworkIds.Preview,
       config: {
+        isFilteredDustSyncRolloutEnabled: false,
         nodeAddress: MIDNIGHT_PREVIEW_NODE_URL,
         indexerAddress: MIDNIGHT_PREVIEW_INDEXER_URL,
         proofServer: LOCAL_PROOF_SERVER,
       },
     });
     expect(state.midnightContext?.userNetworksConfigOverrides).toEqual({
-      [MidnightSDKNetworkIds.Preview]: {
-        nodeAddress: 'https://rpc.preview.midnight.network',
-        indexerAddress:
-          'https://indexer.preview.midnight.network/api/v4/graphql',
-      },
+      [MidnightSDKNetworkIds.Preview]: {},
       [MidnightSDKNetworkIds.PreProd]: {
         nodeAddress: 'https://rpc.preprod.midnight.network',
         indexerAddress:
@@ -358,6 +357,7 @@ describe('Midnight loadout', () => {
           'https://indexer.mainnet.midnight.network/api/v4/graphql',
       },
       [MidnightSDKNetworkIds.QaNet]: {},
+      [MidnightSDKNetworkIds.StageNet]: {},
       [MidnightSDKNetworkIds.Undeployed]: {},
       [MidnightSDKNetworkIds.DevNet]: {},
       [MidnightSDKNetworkIds.TestNet]: {},
@@ -401,10 +401,7 @@ describe('Midnight loadout', () => {
       ).toEqual(REMOTE_PROOF_SERVER);
     }
     const overrides = state.midnightContext?.userNetworksConfigOverrides;
-    expect(overrides?.[MidnightSDKNetworkIds.Preview]).toEqual({
-      nodeAddress: MIDNIGHT_PREVIEW_NODE_URL,
-      indexerAddress: MIDNIGHT_PREVIEW_INDEXER_URL,
-    });
+    expect(overrides?.[MidnightSDKNetworkIds.Preview]).toEqual({});
     expect(overrides?.[MidnightSDKNetworkIds.PreProd]).toEqual({
       nodeAddress: 'https://node.preprod',
       indexerAddress:
@@ -426,6 +423,7 @@ describe('Midnight loadout', () => {
     expect(await currentNetwork(wallet)).toEqual({
       networkId: MidnightSDKNetworkIds.PreProd,
       config: {
+        isFilteredDustSyncRolloutEnabled: false,
         ...MIDNIGHT_PUBLIC_ENDPOINTS[MidnightSDKNetworkIds.PreProd],
         proofServer: REMOTE_PROOF_SERVER,
       },
@@ -497,6 +495,7 @@ describe('Midnight loadout', () => {
     expect(await currentNetwork(wallet)).toEqual({
       networkId: MidnightSDKNetworkIds.PreProd,
       config: {
+        isFilteredDustSyncRolloutEnabled: false,
         ...MIDNIGHT_PUBLIC_ENDPOINTS[MidnightSDKNetworkIds.PreProd],
         proofServer: LOCAL_PROOF_SERVER,
       },
@@ -553,6 +552,7 @@ describe('Midnight loadout', () => {
     expect(await currentNetwork(wallet)).toEqual({
       networkId: MidnightSDKNetworkIds.DevNet,
       config: {
+        isFilteredDustSyncRolloutEnabled: false,
         nodeAddress: 'https://node.devnet',
         indexerAddress: 'https://indexer.devnet/api/v4/graphql',
         proofServer: LOCAL_PROOF_SERVER,
@@ -651,7 +651,12 @@ describe('Midnight engine resolution and teardown', () => {
       ({
         accountId,
         transactionHistory$: of([]),
-        signData: vi.fn(() => of({ signature: id, verifyingKey: id })),
+        signData: vi.fn(() =>
+          of({
+            signature: { tag: 'schnorr', value: id },
+            verifyingKey: { tag: 'schnorr', value: id },
+          }),
+        ),
         stop: vi.fn(() => of(undefined)),
       } as unknown as Engine);
     const first = makeEngine('aa');
@@ -672,8 +677,8 @@ describe('Midnight engine resolution and teardown', () => {
         engine.signData(new Uint8Array()),
       );
       expect(signed.isOk() && signed.value).toEqual({
-        signature: 'aa',
-        verifyingKey: 'aa',
+        signature: { tag: 'schnorr', value: 'aa' },
+        verifyingKey: { tag: 'schnorr', value: 'aa' },
       });
       const dataSigner = async (wallet: Pick<MidnightWallet, '_loadModules'>) =>
         (await wallet._loadModules('addons.loadSignerFactory'))

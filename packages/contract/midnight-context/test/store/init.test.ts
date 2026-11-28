@@ -34,6 +34,34 @@ const migrate = async (state: PersistedState) => {
 };
 
 describe('Midnight persistence migrations', () => {
+  it.each([
+    'lace-extension',
+    'lace-sdk',
+    'lace-extension-guest',
+    'lace-extension-carbon',
+  ])(
+    'derives engine configuration capability for %s without persisting it',
+    async app => {
+      const initialized = await store(
+        {
+          runtime: {
+            app,
+            config: {
+              defaultMidnightTestnetNetworkId: MidnightSDKNetworkIds.Preview,
+            },
+          },
+        } as never,
+        {} as never,
+      );
+      expect(
+        initialized.preloadedState?.midnightContext?.canConfigureEngine,
+      ).toBe(!['lace-extension-guest', 'lace-extension-carbon'].includes(app));
+      expect(
+        initialized.persistConfig?.midnightContext?.whitelist,
+      ).not.toContain('canConfigureEngine');
+    },
+  );
+
   it('advances already-migrated v12 profiles to a new migration version', async () => {
     expect((await getPersistConfig()).version).toBe(14);
   });
@@ -183,4 +211,29 @@ describe('Veritee deployment migration', () => {
       );
     });
   });
+});
+
+describe('fee recovery persistence', () => {
+  it.each(['lace-extension', 'lace-mobile'] as const)(
+    'enables requests only in the extension, and persists fees without consent/jobs (%s)',
+    async app => {
+      const initialized = await store(
+        {
+          runtime: {
+            app,
+            config: { defaultMidnightTestnetNetworkId: 'preview' },
+          },
+        } as never,
+        {} as never,
+      );
+      expect(initialized.preloadedState?.midnightFeeRecovery).toMatchObject({
+        supported: app === 'lace-extension',
+        jobs: {},
+        feesByAccount: {},
+      });
+      expect(initialized.persistConfig?.midnightFeeRecovery?.whitelist).toEqual(
+        ['feesByAccount'],
+      );
+    },
+  );
 });

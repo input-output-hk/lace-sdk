@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { radius, spacing, useTheme } from '../../../design-tokens';
-import { Pill, Text, type IconName } from '../../atoms';
+import { OfflineIndicator, Pill, Text, type IconName } from '../../atoms';
 import { Icon } from '../../atoms/icons/Icon';
 
 import { ExpandableSectionMetrics } from './tabBar';
@@ -16,6 +16,9 @@ export interface AccountRowProps {
   walletName: string;
   status: SyncStatus;
   syncingProgress?: number;
+  usesFastSync?: boolean;
+  statusDetail?: string;
+  isOffline?: boolean;
 }
 
 export const AccountRow: React.FC<AccountRowProps> = ({
@@ -24,6 +27,9 @@ export const AccountRow: React.FC<AccountRowProps> = ({
   walletName,
   status,
   syncingProgress,
+  usesFastSync,
+  statusDetail,
+  isOffline = false,
 }) => {
   const { theme } = useTheme();
 
@@ -45,7 +51,16 @@ export const AccountRow: React.FC<AccountRowProps> = ({
         </View>
         <Text.XS>{walletName}</Text.XS>
       </View>
-      <Pill.SyncStatus status={status} syncingProgress={syncingProgress} />
+      {isOffline ? (
+        <OfflineIndicator visible testID="account-offline-indicator" />
+      ) : (
+        <Pill.SyncStatus
+          status={status}
+          syncingProgress={syncingProgress}
+          usesFastSync={usesFastSync}
+          detail={statusDetail}
+        />
+      )}
     </View>
   );
 };

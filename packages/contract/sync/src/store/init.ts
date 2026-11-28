@@ -16,7 +16,7 @@ import type { Storage } from 'redux-persist';
 
 /**
  * Transform that excludes pendingSync from being persisted.
- * Only lastSuccessfulSync is persisted for each account.
+ * Keep the last success and observed mode for display while the wallet restores.
  */
 const ExcludePendingSyncTransform = createTransform<
   PersistedStateProperty<SyncSliceState>,
@@ -38,6 +38,7 @@ const ExcludePendingSyncTransform = createTransform<
         const accountStatus = syncStatusByAccount[accountId as AccountId];
         outboundState[accountId as AccountId] = {
           lastSuccessfulSync: accountStatus.lastSuccessfulSync,
+          usesFastSync: accountStatus.usesFastSync,
           // pendingSync is intentionally excluded (transient state)
         };
       }

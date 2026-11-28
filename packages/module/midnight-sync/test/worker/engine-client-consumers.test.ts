@@ -412,6 +412,7 @@ describe('test:engine-client-consumers', () => {
       const entry = {
         hash: 'tx-hash',
         status: 'SUCCESS',
+        lifecycle: { status: 'finalized' },
         timestamp: new Date(1000),
         fees: 0n,
       } as unknown as WalletEntry;
@@ -455,6 +456,7 @@ describe('test:engine-client-consumers', () => {
       const entry = {
         hash: 'tx-hash',
         status: 'SUCCESS',
+        lifecycle: { status: 'finalized' },
         timestamp: new Date(1000),
       } as unknown as WalletEntry;
       fakeEngines.current(a.accountId).engine.transactionHistory$ = of([entry]);

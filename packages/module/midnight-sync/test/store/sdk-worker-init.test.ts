@@ -105,7 +105,7 @@ describe('createWorkerSdkStoreInit', () => {
       logger: dummyLogger,
     });
 
-    const [[loadout, , storageSideEffects]] = vi.mocked(
+    const [[loadout, , options]] = vi.mocked(
       initialize.createInitializeSideEffects,
     ).mock.calls;
     expect(loadout(storage)).toEqual([
@@ -115,7 +115,7 @@ describe('createWorkerSdkStoreInit', () => {
       spies.showResets,
       spies.surfaceFailures,
     ]);
-    expect(storageSideEffects?.(storage)).toEqual([
+    expect(options?.storageSideEffects?.(storage)).toEqual([
       spies.workerDelete,
       spies.workerClear,
     ]);

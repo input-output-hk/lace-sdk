@@ -4,7 +4,8 @@ import {
 } from '@lace-contract/midnight-context';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
 import { HexBytes } from '@lace-lib/util';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import * as ledger from '@midnightntwrk/ledger-v8';
 import {
   Observable,
   Subject,
@@ -32,6 +33,7 @@ import {
   networkId,
   PASSWORD,
   sealedAccount,
+  encryptedSeedOf,
   settings,
   unbound,
   unprovenRecipe,
@@ -103,6 +105,7 @@ describe('engine-host-operations', () => {
     await host.attach({
       clientId: 'tab-1',
       account,
+      encryptedSeed: encryptedSeedOf(account),
       password: PASSWORD.slice(),
       settings: settings(),
     });
@@ -235,6 +238,9 @@ describe('engine-host-operations', () => {
   });
 
   describe('estimate', () => {
+    beforeEach(() => {
+      running.state$.next(facadeState({ spendableDust: 100n }));
+    });
     it('prices a transfer without reserving anything', async () => {
       const estimate = await host.estimate({ ...caller, tx: transfer });
 
@@ -321,7 +327,9 @@ describe('engine-host-operations', () => {
         assertPlainData(proved);
       }).not.toThrow();
       expect(proved.activityHash).toBe(
-        decodeMidnightFinalizedTx(proved).transactionHash(),
+        readMidnightTransaction(
+          decodeMidnightFinalizedTx(proved),
+        ).transactionHash(),
       );
       expect(proved).toMatchObject(origin());
       expect(progress).toBeCalledWith({ operationId: 'op-1', event });
@@ -464,8 +472,14 @@ describe('engine-host-operations', () => {
     it('signs data bytes with the account key', async () => {
       await expect(
         host.signData({ ...caller, data: new Uint8Array([7]) }),
-      ).resolves.toEqual({ signature: 'signature', verifyingKey });
-      expect(running.engine.signData).toBeCalledWith(new Uint8Array([7]));
+      ).resolves.toEqual({
+        signature: { tag: 'schnorr', value: 'signature' },
+        verifyingKey: { tag: 'schnorr', value: verifyingKey },
+      });
+      expect(running.engine.signData).toBeCalledWith(
+        new Uint8Array([7]),
+        undefined,
+      );
     });
 
     it('returns the history entry of a transaction hash as plain data', async () => {
@@ -745,9 +759,11 @@ describe('engine-host-operations', () => {
           return of(finalized());
         },
       );
+      const secondAccount = await sealedAccount();
       await host.attach({
         clientId: 'tab-2',
-        account: await sealedAccount(),
+        account: secondAccount,
+        encryptedSeed: encryptedSeedOf(secondAccount),
         password: PASSWORD.slice(),
         settings: settings(),
       });
@@ -889,6 +905,7 @@ describe('engine-host-operations', () => {
       const reattached = await host.attach({
         clientId: 'tab-1',
         account,
+        encryptedSeed: encryptedSeedOf(account),
         password: PASSWORD.slice(),
         settings: settings(),
       });

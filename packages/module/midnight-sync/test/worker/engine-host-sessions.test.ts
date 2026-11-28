@@ -180,7 +180,7 @@ describe('engine-host-sessions', () => {
       accountId: account.accountId,
       walletId: account.walletId,
       networkId: account.blockchainSpecific.networkId,
-      nightVerifyingKey: verifyingKey,
+      nightVerifyingKey: { tag: 'schnorr', value: verifyingKey },
       engineGeneration: midnightEngineGeneration(engine),
       resets: 0,
       settings: settings(),
@@ -210,7 +210,10 @@ describe('engine-host-sessions', () => {
         accountId: account.accountId,
         data: new Uint8Array([1]),
       }),
-    ).resolves.toEqual({ signature: 'signature', verifyingKey });
+    ).resolves.toEqual({
+      signature: { tag: 'schnorr', value: 'signature' },
+      verifyingKey: { tag: 'schnorr', value: verifyingKey },
+    });
   });
 
   it('starts one engine for concurrent attaches of one account', async () => {
@@ -261,6 +264,7 @@ describe('engine-host-sessions', () => {
     expect(fakeEngines.current(a.accountId).engine.signData).not.toBeCalled();
     expect(fakeEngines.current(b.accountId).engine.signData).toBeCalledWith(
       new Uint8Array([2]),
+      undefined,
     );
   });
 
@@ -282,7 +286,10 @@ describe('engine-host-sessions', () => {
 
     expect(keys.walletKeys.dustKeyBuffer).toHaveLength(32);
     expect(keys.walletKeys.zswapKeyBuffer).toHaveLength(32);
-    expect(typeof keys.unshieldedKeystore.getPublicKey()).toBe('string');
+    expect(keys.unshieldedKeystore.getPublicKey()).toMatchObject({
+      tag: 'schnorr',
+    });
+    expect(keys.ecdsaKeystore.getPublicKey()).toMatchObject({ tag: 'ecdsa' });
   });
 
   it('zeroes the password of the request once the attach settles, refused or not', async () => {
@@ -879,7 +886,9 @@ describe('engine-host-sessions', () => {
           accountId,
           data: new Uint8Array([1]),
         }),
-      ).resolves.toMatchObject({ signature: 'signature' });
+      ).resolves.toMatchObject({
+        signature: { tag: 'schnorr', value: 'signature' },
+      });
       expect(replacement.engine.signData).toHaveBeenCalledOnce();
     });
 
@@ -947,7 +956,7 @@ describe('engine-host-sessions', () => {
         shielded: {
           coinPublicKey: { toHexString },
           encryptionPublicKey: { toHexString: () => 'e0' },
-          state: { progress: { isStrictlyComplete: () => false } },
+          progress: { isStrictlyComplete: () => false },
         },
       } as unknown as FacadeState;
       return { state, conversions: () => toHexString.mock.calls.length };

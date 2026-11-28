@@ -3,7 +3,13 @@ import {
   MidnightSDKNetworkIds,
 } from '@lace-contract/midnight-context';
 import * as stubData from '@lace-contract/midnight-context/src/stub-data';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import { readMidnightTransaction } from '@lace-lib/vendor/midnight-transaction-handle';
+import * as ledger from '@midnightntwrk/ledger-v8';
+import * as v9 from '@midnightntwrk/ledger-v9';
+import {
+  ProtocolVersion,
+  WalletTransaction,
+} from '@midnightntwrk/wallet-sdk-abstractions';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,10 +30,11 @@ const networkId = MidnightSDKNetworkIds.Preview;
 const origin = {
   accountId: MidnightAccountId(stubData.walletId, 0, networkId),
   engineGeneration: 'engine-generation',
+  protocolVersion: ProtocolVersion.MinSupportedVersion,
 };
 
 // An unshielded NIGHT spend and output, so that the transaction has identifiers and, once bound, a hash.
-const unproven = () => {
+const rawUnproven = () => {
   const key = ledger.signatureVerifyingKey(ledger.sampleSigningKey());
   const token = ledger.nativeToken().raw;
   const intent = ledger.Intent.new(new Date(Date.now() + 3_600_000));
@@ -48,26 +55,33 @@ const unproven = () => {
 };
 // A transaction without contract calls proves without asking the prover for anything.
 const unbound = async () =>
-  unproven().prove(
-    {
-      check: async () => [],
-      prove: async () => {
-        throw new Error('nothing to prove');
+  WalletTransaction.adopt(
+    'Unbound',
+    await rawUnproven().prove(
+      {
+        check: async () => [],
+        prove: async () => {
+          throw new Error('nothing to prove');
+        },
       },
-    },
-    ledger.CostModel.initialCostModel(),
+      ledger.CostModel.initialCostModel(),
+    ),
+    origin.protocolVersion,
   );
-const finalized = () => unproven().mockProve();
+const unproven = () =>
+  WalletTransaction.adopt('Unproven', rawUnproven(), origin.protocolVersion);
+const finalized = () =>
+  WalletTransaction.adopt(
+    'Finalized',
+    rawUnproven().mockProve(),
+    origin.protocolVersion,
+  );
 
-type AnyTransaction = ledger.Transaction<
-  ledger.Signaturish,
-  ledger.Proofish,
-  ledger.Bindingish
->;
+type AnyTransaction = WalletTransaction<WalletTransaction.Stage>;
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
 const facts = (transaction: AnyTransaction) => ({
   bytes: hex(transaction.serialize()),
-  identifiers: transaction.identifiers(),
+  identifiers: readMidnightTransaction(transaction).identifiers(),
 });
 // Every ledger transaction a recipe holds, by field.
 const transactionsOf = (recipe: BalancingRecipe) =>
@@ -75,7 +89,9 @@ const transactionsOf = (recipe: BalancingRecipe) =>
     Object.entries(recipe)
       .filter(
         (entry): entry is [string, AnyTransaction] =>
-          entry[1] instanceof ledger.Transaction,
+          typeof entry[1] === 'object' &&
+          entry[1] !== null &&
+          'serialize' in entry[1],
       )
       .map(([field, transaction]) => [field, facts(transaction)]),
   );
@@ -83,12 +99,17 @@ const transactionsOf = (recipe: BalancingRecipe) =>
 const variants: [string, () => Promise<BalancingRecipe>][] = [
   [
     'UNPROVEN_TRANSACTION',
-    async () => ({ type: 'UNPROVEN_TRANSACTION', transaction: unproven() }),
+    async () => ({
+      type: 'UNPROVEN_TRANSACTION',
+      protocolVersion: origin.protocolVersion,
+      transaction: unproven(),
+    }),
   ],
   [
     'UNBOUND_TRANSACTION without a balancing transaction',
     async () => ({
       type: 'UNBOUND_TRANSACTION',
+      protocolVersion: origin.protocolVersion,
       baseTransaction: await unbound(),
     }),
   ],
@@ -96,6 +117,7 @@ const variants: [string, () => Promise<BalancingRecipe>][] = [
     'UNBOUND_TRANSACTION with a balancing transaction',
     async () => ({
       type: 'UNBOUND_TRANSACTION',
+      protocolVersion: origin.protocolVersion,
       baseTransaction: await unbound(),
       balancingTransaction: unproven(),
     }),
@@ -104,6 +126,7 @@ const variants: [string, () => Promise<BalancingRecipe>][] = [
     'FINALIZED_TRANSACTION',
     async () => ({
       type: 'FINALIZED_TRANSACTION',
+      protocolVersion: origin.protocolVersion,
       originalTransaction: finalized(),
       balancingTransaction: unproven(),
     }),
@@ -136,11 +159,53 @@ describe('midnight-codec-round-trip', () => {
 
     expect(value).toMatchObject({
       ...origin,
-      activityHash: transaction.transactionHash(),
+      activityHash: readMidnightTransaction(transaction).transactionHash(),
     });
     expect(facts(decoded)).toEqual(facts(transaction));
-    expect(decoded.transactionHash()).toBe(transaction.transactionHash());
+    expect(readMidnightTransaction(decoded).transactionHash()).toBe(
+      readMidnightTransaction(transaction).transactionHash(),
+    );
   });
+
+  it('preserves a v9-native recipe and finalized transaction through structured clone', () => {
+    const protocolVersion = ProtocolVersion.V9NativeForkVersion;
+    const raw = v9.Transaction.fromParts(networkId);
+    const recipe: BalancingRecipe = {
+      type: 'UNPROVEN_TRANSACTION',
+      protocolVersion,
+      transaction: WalletTransaction.adopt('Unproven', raw, protocolVersion),
+    };
+    const decoded = decodeMidnightRecipe(
+      structuredClone(encodeMidnightRecipe(recipe, origin)),
+    );
+    expect(decoded.protocolVersion).toBe(protocolVersion);
+    expect(transactionsOf(decoded)).toEqual(transactionsOf(recipe));
+    const tx = WalletTransaction.adopt(
+      'Finalized',
+      raw.mockProve(),
+      protocolVersion,
+    );
+    expect(
+      facts(
+        decodeMidnightFinalizedTx(
+          structuredClone(encodeMidnightFinalizedTx(tx, origin)),
+        ),
+      ),
+    ).toEqual(facts(tx));
+  });
+
+  it.each([undefined, -1n, ProtocolVersion.MaxSupportedVersion])(
+    'refuses an unsupported protocol version %s',
+    protocolVersion => {
+      const value = {
+        ...encodeMidnightFinalizedTx(finalized(), origin),
+        protocolVersion,
+      } as unknown as OpaqueMidnightFinalizedTx;
+      expect(() => decodeMidnightFinalizedTx(value)).toThrow(
+        'supported Midnight transaction protocol version',
+      );
+    },
+  );
 
   it('holds no ledger object', async () => {
     const [, build] = variants[3];
@@ -150,9 +215,11 @@ describe('midnight-codec-round-trip', () => {
     ];
     for (const value of values)
       for (const field of Object.values(value))
-        expect(typeof field === 'string' || field instanceof Uint8Array).toBe(
-          true,
-        );
+        expect(
+          typeof field === 'bigint' ||
+            typeof field === 'string' ||
+            field instanceof Uint8Array,
+        ).toBe(true);
   });
 
   describe('refuses bytes of another kind than the value claims', () => {
@@ -163,9 +230,10 @@ describe('midnight-codec-round-trip', () => {
           ({
             ...origin,
             type: 'UNPROVEN_TRANSACTION',
+            protocolVersion: origin.protocolVersion,
             transaction: finalized().serialize(),
-          } as OpaqueMidnightRecipe),
-        /transaction is not a \(signature, pre-proof, pre-binding\) transaction/,
+          } as unknown as OpaqueMidnightRecipe),
+        /transaction is not a Unproven transaction/,
       ],
       [
         'an unbound base holding an unproven transaction',
@@ -173,9 +241,10 @@ describe('midnight-codec-round-trip', () => {
           ({
             ...origin,
             type: 'UNBOUND_TRANSACTION',
+            protocolVersion: origin.protocolVersion,
             baseTransaction: unproven().serialize(),
-          } as OpaqueMidnightRecipe),
-        /baseTransaction is not a \(signature, proof, pre-binding\) transaction/,
+          } as unknown as OpaqueMidnightRecipe),
+        /baseTransaction is not a Unbound transaction/,
       ],
       [
         'a dApp transaction holding an unbound one',
@@ -183,10 +252,11 @@ describe('midnight-codec-round-trip', () => {
           ({
             ...origin,
             type: 'FINALIZED_TRANSACTION',
+            protocolVersion: origin.protocolVersion,
             originalTransaction: (await unbound()).serialize(),
             balancingTransaction: unproven().serialize(),
-          } as OpaqueMidnightRecipe),
-        /originalTransaction is not a \(signature, proof, binding\) transaction/,
+          } as unknown as OpaqueMidnightRecipe),
+        /originalTransaction is not a Finalized transaction/,
       ],
       [
         'a balancing transaction holding a proved one',
@@ -194,10 +264,11 @@ describe('midnight-codec-round-trip', () => {
           ({
             ...origin,
             type: 'FINALIZED_TRANSACTION',
+            protocolVersion: origin.protocolVersion,
             originalTransaction: finalized().serialize(),
             balancingTransaction: finalized().serialize(),
-          } as OpaqueMidnightRecipe),
-        /balancingTransaction is not a \(signature, pre-proof, pre-binding\) transaction/,
+          } as unknown as OpaqueMidnightRecipe),
+        /balancingTransaction is not a Unproven transaction/,
       ],
     ])('in a recipe: %s', async (_case, value, message) => {
       const forged = await value();
@@ -210,17 +281,17 @@ describe('midnight-codec-round-trip', () => {
         ...origin,
         transaction: transaction.serialize(),
         activityHash: 'hash',
-      } as OpaqueMidnightFinalizedTx;
+      } as unknown as OpaqueMidnightFinalizedTx;
       expect(() => decodeMidnightFinalizedTx(forged)).toThrow(
-        /transaction is not a \(signature, proof, binding\) transaction/,
+        /transaction is not a Finalized transaction/,
       );
     });
 
     it('in a proved transaction whose activity hash is another transaction’s', () => {
       const forged = {
         ...encodeMidnightFinalizedTx(finalized(), origin),
-        activityHash: finalized().transactionHash(),
-      } as OpaqueMidnightFinalizedTx;
+        activityHash: readMidnightTransaction(finalized()).transactionHash(),
+      } as unknown as OpaqueMidnightFinalizedTx;
       expect(() => decodeMidnightFinalizedTx(forged)).toThrow(
         /activity hash .* is not its transaction's/,
       );
@@ -231,6 +302,7 @@ describe('midnight-codec-round-trip', () => {
     it('such as the engine recipe itself', () => {
       const engineRecipe = {
         type: 'UNPROVEN_TRANSACTION',
+        protocolVersion: origin.protocolVersion,
         transaction: unproven(),
       } as unknown as OpaqueMidnightRecipe;
       expect(() => decodeMidnightRecipe(engineRecipe)).toThrow(
@@ -242,6 +314,7 @@ describe('midnight-codec-round-trip', () => {
       const value = {
         ...origin,
         type: 'UNPROVEN_TRANSACTION',
+        protocolVersion: origin.protocolVersion,
         transaction: unproven(),
       } as unknown as OpaqueMidnightRecipe;
       expect(() => decodeMidnightRecipe(value)).toThrow(
@@ -263,7 +336,9 @@ describe('midnight-codec-round-trip', () => {
       'such as %o for a proved transaction',
       value => {
         expect(() =>
-          decodeMidnightFinalizedTx(value as OpaqueMidnightFinalizedTx),
+          decodeMidnightFinalizedTx(
+            value as unknown as OpaqueMidnightFinalizedTx,
+          ),
         ).toThrow('Expected a Midnight transaction value returned by the SDK');
       },
     );

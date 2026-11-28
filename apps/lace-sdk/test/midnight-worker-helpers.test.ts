@@ -11,6 +11,7 @@ import {
 } from '@lace-lib/vendor/midnight-sign-data';
 import { MidnightWorkerError } from '@lace-module/midnight-sync/sdk';
 import { buildConnectorTransaction } from '@lace-module/midnight-sync/sdk-engine';
+import { ProtocolVersion } from '@midnightntwrk/wallet-sdk-abstractions';
 import { firstValueFrom, map, NEVER, of, TimeoutError, timer } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,6 +41,7 @@ import {
 } from '../src/midnight';
 import { DEFAULT_PROVE_TIMEOUT_MS } from '../src/prove-midnight-tx';
 
+import { ledgerFake } from './midnight-ledger-fakes';
 import {
   addMidnightAccount,
   createFakeEngineHost,
@@ -473,7 +475,7 @@ describe('test:midnight-worker-helpers', () => {
       message: rejection.message,
       stack: rejection.stack,
       cause: {
-        cause: { failure: { cause: { message: NODE_REJECTION_MESSAGE } } },
+        cause: { error: { cause: { message: NODE_REJECTION_MESSAGE } } },
       },
     });
     expect(error).not.toHaveProperty('code');
@@ -583,12 +585,13 @@ describe('test:midnight-worker-helpers', () => {
   it('the connector helpers give proveTimeout to proving only in the worker: a build whose balancing outlasts it ends proved, and proving that outlasts it returns TimeoutError', async () => {
     const recipe = {
       type: 'UNPROVEN_TRANSACTION',
-      transaction: { serialize: () => new Uint8Array([8]) },
+      protocolVersion: ProtocolVersion.MinSupportedVersion,
+      transaction: ledgerFake({}),
     };
-    const proved = {
-      serialize: () => new Uint8Array([9]),
-      transactionHash: () => 'worker-hash',
-    };
+    const proved = ledgerFake(
+      { transactionHash: () => 'worker-hash' },
+      'Finalized',
+    );
     const slowly = () => timer(40).pipe(map(() => recipe));
     let finalizeRecipe = () => of(proved);
     // The worker's engine, which the host runs the engine-side connector build on.

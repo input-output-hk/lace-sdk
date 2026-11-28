@@ -6,7 +6,7 @@ import { vi } from 'vitest';
 
 import { createMidnightEngineClient } from '../../src/worker/engine-client';
 
-import { PASSWORD, settings } from './engine-host-fakes';
+import { PASSWORD, settings, encryptedSeedOf } from './engine-host-fakes';
 import { createHost } from './engine-host-setup';
 
 import type {
@@ -57,6 +57,7 @@ const hostMethods: readonly HostMethod[] = [
   'resetAccount',
   'resyncAll',
   'deleteWallet',
+  'inspectDustSyncReset',
 ];
 
 /** One connection as a SharedWorker runtime behaves: calls pending at the end reject after `status$` ends. */
@@ -239,6 +240,7 @@ export const startParams = (
   account: InMemoryWalletAccount<MidnightAccountProps>,
 ): StartMidnightAccountWalletParams => ({
   account,
+  getEncryptedSeed: async () => encryptedSeedOf(account),
   config: settings().config,
   store: {} as StartMidnightAccountWalletParams['store'],
   keyManager: {} as AccountKeyManager,
